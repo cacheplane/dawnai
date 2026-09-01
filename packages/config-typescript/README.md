@@ -6,10 +6,13 @@ Shared TypeScript compiler configurations for Dawn packages and applications.
 
 ## Install
 
-Install it as a dev dependency alongside TypeScript:
+Install the config as a dev dependency with TypeScript and the ambient types required by the chosen profile:
 
 ```bash
-pnpm add -D @dawn-ai/config-typescript typescript
+# /node
+pnpm add -D @dawn-ai/config-typescript typescript @types/node
+# /nextjs
+pnpm add -D @dawn-ai/config-typescript typescript @types/node @types/react @types/react-dom
 ```
 
 ## Configuration
@@ -23,16 +26,13 @@ Choose the configuration that matches the project runtime in `tsconfig.json`:
 }
 ```
 
+Use `@dawn-ai/config-typescript/nextjs` in `extends` for a Next.js application.
+
 ## Runtime and stability
 
-The supported static configuration exports are:
+The supported static exports are the root and `/base` for strict no-emit projects, `/library` for declaration-emitting libraries, `/node` for NodeNext libraries, and `/nextjs` for Next.js applications.
 
-- `@dawn-ai/config-typescript` and `/base` for strict, no-emit projects.
-- `@dawn-ai/config-typescript/library` for declaration-emitting libraries.
-- `@dawn-ai/config-typescript/node` for NodeNext libraries.
-- `@dawn-ai/config-typescript/nextjs` for Next.js applications.
-
-These are tooling artifacts, not runtime imports. The Next.js configuration carries React and Node type dependencies; the other exports do not add runtime code.
+These are tooling artifacts, not runtime imports. Consumer projects install these ambient type packages directly; this config package's development dependencies do not install them transitively. Next.js, React, and React DOM remain application dependencies.
 
 ## Related
 

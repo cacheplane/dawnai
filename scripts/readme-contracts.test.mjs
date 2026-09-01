@@ -553,6 +553,25 @@ function assertNoToolingCampaignGif(packageName, readme) {
   )
 }
 
+function assertConfigTypescriptPrerequisites(readme) {
+  const install = readmeSection(readme, "Install")
+  assert.match(
+    install,
+    /^# \/node\npnpm add -D @dawn-ai\/config-typescript typescript @types\/node$/mu,
+    "@dawn-ai/config-typescript must document the Node profile's consumer type prerequisite",
+  )
+  assert.match(
+    install,
+    /^# \/nextjs\npnpm add -D @dawn-ai\/config-typescript typescript @types\/node @types\/react @types\/react-dom$/mu,
+    "@dawn-ai/config-typescript must document the Next.js profile's consumer type prerequisites",
+  )
+  assert.doesNotMatch(
+    readme,
+    /\bcarr(?:y|ies)[^\n]*(?:React|Node)[^\n]*types?\b/iu,
+    "@dawn-ai/config-typescript must not imply its published package carries consumer types",
+  )
+}
+
 describe("validatePackageReadme", () => {
   it("accepts a complete entry-package README and manifest", () => {
     assert.deepEqual(
@@ -1102,6 +1121,45 @@ describe("tooling-package README contracts", () => {
 
     assert.match(vitePluginReadme ?? "", /import \{ dawnToolSchemaPlugin as dawn \}/u)
     assert.doesNotMatch(vitePluginReadme ?? "", /import dawn from/u)
+  })
+
+  it("documents consumer-owned type prerequisites for config profiles", () => {
+    const configTypescriptReadme = actualToolingPackages.find(
+      ({ manifest }) => manifest.name === "@dawn-ai/config-typescript",
+    )?.readme
+
+    assertConfigTypescriptPrerequisites(configTypescriptReadme ?? "")
+  })
+
+  it("rejects omitting a config profile's consumer type prerequisites", () => {
+    const configTypescriptReadme = actualToolingPackages.find(
+      ({ manifest }) => manifest.name === "@dawn-ai/config-typescript",
+    )?.readme
+    assert.ok(configTypescriptReadme)
+
+    for (const command of [
+      "pnpm add -D @dawn-ai/config-typescript typescript @types/node",
+      "pnpm add -D @dawn-ai/config-typescript typescript @types/node @types/react @types/react-dom",
+    ]) {
+      const mutated = configTypescriptReadme.replace(command, "")
+      assert.notEqual(mutated, configTypescriptReadme, `${command} mutation must apply`)
+      assert.throws(() => assertConfigTypescriptPrerequisites(mutated))
+    }
+  })
+
+  it("rejects claiming the config package carries consumer types", () => {
+    const configTypescriptReadme = actualToolingPackages.find(
+      ({ manifest }) => manifest.name === "@dawn-ai/config-typescript",
+    )?.readme
+    assert.ok(configTypescriptReadme)
+
+    const accurate = "Consumer projects install these ambient type packages directly"
+    const mutated = configTypescriptReadme.replace(
+      accurate,
+      "The Next.js configuration carries React and Node types",
+    )
+    assert.notEqual(mutated, configTypescriptReadme, "consumer-ownership mutation must apply")
+    assert.throws(() => assertConfigTypescriptPrerequisites(mutated))
   })
 })
 
