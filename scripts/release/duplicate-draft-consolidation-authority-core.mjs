@@ -469,12 +469,13 @@ async function hydrateListedEvidence({
   attestations,
   contextNow,
 }) {
+  const fullyEnumerated = await hydrateCompleteAssetEnumerations(selectedRaw, github.source)
   if (stage === "pre-delete-1") {
     const inspected = await inspectEquivalentDrafts({
       candidate: proposal.candidate,
       survivorId: proposal.roles.survivor,
       duplicateIds: proposal.roles.duplicates,
-      releases: selectedRaw,
+      releases: fullyEnumerated,
       github: github.source,
       attestations: attestations.source,
     })
@@ -488,7 +489,7 @@ async function hydrateListedEvidence({
       candidate: proposal.candidate,
       survivorId: proposal.roles.survivor,
       duplicateIds: proposal.roles.duplicates,
-      releases: selectedRaw,
+      releases: fullyEnumerated,
       github: github.source,
       attestations: attestations.source,
     })
@@ -505,7 +506,7 @@ async function hydrateListedEvidence({
     return deepFreeze({ releases: inspected.releases, payloadProof: proposal.payloadProof })
   }
   const releases = []
-  for (const raw of selectedRaw) {
+  for (const raw of fullyEnumerated) {
     const id = canonicalId(raw.id, "listed Release id")
     const expectedEvidence = proposal.releases.find((release) => release.id === id)
     if (expectedEvidence === undefined)
@@ -541,6 +542,23 @@ async function hydrateListedEvidence({
   }
   await verifyCurrentPayloadDownloads(releases, github.source)
   return deepFreeze({ releases, payloadProof: proposal.payloadProof })
+}
+
+async function hydrateCompleteAssetEnumerations(selectedRaw, github) {
+  const releases = []
+  for (const raw of selectedRaw) {
+    const releaseId = canonicalId(raw.id, "listed Release id")
+    const envelope = snapshotPlain(
+      await github.listReleaseAssets({ releaseId }),
+      "complete Release asset enumeration",
+    )
+    const assets = presentValue(envelope, "release-assets")
+    if (!Array.isArray(assets)) {
+      throw new TypeError("Complete Release asset enumeration is malformed")
+    }
+    releases.push({ ...raw, assets })
+  }
+  return releases
 }
 
 async function verifyCurrentPayloadDownloads(releases, github) {

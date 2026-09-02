@@ -147,7 +147,8 @@ export function nextResumeAction(state, liveTarget) {
   if (classification === "absent") return "reconcile-absence"
   if (classification !== "present-unchanged") return "stop"
   if (
-    state.lastOutcomeClassification === "confirmed-204" ||
+    (state.phase === "delete-outcome" &&
+      !isAmbiguousOutcomeClassification(state.lastOutcomeClassification)) ||
     state.attemptNumber >= MAXIMUM_DELETE_ATTEMPTS
   ) {
     return "stop"
@@ -167,6 +168,10 @@ export function nextResumeAction(state, liveTarget) {
     if (!Number.isSafeInteger(observations) || observations !== 6) return "stop"
   }
   return "refresh-and-retry"
+}
+
+function isAmbiguousOutcomeClassification(value) {
+  return value === "transport-ambiguous" || value === "response-404-ambiguous"
 }
 
 export function createFinalConsolidationReceipt(input) {
@@ -377,7 +382,8 @@ function applyEvent(state, event, eventSha256) {
   if (event.type === "npm-observed") {
     const preparingRetry =
       state.phase === "delete-intent" ||
-      (state.phase === "delete-outcome" && state.lastOutcomeClassification !== "confirmed-204")
+      (state.phase === "delete-outcome" &&
+        isAmbiguousOutcomeClassification(state.lastOutcomeClassification))
     const expectedAttempt =
       state.phase === "resume-present" || preparingRetry
         ? state.attemptNumber + 1
@@ -397,7 +403,8 @@ function applyEvent(state, event, eventSha256) {
         "delete-intent",
         "delete-outcome",
       ].includes(state.phase) ||
-      (state.phase === "delete-outcome" && state.lastOutcomeClassification === "confirmed-204")
+      (state.phase === "delete-outcome" &&
+        !isAmbiguousOutcomeClassification(state.lastOutcomeClassification))
     ) {
       throw new Error("npm observation is not legal in the current journal state")
     }
@@ -515,7 +522,10 @@ function applyEvent(state, event, eventSha256) {
     if (
       state.phase !== "delete-intent" &&
       !preparedByStaleNpm &&
-      !(state.phase === "delete-outcome" && state.lastOutcomeClassification !== "confirmed-204")
+      !(
+        state.phase === "delete-outcome" &&
+        isAmbiguousOutcomeClassification(state.lastOutcomeClassification)
+      )
     ) {
       throw new Error("Resume reconciliation is not legal after this outcome")
     }
@@ -551,7 +561,8 @@ function applyEvent(state, event, eventSha256) {
     const ambiguous =
       event.payload.basis === "ambiguous" &&
       (state.phase === "resume-absent" ||
-        (state.phase === "delete-outcome" && state.lastOutcomeClassification !== "confirmed-204"))
+        (state.phase === "delete-outcome" &&
+          isAmbiguousOutcomeClassification(state.lastOutcomeClassification)))
     if (!confirmed && !ambiguous) {
       throw new Error("Absence convergence basis does not match delete history")
     }

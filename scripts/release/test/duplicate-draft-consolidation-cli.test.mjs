@@ -162,6 +162,44 @@ test("CLI accepts only the exact perform shape and prints a bounded completion s
   assert.equal(received.dependencies.repositoryRoot, process.cwd())
 })
 
+test("CLI threads each exact convergence request budget into production adapter composition", async () => {
+  const controller = new AbortController()
+  const requestBudget = Object.freeze({
+    operation: "release",
+    timeoutMs: 12_345,
+    signal: controller.signal,
+  })
+  let adapterOptions
+  const code = await runDuplicateDraftConsolidationCli({
+    argv: PERFORM_COMMAND,
+    cwd: process.cwd(),
+    environment: {},
+    stdout: sink(),
+    stderr: sink(),
+    dependencies: {
+      async createAdapters(options) {
+        adapterOptions = options
+        return Object.freeze({})
+      },
+      async perform(_input, dependencies) {
+        await dependencies.createAdapters(requestBudget)
+        return Object.freeze({
+          status: "complete",
+          survivor: "379991871",
+          deleted: Object.freeze(["379982100", "379986168"]),
+          receipt: "scripts/release/duplicate-draft-consolidation.json",
+          receiptSha256: "b".repeat(64),
+        })
+      },
+      now: () => "2026-09-01T12:00:00.000Z",
+      async wait() {},
+    },
+  })
+
+  assert.equal(code, 0)
+  assert.equal(adapterOptions.requestBudget, requestBudget)
+})
+
 test("CLI perform rejects digest, confirmation, path, force, survivor, and reordered-ID variants", async () => {
   for (const argv of [
     PERFORM_COMMAND.with(8, CONFIRMATION.replace(PROPOSAL_SHA256, "A".repeat(64))),

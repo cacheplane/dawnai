@@ -808,6 +808,13 @@ export async function performOneDuplicateDeletion(input, dependencies) {
         throw new Error("Journal current target differs from the requested target")
       }
 
+      if (
+        state.phase === "delete-outcome" &&
+        state.lastOutcomeClassification === "response-hard-failure"
+      ) {
+        throw new Error("A hard GitHub DELETE response is terminal and cannot be retried")
+      }
+
       if (["delete-intent", "delete-outcome", "resume-absent"].includes(state.phase)) {
         const observation = await observeConvergence(context, state)
         const resolved = await resolveConvergence(context, current.journal, state, observation)
@@ -895,6 +902,9 @@ export async function performOneDuplicateDeletion(input, dependencies) {
         "outcome",
       )
       const outcomeState = deriveConsolidationState(current.journal)
+      if (outcomeState.lastOutcomeClassification === "response-hard-failure") {
+        throw new Error("A hard GitHub DELETE response is terminal and cannot be retried")
+      }
       const observation = await observeConvergence(context, outcomeState)
       const resolved = await resolveConvergence(context, current.journal, outcomeState, observation)
       if (resolved.result !== null) return resolved.result

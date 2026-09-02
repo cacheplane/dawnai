@@ -1585,6 +1585,23 @@ test("production final authority rejects current asset semantic drift", async (t
   }
 })
 
+test("final authority rejects an extra asset found only by complete asset enumeration", async () => {
+  const fixture = await authorityFixture({
+    stage: "final",
+    paginatedAssetSemanticDrift: "extra",
+  })
+
+  await assert.rejects(captureConsolidationAuthority(fixture.input), /authority|asset|payload/iu)
+  assert.equal(
+    fixture.networkOperations.includes(`list-assets:${DUPLICATE_DRAFT_SURVIVOR_ID}`),
+    true,
+  )
+  assert.equal(
+    fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+    false,
+  )
+})
+
 test("writer freshness accepts exactly 120000ms and rejects 120001ms, future evidence, and noncanonical clocks", async () => {
   const fixture = await authorityFixture()
   const { authority } = await captureConsolidationAuthority(fixture.input)
@@ -1808,6 +1825,7 @@ async function authorityFixture({
   attestationVerify = null,
   finalAssetIdentityVolatility = false,
   finalAssetSemanticDrift = null,
+  paginatedAssetSemanticDrift = null,
 } = {}) {
   const evidenceFixture = createDuplicateDraftConsolidationFixture()
   const inspected = await inspectEquivalentDrafts({
@@ -1868,6 +1886,18 @@ async function authorityFixture({
       survivor.assets[1].id = asset.id
       asset.id = otherId
     }
+  }
+  const paginatedAssetsByReleaseId = new Map(
+    remainingReleases.map((release) => [String(release.id), structuredClone(release.assets)]),
+  )
+  if (paginatedAssetSemanticDrift === "extra") {
+    const survivorAssets = paginatedAssetsByReleaseId.get(DUPLICATE_DRAFT_SURVIVOR_ID)
+    survivorAssets.push({
+      ...structuredClone(survivorAssets.at(-1)),
+      id: 9_999_998,
+      node_id: "RA_paginated_extra_current",
+      name: "unexpected-paginated-asset.tgz",
+    })
   }
   const directRelease = structuredClone(
     remainingReleases.find(
@@ -2075,14 +2105,11 @@ async function authorityFixture({
         },
         async listReleaseAssets({ releaseId }) {
           log(`list-assets:${releaseId}`)
-          const selected =
-            directRelease !== undefined && String(directRelease.id) === String(releaseId)
-              ? directRelease
-              : remainingReleases.find(({ id }) => String(id) === String(releaseId))
+          const selected = paginatedAssetsByReleaseId.get(String(releaseId))
           if (selected === undefined) {
             throw new Error("fixture direct asset mismatch")
           }
-          return present("release-assets", structuredClone(selected.assets))
+          return present("release-assets", structuredClone(selected))
         },
       }),
       createNpmReader: () => ({

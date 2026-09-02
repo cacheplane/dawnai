@@ -778,6 +778,34 @@ test("event classifications, nullable evidence, convergence bases, and attempts 
       )
     }
   }
+  for (const httpStatus of [null, 302, 403, 429, 500]) {
+    assert.doesNotThrow(() =>
+      canonicalEventEnvelope(
+        journalEvent("delete-outcome", {
+          targetReleaseId: DUPLICATE_IDS[0],
+          attemptNumber: 1,
+          classification: "response-hard-failure",
+          httpStatus,
+          observedAt: NOW,
+        }),
+        null,
+      ),
+    )
+  }
+  for (const httpStatus of [204, 404]) {
+    assert.throws(() =>
+      canonicalEventEnvelope(
+        journalEvent("delete-outcome", {
+          targetReleaseId: DUPLICATE_IDS[0],
+          attemptNumber: 1,
+          classification: "response-hard-failure",
+          httpStatus,
+          observedAt: NOW,
+        }),
+        null,
+      ),
+    )
+  }
   assert.throws(() =>
     canonicalEventEnvelope(
       journalEvent("delete-outcome", {

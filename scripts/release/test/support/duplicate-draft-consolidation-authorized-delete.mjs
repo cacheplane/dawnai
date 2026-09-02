@@ -176,10 +176,9 @@ export async function createAuthorizedDeleteHarness({ fetchImpl, deleteNow }) {
           return present("release", structuredClone(directRelease))
         },
         async listReleaseAssets({ releaseId }) {
-          if (String(releaseId) !== DUPLICATE_DRAFT_IDS[0]) {
-            throw new Error("unexpected direct target assets")
-          }
-          return present("release-assets", structuredClone(directRelease.assets))
+          const selected = remainingReleases.find(({ id }) => String(id) === String(releaseId))
+          if (selected === undefined) throw new Error("unexpected Release assets")
+          return present("release-assets", structuredClone(selected.assets))
         },
       }),
       createNpmReader: () => ({

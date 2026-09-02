@@ -82,11 +82,12 @@ export async function runDuplicateDraftConsolidationCli(options = {}) {
     } else if (input.mode === "perform") {
       result = await perform(input.value, {
         repositoryRoot: invocation.cwd,
-        createAdapters: () =>
+        createAdapters: (requestBudget) =>
           createAdapters({
             cwd: invocation.cwd,
             environment: invocation.environment,
             dependencies: { now },
+            ...(requestBudget === undefined ? {} : { requestBudget }),
           }),
         now,
         wait,

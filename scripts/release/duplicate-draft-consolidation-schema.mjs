@@ -1028,9 +1028,17 @@ function normalizeDeleteOutcome(value) {
     ["transport-ambiguous", null],
     ["response-404-ambiguous", 404],
   ])
+  const hardFailure =
+    value.classification === "response-hard-failure" &&
+    (value.httpStatus === null ||
+      (Number.isInteger(value.httpStatus) &&
+        value.httpStatus >= 100 &&
+        value.httpStatus <= 599 &&
+        value.httpStatus !== 204 &&
+        value.httpStatus !== 404))
   if (
-    !triplets.has(value.classification) ||
-    triplets.get(value.classification) !== value.httpStatus
+    !hardFailure &&
+    (!triplets.has(value.classification) || triplets.get(value.classification) !== value.httpStatus)
   ) {
     throw new TypeError("Delete outcome classification and HTTP status are inconsistent")
   }

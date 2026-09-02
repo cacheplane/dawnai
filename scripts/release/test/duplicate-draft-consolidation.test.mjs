@@ -1897,6 +1897,34 @@ test("one-target deletion preserves received 404 ambiguity while converging abse
   )
 })
 
+test("one-target deletion persists a hard HTTP outcome and never retries it on resume", async (t) => {
+  const harness = await oneDeletionFixture(t, {
+    deleteClassifications: ["response-hard-failure"],
+    deleteLeavesPresent: true,
+  })
+
+  await assert.rejects(performOneDuplicateDeletion(harness.input, harness.dependencies), /failed/iu)
+  const firstState = deriveConsolidationState(
+    await readPrivateEnvelope(
+      harness.input.journalPath,
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+    ),
+  )
+  assert.equal(firstState.phase, "delete-outcome")
+  assert.equal(firstState.lastOutcomeClassification, "response-hard-failure")
+  assert.equal(harness.events.filter((entry) => entry.startsWith("delete:")).length, 1)
+  const networkReadsBeforeResume = harness.events.filter(
+    (entry) => entry === "list" || entry.startsWith("direct:"),
+  ).length
+
+  await assert.rejects(performOneDuplicateDeletion(harness.input, harness.dependencies), /failed/iu)
+  assert.equal(harness.events.filter((entry) => entry.startsWith("delete:")).length, 1)
+  assert.equal(
+    harness.events.filter((entry) => entry === "list" || entry.startsWith("direct:")).length,
+    networkReadsBeforeResume,
+  )
+})
+
 test("one-target deletion resumes each exact intent, request, outcome, resume, and convergence crash boundary", async (t) => {
   const scenarios = [
     ["after-intent-journal", ["confirmed-204"], 1, "confirmed-204", "delete-intent"],
@@ -3748,7 +3776,9 @@ async function oneDeletionFixture(t, options) {
       const classification = options.deleteClassifications[deleteCalls]
       deleteCalls += 1
       if (classification === undefined) throw new Error("unexpected additional delete attempt")
-      deleted = classification !== "transport-ambiguous" && options.deleteLeavesPresent !== true
+      deleted =
+        ["confirmed-204", "response-404-ambiguous"].includes(classification) &&
+        options.deleteLeavesPresent !== true
       return {
         classification,
         httpStatus:
@@ -3756,7 +3786,9 @@ async function oneDeletionFixture(t, options) {
             ? 204
             : classification === "response-404-ambiguous"
               ? 404
-              : null,
+              : classification === "response-hard-failure"
+                ? 500
+                : null,
         observedAt: currentAuthorityTime,
       }
     },

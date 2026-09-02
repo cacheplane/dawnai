@@ -74,7 +74,7 @@ const NONTERMINAL_STATUS_ORDER = Object.freeze([
   "waiting",
 ])
 const PAGINATION_RELATIONS = new Set(["first", "last", "next", "prev"])
-const ROOT_OPTION_FIELDS = new Set(["cwd", "token", "environment", "dependencies"])
+const ROOT_OPTION_FIELDS = new Set(["cwd", "token", "environment", "dependencies", "requestBudget"])
 const DEPENDENCY_FIELDS = new Set([
   "fetchImpl",
   "run",
@@ -125,6 +125,9 @@ const DELETE_PERMIT_BINDINGS = new WeakMap()
 export async function createDuplicateDraftConsolidationAdapters(options) {
   const root = exactDataOptions(options, ROOT_OPTION_FIELDS, "Adapter options")
   const cwd = normalizedRoot(required(root, "cwd", "Adapter root"))
+  const requestBudget = Object.hasOwn(root, "requestBudget")
+    ? normalizeRequestBudget(root.requestBudget)
+    : null
   const environment = Object.hasOwn(root, "environment")
     ? snapshotEnvironment(root.environment)
     : snapshotRuntimeEnvironment(process.env)
@@ -136,8 +139,10 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
   const fetchImpl = dependencyFunction(dependencies, "fetchImpl", fetch)
   const now = dependencyFunction(dependencies, "now", () => new Date().toISOString())
   const networkGuard = createNetworkGuard({ cwd, now })
-  const guardedFetch = (...args) =>
-    networkGuard.runRequest("network transport", () => fetchImpl(...args))
+  const guardedFetch = (url, init) =>
+    networkGuard.runRequest("network transport", () =>
+      fetchImpl(url, requestBudget === null ? init : applyRequestBudget(init, requestBudget)),
+    )
   const createGitHubReader = dependencyFunction(
     dependencies,
     "createGitHubReader",
@@ -194,6 +199,7 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
     maxPages: MAX_PAGES,
     maxRecords: MAX_RECORDS,
     now: wallNow,
+    ...(requestBudget === null ? {} : { timeoutMs: requestBudget.timeoutMs }),
   })
   const rawGithub = createIncidentGitHubReader({
     reader: githubReader,
@@ -417,6 +423,8 @@ export function createExactDuplicateDeleteEffect(options) {
       let normalized
       try {
         normalized = await deleteResponse(response, deadline)
+      } catch {
+        return deleteOutcome("response-hard-failure", null, observedAt)
       } finally {
         deadline.dispose()
       }
@@ -426,10 +434,7 @@ export function createExactDuplicateDeleteEffect(options) {
       if (normalized.status === 404) {
         return deleteOutcome("response-404-ambiguous", 404, observedAt)
       }
-      if (normalized.status >= 300 && normalized.status < 400) {
-        throw new Error(`GitHub DELETE failed closed on redirect HTTP ${normalized.status}`)
-      }
-      throw new Error(`GitHub DELETE failed closed with HTTP ${normalized.status}`)
+      return deleteOutcome("response-hard-failure", normalized.status, observedAt)
     },
   })
   DELETE_WRITER_IDENTITIES.set(writer, writerIdentity)
@@ -703,11 +708,56 @@ function expectedAuthorityTrace(proposal, stage) {
 
 function appendExpectedPayloadTrace(steps, proposal, stage, rawReleases, exact, equals) {
   const { releaseIds: remainingIds, targetReleaseId } = consolidationStageRule(stage)
+  const fullyEnumerated = []
   for (const releaseId of remainingIds) {
     const release = proposal.releases.find(({ id }) => id === releaseId)
     const rawRelease = rawReleases.find(({ id }) => String(id) === releaseId)
     if (release === undefined || rawRelease === undefined) {
       throw new Error("Authority proposal is missing a required Release")
+    }
+    steps.push(
+      exact("GitHub reader listReleaseAssets", [{ releaseId }], (actual, session) => {
+        if (
+          actual.status !== "PRESENT" ||
+          actual.operation !== "release-assets" ||
+          actual.httpStatus !== 200 ||
+          actual.code !== null ||
+          !Array.isArray(actual.value)
+        ) {
+          throw new Error("Complete Release asset-list capture is malformed")
+        }
+        fullyEnumerated.push({ ...rawRelease, assets: actual.value })
+        session.keyResults.set(`release-assets:${releaseId}`, actual)
+        if (fullyEnumerated.length === remainingIds.length) {
+          appendExpectedPayloadDownloads(
+            session.expected,
+            proposal,
+            stage,
+            fullyEnumerated,
+            exact,
+            equals,
+            targetReleaseId,
+          )
+        }
+      }),
+    )
+  }
+}
+
+function appendExpectedPayloadDownloads(
+  steps,
+  proposal,
+  stage,
+  rawReleases,
+  exact,
+  equals,
+  targetReleaseId,
+) {
+  for (const rawRelease of rawReleases) {
+    const releaseId = canonicalId(rawRelease.id)
+    const release = proposal.releases.find(({ id }) => id === releaseId)
+    if (release === undefined) {
+      throw new Error("Complete asset enumeration contains an unexpected Release")
     }
     const orderedAssets = stage === "pre-delete-2" ? release.assets : rawRelease.assets
     const finalAssetsByName =
@@ -3069,7 +3119,35 @@ function singleLine(value, label) {
   return normalized
 }
 
-function assertAbortSignal(value) {
+function normalizeRequestBudget(value) {
+  if (!Object.isFrozen(value)) {
+    throw new TypeError("Convergence request budget must be frozen")
+  }
+  const budget = exactDataOptions(
+    value,
+    new Set(["operation", "timeoutMs", "signal"]),
+    "Convergence request budget",
+  )
+  if (budget.operation !== "release" && budget.operation !== "releases") {
+    throw new TypeError("Convergence request operation is invalid")
+  }
+  const timeoutMs = boundedInteger(budget.timeoutMs, 1, 90_000, "Convergence request timeout")
+  assertAbortSignal(budget.signal, "Convergence request abort signal")
+  return Object.freeze({ operation: budget.operation, timeoutMs, signal: budget.signal })
+}
+
+function applyRequestBudget(init, requestBudget) {
+  if (init === null || typeof init !== "object" || Array.isArray(init)) {
+    throw new TypeError("Budgeted network request options are invalid")
+  }
+  const signal =
+    init.signal === undefined
+      ? requestBudget.signal
+      : AbortSignal.any([init.signal, requestBudget.signal])
+  return { ...init, signal }
+}
+
+function assertAbortSignal(value, label = "Delete abort signal") {
   if (
     utilTypes.isProxy(value) ||
     value === null ||
@@ -3078,7 +3156,7 @@ function assertAbortSignal(value) {
     typeof value.addEventListener !== "function" ||
     typeof value.removeEventListener !== "function"
   ) {
-    throw new TypeError("Delete abort signal is invalid")
+    throw new TypeError(`${label} is invalid`)
   }
 }
 

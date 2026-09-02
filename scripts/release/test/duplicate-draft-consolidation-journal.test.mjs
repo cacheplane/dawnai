@@ -43,6 +43,14 @@ test.before(async () => {
     .digest("hex")
 })
 
+test("journal fixture hashes the exact v-prefixed incident confirmation", () => {
+  const { candidate, roles } = fixture.proposedEnvelope.record
+  assert.equal(
+    exactConfirmation(fixture.proposedEnvelope),
+    `CONSOLIDATE v${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${fixture.proposedEnvelope.recordSha256}`,
+  )
+})
+
 test("creates and strictly parses an immutable canonical operation journal", () => {
   const journal = newJournal()
   const parsed = parseConsolidationJournal(journal)
@@ -280,6 +288,19 @@ for (const [classification, httpStatus] of [
     assert.equal(deriveConsolidationState(journal).phase, "target-converged")
   })
 }
+
+test("response-hard-failure is terminal even when the target remains unchanged", () => {
+  let journal = appendIntent(appendAuthority(newJournal(), 0, 1, preDeleteAuthority(0), 1), 0, 1, 2)
+  journal = appendOutcome(journal, 0, 1, "response-hard-failure", 500, 3)
+  assert.equal(
+    nextResumeAction(deriveConsolidationState(journal), {
+      classification: "present-unchanged",
+      releaseEvidence: targetEvidence(preDeleteAuthority(0)),
+      observations: 6,
+    }),
+    "stop",
+  )
+})
 
 test("an intent with no outcome and unchanged target requires reconciliation then a fresh attempt", () => {
   const authority = preDeleteAuthority(0)
@@ -552,7 +573,7 @@ function maximumSizedAuthority(value) {
 
 function exactConfirmation(proposedEnvelope) {
   const { candidate, roles } = proposedEnvelope.record
-  return `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`
+  return `CONSOLIDATE v${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`
 }
 
 function replaceFinalAuthority(journal, authority) {

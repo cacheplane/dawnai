@@ -87,6 +87,47 @@ test("composition exposes only one safe authority capture entrypoint and no raw 
   assert.equal(JSON.stringify(adapters).includes("authority"), false)
 })
 
+test("a convergence budget aborts the underlying production GitHub request", async () => {
+  const controller = new AbortController()
+  const requestBudget = Object.freeze({
+    operation: "release",
+    timeoutMs: 10_000,
+    signal: controller.signal,
+  })
+  let entered
+  const requestEntered = new Promise((resolve) => {
+    entered = resolve
+  })
+  let receivedSignal
+  const adapters = await createDuplicateDraftConsolidationAdapters({
+    cwd: "/workspace",
+    token: TOKEN,
+    environment: { HOME: "/home/release", PATH: "/tools" },
+    requestBudget,
+    dependencies: {
+      now: () => NOW,
+      run: commandRunner([]),
+      async fetchImpl(_url, init) {
+        receivedSignal = init.signal
+        entered()
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true })
+        })
+      },
+    },
+  })
+
+  const pending = adapters.github.getRelease({ releaseId: DUPLICATES[0] })
+  await requestEntered
+  controller.abort()
+  const result = await pending
+
+  assert.equal(receivedSignal.aborted, true)
+  assert.equal(result.status, "AMBIGUOUS")
+  assert.equal(result.operation, "release")
+  assert.equal(result.code, "ABORTED")
+})
+
 test("workflow-run reads require and return the exact frozen executed query", async () => {
   const recording = recordingFetch([jsonResponse({ total_count: 0, workflow_runs: [] })])
   const adapters = await createAdapters({
@@ -1500,7 +1541,11 @@ test("delete cancels bodies on 204 and hard HTTP failure responses", async () =>
     if (status === 204) {
       assert.equal((await writer.deleteDuplicate({ releaseId: DUPLICATES[0] })).httpStatus, 204)
     } else {
-      await assert.rejects(writer.deleteDuplicate({ releaseId: DUPLICATES[0] }), /HTTP 500/iu)
+      assert.deepEqual(await writer.deleteDuplicate({ releaseId: DUPLICATES[0] }), {
+        classification: "response-hard-failure",
+        httpStatus: 500,
+        observedAt: NOW,
+      })
     }
     assert.equal(cancelled, 1)
   }
@@ -1510,10 +1555,11 @@ test("delete fails closed when a response body cannot be boundedly canceled", as
   const malformed = await createGuardedWriter({
     fetchImpl: async () => ({ status: 204, headers: new Headers(), body: {} }),
   })
-  await assert.rejects(
-    () => malformed.deleteDuplicate({ releaseId: DUPLICATES[0] }),
-    /body|cancel|malformed|response/iu,
-  )
+  assert.deepEqual(await malformed.deleteDuplicate({ releaseId: DUPLICATES[0] }), {
+    classification: "response-hard-failure",
+    httpStatus: null,
+    observedAt: NOW,
+  })
 
   for (const status of [204, 404, 500]) {
     for (const cancel of [
@@ -1528,12 +1574,13 @@ test("delete fails closed when a response body cannot be boundedly canceled", as
           body: { cancel },
         }),
       })
-      await assert.rejects(
-        () => writer.deleteDuplicate({ releaseId: DUPLICATES[0] }),
-        (error) =>
-          /body|cancel|failed|deadline|timeout/iu.test(String(error)) &&
-          !String(error).includes(TOKEN),
-      )
+      const outcome = await writer.deleteDuplicate({ releaseId: DUPLICATES[0] })
+      assert.deepEqual(outcome, {
+        classification: "response-hard-failure",
+        httpStatus: null,
+        observedAt: NOW,
+      })
+      assert.equal(JSON.stringify(outcome).includes(TOKEN), false)
     }
   }
 })
@@ -1581,7 +1628,7 @@ test("delete classifies caller abort after send and transport loss as ambiguous"
   assert.equal(JSON.stringify(outcome).includes(TOKEN), false)
 })
 
-test("delete fails closed on explicit HTTP failures, redirects, and malformed responses", async () => {
+test("delete returns terminal outcomes for explicit HTTP failures, redirects, and malformed responses", async () => {
   for (const response of [
     { status: 403, ok: false, headers: new Headers(), body: null },
     { status: 429, ok: false, headers: new Headers(), body: null },
@@ -1598,10 +1645,11 @@ test("delete fails closed on explicit HTTP failures, redirects, and malformed re
     const writer = await createGuardedWriter({
       fetchImpl: async () => response,
     })
-    await assert.rejects(
-      () => writer.deleteDuplicate({ releaseId: DUPLICATES[0] }),
-      /HTTP|response|malformed|redirect|failed/iu,
-    )
+    assert.deepEqual(await writer.deleteDuplicate({ releaseId: DUPLICATES[0] }), {
+      classification: "response-hard-failure",
+      httpStatus: Number.isInteger(response?.status) ? response.status : null,
+      observedAt: NOW,
+    })
   }
 })
 

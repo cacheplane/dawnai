@@ -1,7 +1,7 @@
 # Duplicate Draft Consolidation Design
 
 **Date:** 2026-09-01  
-**Status:** Approved direction; implementation not started  
+**Status:** Implementation complete; live execution pending
 **Repository:** `cacheplane/dawnai`  
 **Candidate:** `v0.8.22` at `2a80deece2ff958fe7fde8fddeb4f99bed70a1c8`
 
@@ -411,8 +411,10 @@ final-authority-observed:
 ```
 
 Allowed `delete-outcome.classification` values are `confirmed-204`,
-`transport-ambiguous`, and `response-404-ambiguous`; `httpStatus` is 204, null,
-or 404 respectively. Allowed resume classifications are
+`transport-ambiguous`, `response-404-ambiguous`, and `response-hard-failure`;
+`httpStatus` is 204, null, 404, or the observed hard response status respectively
+(`response-hard-failure` also uses null when the response shape cannot be safely
+classified). Allowed resume classifications are
 `present-unchanged-retryable` and `absent-ambiguous`; `releaseEvidence` is the
 current complete target evidence for the former and `null` for the latter.
 Allowed convergence `basis` values are `confirmed-204` and `ambiguous`.
@@ -426,8 +428,9 @@ Every delete attempt embeds a complete immediately preceding
 Release/asset, and payload evidence—in `delete-authority-observed`. The intent
 binds that event digest and is atomically durable before the request. A received
 204 produces `confirmed-204`. Timeout, transport failure, or a received 404 is
-ambiguous. If the process disappears before recording an outcome, resume reads
-the target:
+ambiguous. A redirect, 403, 429, 5xx, or malformed response produces a durable
+`response-hard-failure` and stops permanently before another writer. If the
+process disappears before recording an outcome, resume reads the target:
 
 - present and semantically identical: append
 	`present-unchanged-retryable` only after refreshing every authority source
