@@ -126,17 +126,119 @@ test("final release ownership is switched atomically and legacy owners are absen
 test("duplicate-draft consolidation stays isolated from every workflow and preserves release pins", async () => {
   const sources = await readWorkflowSourcesFromRoot(ROOT)
   assert.ok(Object.keys(sources).length > FINAL_WORKFLOW_FILES.length)
-  for (const [file, source] of Object.entries(sources)) {
-    assert.doesNotMatch(source, /duplicate-draft-consolidation|release:consolidate-drafts/u, file)
-    assert.doesNotMatch(
-      source,
-      /deleteRelease|(?:\bDELETE\b[\s\S]*(?:api\.github\.com\/)?repos\/[^/\s]+\/[^/\s]+\/releases\/|(?:api\.github\.com\/)?repos\/[^/\s]+\/[^/\s]+\/releases\/[^\s"']+[\s\S]*\bDELETE\b)/iu,
-      file,
-    )
-  }
+  assertNoDuplicateDraftWorkflowMutation(sources)
 
   const pinBytes = await readFile(SCRIPT_PIN_PATH)
   assert.equal(createHash("sha256").update(pinBytes).digest("hex"), STARTING_SCRIPT_PIN_SHA256)
+})
+
+test("workflow isolation rejects Release DELETE bypasses in each execution context", async (t) => {
+  const unsafe = [
+    [
+      "gh interpolated repository",
+      runWorkflow(`gh api --method DELETE repos/\${{ github.repository }}/releases/379982100`),
+    ],
+    [
+      "curl compact method",
+      runWorkflow(
+        "curl -XDELETE https://api.github.com/repos/cacheplane/dawnai/releases/379982100",
+      ),
+    ],
+    [
+      "curl spaced method",
+      runWorkflow(
+        "curl -x   DeLeTe https://api.github.com/repos/cacheplane/dawnai/releases/379982100",
+      ),
+    ],
+    [
+      "curl request method",
+      runWorkflow(
+        "curl --request DELETE https://api.github.com/repos/cacheplane/dawnai/releases/379982100",
+      ),
+    ],
+    [
+      "curl request equals method",
+      runWorkflow(
+        "curl --request=delete https://api.github.com/repos/cacheplane/dawnai/releases/379982100",
+      ),
+    ],
+    [
+      "interpolated owner and repository name",
+      runWorkflow(
+        `gh api --method DELETE repos/\${{ github.repository_owner }}/\${{ vars.repository_name }}/releases/\${{ inputs.release_id }}`,
+      ),
+    ],
+    [
+      "literal multiline api url",
+      runWorkflow(`gh api \\
+  --method
+  DELETE \\
+  "\${{ github.api_url }}/repos/\${{ github.repository }}/releases/379982100"`),
+    ],
+    [
+      "folded multiline api url",
+      runWorkflow(
+        `gh api --method
+DELETE
+repos/\${{ github.repository }}/releases/379982100`,
+        ">",
+      ),
+    ],
+    [
+      "action inputs",
+      actionWorkflow({
+        method: "DELETE",
+        endpoint: `/repos/\${{ github.repository }}/releases/\${{ inputs.release_id }}`,
+      }),
+    ],
+    [
+      "step environment",
+      runWorkflow('curl --request "$HTTP_METHOD" "$RELEASE_ENDPOINT"', "|", {
+        HTTP_METHOD: "DELETE",
+        RELEASE_ENDPOINT: `\${{ github.api_url }}/repos/\${{ github.repository }}/releases/379982100`,
+      }),
+    ],
+    [
+      "job environment",
+      runWorkflow('curl -X "$HTTP_METHOD" "$RELEASE_ENDPOINT"', "|", undefined, {
+        HTTP_METHOD: "DELETE",
+        RELEASE_ENDPOINT: "/repos/cacheplane/dawnai/releases/379982100",
+      }),
+    ],
+    [
+      "reusable workflow inputs",
+      reusableWorkflow({
+        "http-method": "delete",
+        url: `\${{ github.api_url }}/repos/\${{ github.repository }}/releases/379982100`,
+      }),
+    ],
+  ]
+
+  for (const [name, source] of unsafe) {
+    await t.test(name, () => {
+      assert.throws(
+        () => assertNoDuplicateDraftWorkflowMutation({ "fixture.yml": source }),
+        /Release DELETE/u,
+      )
+    })
+  }
+})
+
+test("workflow isolation permits comments, documentation, GETs, and separate invocations", () => {
+  const safe = `name: "Documentation: DELETE /repos/cacheplane/dawnai/releases/379982100"
+on:
+  workflow_dispatch: {}
+jobs:
+  safe:
+    runs-on: ubuntu-latest
+    steps:
+      # curl -XDELETE https://api.github.com/repos/cacheplane/dawnai/releases/379982100
+      - name: "DELETE /repos/cacheplane/dawnai/releases/379982100 is forbidden"
+        run: gh api --method GET repos/\${{ github.repository }}/releases/379982100
+      - run: echo --method DELETE
+      - run: echo /repos/cacheplane/dawnai/releases/379982100
+`
+  assert.doesNotThrow(() => assertNoDuplicateDraftWorkflowMutation({ "safe.yml": safe }))
 })
 
 test("version-pr.yml is version-only and uses only RELEASE_GITHUB_TOKEN", async () => {
@@ -1797,6 +1899,162 @@ async function readFinalWorkflowSources() {
     sources[file] = source
   }
   return sources
+}
+
+function assertNoDuplicateDraftWorkflowMutation(sources) {
+  for (const [file, source] of Object.entries(sources)) {
+    assert.doesNotMatch(source, /duplicate-draft-consolidation|release:consolidate-drafts/u, file)
+    const workflow = parseWorkflowSource(source, file)
+    for (const context of workflowExecutionContexts(workflow)) {
+      const normalized = normalizeExecutionContext(context)
+      if (containsDeleteMethod(normalized) && containsReleaseEndpoint(normalized)) {
+        throw new Error(`${file} contains a Release DELETE endpoint in ${context.label}`)
+      }
+    }
+  }
+}
+
+function workflowExecutionContexts(workflow) {
+  const contexts = []
+  const workflowEnv = executionObjectScalars(workflow.env, "workflow.env")
+  for (const [jobId, job] of Object.entries(workflow.jobs)) {
+    if (!isRecord(job)) continue
+    const jobEnv = [
+      ...executionObjectScalars(job.env, `jobs.${jobId}.env`),
+      ...executionObjectScalars(job.container?.env, `jobs.${jobId}.container.env`),
+    ]
+    if (typeof job.uses === "string") {
+      contexts.push({
+        label: `job ${jobId}`,
+        values: [
+          ...workflowEnv,
+          ...jobEnv,
+          `jobs.${jobId}.uses=${job.uses}`,
+          ...executionObjectScalars(job.with, `jobs.${jobId}.with`),
+          ...executionObjectScalars(job.secrets, `jobs.${jobId}.secrets`),
+        ],
+      })
+    }
+    if (!Array.isArray(job.steps)) continue
+    for (const [stepIndex, step] of job.steps.entries()) {
+      if (!isRecord(step)) continue
+      const values = [
+        ...workflowEnv,
+        ...jobEnv,
+        ...executionObjectScalars(step.env, `jobs.${jobId}.steps.${stepIndex}.env`),
+        ...executionObjectScalars(step.with, `jobs.${jobId}.steps.${stepIndex}.with`),
+      ]
+      if (typeof step.run === "string") {
+        values.push(`jobs.${jobId}.steps.${stepIndex}.run=${step.run}`)
+      }
+      if (typeof step.uses === "string") {
+        values.push(`jobs.${jobId}.steps.${stepIndex}.uses=${step.uses}`)
+      }
+      contexts.push({ label: `job ${jobId} step ${stepIndex}`, values })
+    }
+  }
+  return contexts
+}
+
+function executionObjectScalars(value, prefix) {
+  if (!isRecord(value) && !Array.isArray(value)) return []
+  const found = []
+  const visit = (current, pathParts) => {
+    if (
+      typeof current === "string" ||
+      typeof current === "number" ||
+      typeof current === "boolean"
+    ) {
+      found.push(`${prefix}.${pathParts.join(".")}=${String(current)}`)
+      return
+    }
+    if (Array.isArray(current)) {
+      for (const [index, entry] of current.entries()) visit(entry, [...pathParts, String(index)])
+      return
+    }
+    if (!isRecord(current)) return
+    for (const [key, entry] of Object.entries(current)) visit(entry, [...pathParts, key])
+  }
+  visit(value, [])
+  return found
+}
+
+function normalizeExecutionContext(context) {
+  return context.values
+    .join("\n")
+    .replace(/\$\{\{[\s\S]*?\}\}/gu, "__expression__")
+    .replace(/\\\r?\n/gu, "")
+    .toLowerCase()
+}
+
+function containsDeleteMethod(value) {
+  return /\bdeleterelease\b|(?:^|\s)(?:-x\s*delete\b|--(?:method|request)(?:\s+|\s*=\s*)delete\b|[^\s=]*(?:method|request|verb)[^\s=]*\s*=\s*delete\b)/iu.test(
+    value,
+  )
+}
+
+function containsReleaseEndpoint(value) {
+  const segment = String.raw`(?:__expression__|\$[a-z_][a-z0-9_]*|[^/\s"'=:]+)`
+  const repository = `(?:${segment}|${segment}/${segment})`
+  const releaseId = String.raw`(?:[1-9][0-9]*|__expression__|\$[a-z_][a-z0-9_]*)`
+  return new RegExp(
+    String.raw`(?:^|[\s"'=])(?:https?://[^/\s"']+|__expression__)?/?repos/${repository}/releases/${releaseId}(?:$|[?&#/\s"'])`,
+    "iu",
+  ).test(value)
+}
+
+function runWorkflow(run, block = "|", stepEnv, jobEnv) {
+  const indent = (value, spaces) =>
+    value
+      .split("\n")
+      .map((line) => `${" ".repeat(spaces)}${line}`)
+      .join("\n")
+  const yamlMap = (value, spaces) =>
+    Object.entries(value ?? {})
+      .map(([key, entry]) => `${" ".repeat(spaces)}${key}: ${JSON.stringify(entry)}`)
+      .join("\n")
+  return `name: fixture
+on:
+  workflow_dispatch: {}
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+${jobEnv === undefined ? "" : `    env:\n${yamlMap(jobEnv, 6)}\n`}    steps:
+      - run: ${block}
+${indent(run, 10)}
+${stepEnv === undefined ? "" : `        env:\n${yamlMap(stepEnv, 10)}\n`}`
+}
+
+function actionWorkflow(withValues) {
+  const inputs = Object.entries(withValues)
+    .map(([key, value]) => `          ${key}: ${JSON.stringify(value)}`)
+    .join("\n")
+  return `name: fixture
+on:
+  workflow_dispatch: {}
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@0123456789012345678901234567890123456789
+        with:
+${inputs}
+`
+}
+
+function reusableWorkflow(withValues) {
+  const inputs = Object.entries(withValues)
+    .map(([key, value]) => `      ${key}: ${JSON.stringify(value)}`)
+    .join("\n")
+  return `name: fixture
+on:
+  workflow_dispatch: {}
+jobs:
+  mutation:
+    uses: example/workflows/.github/workflows/delete.yml@0123456789012345678901234567890123456789
+    with:
+${inputs}
+`
 }
 
 function parseWorkflowSource(source, file) {
