@@ -70,6 +70,99 @@ const EXACT_WORKFLOW_RUN_QUERY = Object.freeze({
 	maximumPages: 100,
 });
 
+test("inspection terminal captures three exact direct reads, owns completion time, and permanently seals adapters", async () => {
+	const fixture = await authorityFixture();
+	let injectedClockCallsAfterSixthRead = 0;
+	let injectedNetworkAttemptsAfterSixthRead = 0;
+	fixture.setClock(() => {
+		if (
+			fixture.networkOperations.filter(
+				(operation) =>
+					operation.startsWith("get-release:") ||
+					operation.startsWith("list-assets:"),
+			).length >= 6
+		) {
+			injectedClockCallsAfterSixthRead += 1;
+			injectedNetworkAttemptsAfterSixthRead += 1;
+			void fixture.adapters.github.getRepository().catch(() => {});
+			throw new Error("injected clock ran after the sixth terminal read");
+		}
+		return new Date(BASE_TIME).toISOString();
+	});
+	const nativeStartedAt = Date.now();
+	const terminal = await fixture.adapters.captureInspectionTerminal({
+		candidate: fixture.proposal.candidate,
+		releases: fixture.proposal.releases,
+	});
+
+	assert.deepEqual(Reflect.ownKeys(terminal), ["releases", "completedAt"]);
+	assert.deepEqual(
+		terminal.releases.map(({ role, id }) => ({ role, id })),
+		[
+			{ role: "survivor", id: DUPLICATE_DRAFT_SURVIVOR_ID },
+			{ role: "duplicate", id: DUPLICATE_DRAFT_IDS[0] },
+			{ role: "duplicate", id: DUPLICATE_DRAFT_IDS[1] },
+		],
+	);
+	assert.match(
+		terminal.completedAt,
+		/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/u,
+	);
+	assert.equal(Date.parse(terminal.completedAt) >= nativeStartedAt, true);
+	assert.equal(Date.parse(terminal.completedAt) <= Date.now(), true);
+	assert.equal(injectedClockCallsAfterSixthRead, 0);
+	assert.equal(injectedNetworkAttemptsAfterSixthRead, 0);
+	assert.equal(Object.isFrozen(terminal), true);
+	assert.equal(Object.isFrozen(terminal.releases), true);
+	assert.deepEqual(fixture.networkOperations, [
+		`get-release:${DUPLICATE_DRAFT_SURVIVOR_ID}`,
+		`list-assets:${DUPLICATE_DRAFT_SURVIVOR_ID}`,
+		`get-release:${DUPLICATE_DRAFT_IDS[0]}`,
+		`list-assets:${DUPLICATE_DRAFT_IDS[0]}`,
+		`get-release:${DUPLICATE_DRAFT_IDS[1]}`,
+		`list-assets:${DUPLICATE_DRAFT_IDS[1]}`,
+	]);
+	assert.equal(Reflect.ownKeys(terminal).includes("permit"), false);
+	assert.equal(fixture.adapters.assertInspectionTerminalSealed(), undefined);
+	await assert.rejects(
+		fixture.adapters.github.getRepository(),
+		/sealed|terminal|epoch/iu,
+	);
+	await assert.rejects(
+		fixture.adapters.captureInspectionTerminal({
+			candidate: fixture.proposal.candidate,
+			releases: fixture.proposal.releases,
+		}),
+		/sealed|terminal|epoch|state/iu,
+	);
+	assert.throws(
+		() => fixture.adapters.assertInspectionTerminalSealed(),
+		/sealed|terminal|epoch/iu,
+	);
+	assert.equal(
+		fixture.networkOperations.some((operation) =>
+			operation.startsWith("delete:"),
+		),
+		false,
+	);
+});
+
+test("inspection terminal rejects a reordered target set before any direct read", async () => {
+	const fixture = await authorityFixture();
+	await assert.rejects(
+		fixture.adapters.captureInspectionTerminal({
+			candidate: fixture.proposal.candidate,
+			releases: [...fixture.proposal.releases].reverse(),
+		}),
+		/terminal|failed|state/iu,
+	);
+	assert.deepEqual(fixture.networkOperations, []);
+	await assert.rejects(
+		fixture.adapters.github.getRepository(),
+		/sealed|terminal|epoch|invalid/iu,
+	);
+});
+
 test("captures exact pre-delete authority and leaves direct GET plus asset enumeration terminal", async () => {
 	const fixture = await authorityFixture();
 	const captured = await captureConsolidationAuthority(fixture.input);
@@ -2097,26 +2190,31 @@ async function authorityFixture({
 						terminalGate.entered();
 						await terminalGate.wait;
 					}
-					if (
-						directRelease === undefined ||
-						String(directRelease.id) !== String(releaseId)
-					) {
+					const selected =
+						directRelease !== undefined &&
+						String(directRelease.id) === String(releaseId)
+							? directRelease
+							: remainingReleases.find(
+									({ id }) => String(id) === String(releaseId),
+								);
+					if (selected === undefined) {
 						throw new Error("fixture direct release mismatch");
 					}
-					return present("release", structuredClone(directRelease));
+					return present("release", structuredClone(selected));
 				},
 				async listReleaseAssets({ releaseId }) {
 					log(`list-assets:${releaseId}`);
-					if (
-						directRelease === undefined ||
-						String(directRelease.id) !== String(releaseId)
-					) {
+					const selected =
+						directRelease !== undefined &&
+						String(directRelease.id) === String(releaseId)
+							? directRelease
+							: remainingReleases.find(
+									({ id }) => String(id) === String(releaseId),
+								);
+					if (selected === undefined) {
 						throw new Error("fixture direct asset mismatch");
 					}
-					return present(
-						"release-assets",
-						structuredClone(directRelease.assets),
-					);
+					return present("release-assets", structuredClone(selected.assets));
 				},
 			}),
 			createNpmReader: () => ({

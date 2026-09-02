@@ -31,6 +31,7 @@
     "published:smoke": "node scripts/published-artifact-smoke.mjs",
     "published:verify": "node scripts/published-artifact-verify.mjs",
     "release:observe": "node scripts/release/cli.mjs observe",
+    "release:consolidate-drafts": "node scripts/release/duplicate-draft-consolidation-cli.mjs",
     "release:preflight": "node scripts/release/preflight.mjs",
     "release:rehearse": "node scripts/release/test/support/fault-harness.mjs",
     "sync:chart-appversion": "node scripts/sync-chart-appversion.mjs",

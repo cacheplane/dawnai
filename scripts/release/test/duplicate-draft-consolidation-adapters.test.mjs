@@ -63,14 +63,18 @@ test("composition exposes only one safe authority capture entrypoint and no raw 
 		"writer",
 	]);
 	assert.deepEqual(Reflect.ownKeys(adapters).sort(), [
+		"assertInspectionTerminalSealed",
 		"attestations",
 		"captureConsolidationAuthority",
+		"captureInspectionTerminal",
 		"github",
 		"local",
 		"npm",
 		"writer",
 	]);
 	assert.equal(typeof adapters.captureConsolidationAuthority, "function");
+	assert.equal(typeof adapters.captureInspectionTerminal, "function");
+	assert.equal(typeof adapters.assertInspectionTerminalSealed, "function");
 	for (const forbidden of [
 		"authorityEpoch",
 		"beginAuthorityCapture",

@@ -1285,6 +1285,8 @@ function bindAdapterFacade(value, authorityCapability) {
 		"attestations",
 		"writer",
 		"captureConsolidationAuthority",
+		"captureInspectionTerminal",
+		"assertInspectionTerminalSealed",
 	]);
 	if (
 		Object.keys(descriptors).length !== expected.size ||
@@ -1311,6 +1313,22 @@ function bindAdapterFacade(value, authorityCapability) {
 		typeof captureDescriptor.value !== "function"
 	) {
 		throw new TypeError("adapter safe authority capture descriptor is invalid");
+	}
+	for (const name of [
+		"captureInspectionTerminal",
+		"assertInspectionTerminalSealed",
+	]) {
+		const descriptor = descriptors[name];
+		if (
+			descriptor?.enumerable !== false ||
+			descriptor.writable !== false ||
+			descriptor.configurable !== false ||
+			typeof descriptor.value !== "function" ||
+			utilTypes.isProxy(descriptor.value) ||
+			!Object.isFrozen(descriptor.value)
+		) {
+			throw new TypeError("adapter inspection terminal descriptor is invalid");
+		}
 	}
 	const authorityEpoch = bindAuthorityCapability(authorityCapability, value);
 	return Object.freeze({

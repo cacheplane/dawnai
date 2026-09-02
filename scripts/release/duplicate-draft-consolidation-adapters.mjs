@@ -49,6 +49,11 @@ const JSON_ACCEPT = "application/vnd.github+json";
 const USER_AGENT = "dawn-duplicate-draft-consolidation/1";
 const RELEASE_WORKFLOW = ".github/workflows/release.yml";
 const APPROVED_TAG = "v0.8.22";
+const APPROVED_CANDIDATE = Object.freeze({
+	version: "0.8.22",
+	commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8",
+	tag: APPROVED_TAG,
+});
 const SURVIVOR_ID = "379991871";
 const DUPLICATE_IDS = Object.freeze(["379982100", "379986168"]);
 const MAX_PAGES = 100;
@@ -62,6 +67,9 @@ const TIMESTAMP_PATTERN =
 	/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/u;
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const ID_PATTERN = /^[1-9][0-9]*$/u;
+const NATIVE_DATE = Date;
+const NATIVE_DATE_NOW = Date.now;
+const NATIVE_DATE_TO_ISO_STRING = Date.prototype.toISOString;
 const NONTERMINAL_STATUS_ORDER = Object.freeze([
 	"in_progress",
 	"pending",
@@ -320,6 +328,18 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
 				networkGuard.createAuthorityCapability(rawGithub, adapters),
 			);
 		}),
+	);
+	Object.defineProperty(
+		adapters,
+		"captureInspectionTerminal",
+		hiddenMethod((input) =>
+			networkGuard.captureInspectionTerminal(rawGithub, input),
+		),
+	);
+	Object.defineProperty(
+		adapters,
+		"assertInspectionTerminalSealed",
+		hiddenMethod(() => networkGuard.assertInspectionTerminalSealed()),
 	);
 	Object.freeze(adapters);
 	return adapters;
@@ -1234,6 +1254,23 @@ function createNetworkGuard({ cwd, now }) {
 	let lastClockMillis = null;
 	let boundWriterIdentity = null;
 	let guardFacade;
+	let lastTerminalClockMillis = null;
+
+	const terminalNow = () => {
+		const millis = Reflect.apply(NATIVE_DATE_NOW, NATIVE_DATE, []);
+		if (
+			!Number.isSafeInteger(millis) ||
+			(lastTerminalClockMillis !== null && millis < lastTerminalClockMillis)
+		) {
+			throw new TypeError("Inspection terminal clock failed closed");
+		}
+		lastTerminalClockMillis = millis;
+		return Reflect.apply(
+			NATIVE_DATE_TO_ISO_STRING,
+			Reflect.construct(NATIVE_DATE, [millis]),
+			[],
+		);
+	};
 
 	const trustedNow = () => {
 		const owner = context.getStore();
@@ -1702,6 +1739,158 @@ function createNetworkGuard({ cwd, now }) {
 		return Object.freeze(capability);
 	};
 
+	const captureInspectionTerminal = async (rawGithub, input) => {
+		let session;
+		try {
+			const value = exactDataOptions(
+				input,
+				new Set(["candidate", "releases"]),
+				"Inspection terminal options",
+			);
+			const candidate = snapshotJson(
+				required(value, "candidate", "Inspection candidate"),
+			);
+			const releases = snapshotJson(
+				required(value, "releases", "Inspection releases"),
+			);
+			if (
+				!isDeepStrictEqual(candidate, APPROVED_CANDIDATE) ||
+				!Array.isArray(releases) ||
+				releases.length !== 3 ||
+				!isDeepStrictEqual(
+					releases.map(({ role, id }) => ({ role, id })),
+					[
+						{ role: "survivor", id: SURVIVOR_ID },
+						{ role: "duplicate", id: DUPLICATE_IDS[0] },
+						{ role: "duplicate", id: DUPLICATE_IDS[1] },
+					],
+				) ||
+				state !== "open" ||
+				activeRequests !== 0 ||
+				capture !== null ||
+				terminal !== null
+			) {
+				throw new Error(
+					"Inspection terminal cannot start from this adapter state",
+				);
+			}
+
+			session = {
+				token: Object.freeze({}),
+				deleteToken: Object.freeze({}),
+				releaseId: null,
+				nextStep: 0,
+				completedSteps: 0,
+				inFlight: false,
+				invalidated: false,
+				sealedSequence: null,
+				inspection: true,
+			};
+			terminal = session;
+			state = "terminal";
+
+			const terminalStep = async (step, name, options, operation) => {
+				const call = exactDataOptions(
+					options,
+					new Set(["releaseId"]),
+					`Inspection terminal ${name} options`,
+				);
+				const releaseId = canonicalStringId(
+					required(call, "releaseId", `Inspection terminal ${name} Release ID`),
+				);
+				const expectedReleaseId = [
+					SURVIVOR_ID,
+					SURVIVOR_ID,
+					DUPLICATE_IDS[0],
+					DUPLICATE_IDS[0],
+					DUPLICATE_IDS[1],
+					DUPLICATE_IDS[1],
+				][step];
+				if (
+					releaseId !== expectedReleaseId ||
+					state !== "terminal" ||
+					terminal !== session ||
+					session.invalidated ||
+					session.nextStep !== step ||
+					session.inFlight
+				) {
+					throw new Error("Inspection terminal read order is invalid");
+				}
+				session.inFlight = true;
+				try {
+					const result = await runRequest(`inspection terminal ${name}`, () =>
+						operation(call),
+					);
+					if (
+						state !== "terminal" ||
+						terminal !== session ||
+						session.invalidated ||
+						!session.inFlight
+					) {
+						throw new Error("Inspection terminal read was invalidated");
+					}
+					session.nextStep = step + 1;
+					session.completedSteps = step + 1;
+					session.inFlight = false;
+					return result;
+				} catch (error) {
+					session.inFlight = false;
+					throw error;
+				}
+			};
+
+			const github = deepFreeze({
+				getRelease(options) {
+					return terminalStep(
+						session.nextStep,
+						"Release GET",
+						options,
+						(owned) => rawGithub.getRelease(owned),
+					);
+				},
+				listReleaseAssets(options) {
+					return terminalStep(
+						session.nextStep,
+						"asset enumeration",
+						options,
+						(owned) => rawGithub.listReleaseAssets(owned),
+					);
+				},
+			});
+			const evidence = [];
+			await context.run(session.token, async () => {
+				for (const expectedEvidence of releases) {
+					const direct = await captureDirectTargetRead({
+						candidate,
+						releaseId: expectedEvidence.id,
+						role: expectedEvidence.role,
+						expectedEvidence,
+						github,
+						now: terminalNow,
+					});
+					evidence.push(direct.evidence);
+				}
+			});
+			if (
+				session.invalidated ||
+				session.inFlight ||
+				session.nextStep !== 6 ||
+				session.completedSteps !== 6 ||
+				activeRequests !== 0
+			) {
+				throw new Error("Inspection terminal did not complete exactly");
+			}
+			const completedAt = terminalNow();
+			state = "sealed";
+			session.sealedSequence = sequence;
+			return deepFreeze({ releases: evidence, completedAt });
+		} catch {
+			if (session !== undefined) session.invalidated = true;
+			invalidate();
+			throw new Error("Inspection terminal failed closed");
+		}
+	};
+
 	guardFacade = Object.freeze({
 		now: trustedNow,
 		runRequest,
@@ -1717,6 +1906,14 @@ function createNetworkGuard({ cwd, now }) {
 				);
 			}
 			boundWriterIdentity = identity;
+		},
+		captureInspectionTerminal,
+		assertInspectionTerminalSealed() {
+			const session = terminal;
+			if (session === null || session.inspection !== true) {
+				throw new Error("Inspection terminal is not sealed");
+			}
+			assertSealed(session);
 		},
 		armTask6Transition(input) {
 			try {
