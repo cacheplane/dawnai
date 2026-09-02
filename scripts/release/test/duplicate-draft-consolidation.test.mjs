@@ -24,7 +24,11 @@ import {
 } from "../duplicate-draft-consolidation.mjs"
 import { createDuplicateDraftConsolidationAdapters } from "../duplicate-draft-consolidation-adapters.mjs"
 import { runDuplicateDraftConsolidationCli } from "../duplicate-draft-consolidation-cli.mjs"
-import { captureDirectTargetRead } from "../duplicate-draft-consolidation-evidence.mjs"
+import {
+  captureDirectTargetRead,
+  semanticAssetProjection,
+  semanticReleaseProjection,
+} from "../duplicate-draft-consolidation-evidence.mjs"
 import {
   readPrivateEnvelope,
   readTrackedReceipt,
@@ -80,6 +84,75 @@ function rechainTestJournal(journalEnvelope) {
   rehashTestEnvelope(journalEnvelope)
 }
 
+function rebuildSelfConsistentTestReceipt(receipt) {
+  const proposal = receipt.record.proposedEnvelope
+  const journal = receipt.record.journalEnvelope
+  rehashTestEnvelope(proposal)
+  const confirmation = `CONSOLIDATE v${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
+  const confirmationSha256 = createHash("sha256").update(confirmation, "utf8").digest("hex")
+  journal.record.repository = structuredClone(proposal.record.repository)
+  journal.record.candidate = structuredClone(proposal.record.candidate)
+  journal.record.proposedRecordSha256 = proposal.recordSha256
+  journal.record.confirmationSha256 = confirmationSha256
+  journal.record.deletionOrder = [...proposal.record.roles.duplicates]
+  let previous = null
+  journal.record.events = journal.record.events.map(({ event }, index) => {
+    const nextEvent = structuredClone(event)
+    nextEvent.sequence = index + 1
+    nextEvent.previousEventSha256 = previous
+    if (nextEvent.type === "operation-started") {
+      nextEvent.payload.proposedRecordSha256 = proposal.recordSha256
+      nextEvent.payload.confirmationSha256 = confirmationSha256
+      nextEvent.payload.controllerSha = proposal.record.controller.headSha
+      nextEvent.payload.deletionOrder = [...proposal.record.roles.duplicates]
+    }
+    if (nextEvent.type === "delete-intent") {
+      nextEvent.payload.authorityEventSha256 = previous
+    }
+    const next = canonicalEventEnvelope(nextEvent, previous)
+    previous = next.eventSha256
+    return next
+  })
+  journal.record.updatedAt = journal.record.events.at(-1).event.recordedAt
+  rehashTestEnvelope(journal)
+  const finalEvent = journal.record.events.at(-1).event
+  assert.equal(finalEvent.type, "final-authority-observed")
+  receipt.record.finalAuthority = structuredClone(finalEvent.payload.authority)
+  receipt.record.finalSurvivor = structuredClone(finalEvent.payload.authority.releases[0])
+  rehashTestEnvelope(receipt)
+}
+
+function mutateHistoricalEvidence(receipt, releaseId, mutate) {
+  const proposalEvidence = receipt.record.proposedEnvelope.record.releases.find(
+    ({ id }) => id === releaseId,
+  )
+  if (proposalEvidence !== undefined) mutate(proposalEvidence)
+  for (const { event } of receipt.record.journalEnvelope.record.events) {
+    if (event.type === "delete-authority-observed" || event.type === "final-authority-observed") {
+      const authorityEvidence = event.payload.authority.releases.find(({ id }) => id === releaseId)
+      if (authorityEvidence !== undefined) mutate(authorityEvidence)
+      if (event.payload.authority.targetRead?.evidence.id === releaseId) {
+        mutate(event.payload.authority.targetRead.evidence)
+        event.payload.authority.targetRead.evidenceSha256 = canonicalRecordSha256(
+          event.payload.authority.targetRead.evidence,
+        )
+      }
+    }
+    if (event.type === "resume-reconciliation" && event.payload.releaseEvidence?.id === releaseId) {
+      mutate(event.payload.releaseEvidence)
+    }
+  }
+}
+
+function currentConsolidationPayloadSha256(releases) {
+  return canonicalRecordSha256(
+    releases.map((release) => ({
+      release: semanticReleaseProjection(release),
+      assets: release.assets.map(semanticAssetProjection),
+    })),
+  )
+}
+
 function rebindTestProposal(receipt) {
   const proposal = receipt.record.proposedEnvelope
   const journal = receipt.record.journalEnvelope
@@ -114,6 +187,176 @@ test("verify independently replays the receipt and revalidates the exact live su
   ])
   assert.equal(harness.writerCalls, 0)
   assert.equal((await stat(harness.receiptPath)).mode & 0o777, 0o644)
+})
+
+test("verify accepts a legal retry and stage-two history with volatile service evidence", async (t) => {
+  const deletion = await oneDeletionFixture(t, {
+    deleteClassifications: ["transport-ambiguous", "confirmed-204"],
+    freshAuthorityMutation: "volatile",
+  })
+  const proposal = deletion.input.proposedEnvelope
+  let initialJournal = parseConsolidationEnvelope(
+    "journal",
+    await readPrivateEnvelope(
+      deletion.input.journalPath,
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+    ),
+  )
+  const npmAt = new Date(Date.parse(initialJournal.record.updatedAt) + 1_000).toISOString()
+  initialJournal = appendJournalEvent(
+    initialJournal,
+    "npm-observed",
+    {
+      targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+      attemptNumber: 1,
+      inventory: {
+        ...structuredClone(proposal.record.npmInventories[1]),
+        stage: "perform-initial",
+        startedAt: npmAt,
+        completedAt: npmAt,
+        packages: proposal.record.npmInventories[1].packages.map((entry) => ({
+          ...structuredClone(entry),
+          observedAt: npmAt,
+        })),
+      },
+    },
+    npmAt,
+  )
+  await writePrivateEnvelope(
+    deletion.input.journalPath,
+    canonicalConsolidationEnvelopeBytes("journal", initialJournal),
+  )
+  await writePrivateEnvelope(
+    deletion.input.journalPath.replace(/journal\.json$/u, "journal.head.json"),
+    testJournalHeadBytes(deletion.input.journalPath, initialJournal),
+  )
+  await performOneDuplicateDeletion(deletion.input, deletion.dependencies)
+  let journal = parseConsolidationEnvelope(
+    "journal",
+    await readPrivateEnvelope(
+      deletion.input.journalPath,
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+    ),
+  )
+  let tick = Date.parse(journal.record.updatedAt) + 1_000
+  const nextTime = () => {
+    const value = new Date(tick).toISOString()
+    tick += 1_000
+    return value
+  }
+  const targetReleaseId = DUPLICATE_DRAFT_IDS[1]
+  const authority = deletionAuthorityFixture({
+    proposal,
+    stage: "pre-delete-2",
+    targetEvidence: proposal.record.releases[2],
+    observedAt: nextTime(),
+    releases: [proposal.record.releases[0], proposal.record.releases[2]],
+  })
+  journal = appendJournalEvent(
+    journal,
+    "delete-authority-observed",
+    { targetReleaseId, attemptNumber: 1, authority },
+    authority.observedAt,
+  )
+  journal = appendJournalEvent(
+    journal,
+    "delete-intent",
+    {
+      targetReleaseId,
+      attemptNumber: 1,
+      authorityEventSha256: journal.record.events.at(-1).eventSha256,
+    },
+    nextTime(),
+  )
+  const outcomeAt = nextTime()
+  journal = appendJournalEvent(
+    journal,
+    "delete-outcome",
+    {
+      targetReleaseId,
+      attemptNumber: 1,
+      classification: "confirmed-204",
+      httpStatus: 204,
+      observedAt: outcomeAt,
+    },
+    outcomeAt,
+  )
+  const convergedAt = nextTime()
+  journal = appendJournalEvent(
+    journal,
+    "absence-converged",
+    {
+      targetReleaseId,
+      attemptNumber: 1,
+      basis: "confirmed-204",
+      directGet404At: convergedAt,
+      listAbsentAt: convergedAt,
+      attempts: 1,
+      completedAt: convergedAt,
+    },
+    convergedAt,
+  )
+  const finalAt = nextTime()
+  const finalAuthority = {
+    stage: "final",
+    controller: structuredClone(proposal.record.controller),
+    annotatedTag: {
+      ...structuredClone(proposal.record.annotatedTag),
+      observedAt: finalAt,
+    },
+    workflowAuthority: {
+      ...structuredClone(proposal.record.workflowAuthority),
+      observedAt: finalAt,
+    },
+    npmInventory: {
+      ...structuredClone(proposal.record.npmInventories[1]),
+      stage: "final",
+      startedAt: finalAt,
+      completedAt: finalAt,
+      packages: proposal.record.npmInventories[1].packages.map((entry) => ({
+        ...structuredClone(entry),
+        observedAt: finalAt,
+      })),
+    },
+    releases: [structuredClone(proposal.record.releases[0])],
+    payloadProof: structuredClone(proposal.record.payloadProof),
+    targetRead: null,
+    observedAt: finalAt,
+  }
+  journal = appendJournalEvent(
+    journal,
+    "final-authority-observed",
+    { authority: finalAuthority },
+    finalAt,
+  )
+  const receipt = createFinalConsolidationReceipt({
+    proposedEnvelope: proposal,
+    journalEnvelope: journal,
+    finalAuthority,
+    completedAt: finalAt,
+  })
+  const repositoryRoot = path.dirname(path.dirname(path.dirname(deletion.input.journalPath)))
+  const receiptPath = path.join(
+    repositoryRoot,
+    "scripts/release/duplicate-draft-consolidation.json",
+  )
+  await mkdir(path.dirname(receiptPath), { recursive: true })
+  await writeTrackedReceipt(receiptPath, canonicalConsolidationEnvelopeBytes("final", receipt))
+  const harness = await verificationFixture(t, {
+    performed: { receiptPath, dependencies: { repositoryRoot } },
+  })
+
+  const result = await verifyDuplicateDraftConsolidation(
+    { receipt: "scripts/release/duplicate-draft-consolidation.json" },
+    harness.dependencies,
+  )
+  assert.equal(result.status, "verified")
+  assert.deepEqual(
+    receipt.record.journalEnvelope.record.events
+      .filter(({ event }) => event.type === "delete-intent")
+      .map(({ event }) => event.payload.attemptNumber),
+    [1, 2, 1],
+  )
 })
 
 test("verify rejects every receipt, embedded-envelope, event-chain, evidence, and identity tamper before claims", async (t) => {
@@ -246,6 +489,155 @@ test("verify rejects every receipt, embedded-envelope, event-chain, evidence, an
       const harness = await verificationFixture(t)
       const tampered = structuredClone(harness.receipt)
       mutate(tampered)
+      await writeFile(harness.receiptPath, `${JSON.stringify(tampered)}\n`)
+      await assert.rejects(
+        verifyDuplicateDraftConsolidation(
+          { receipt: "scripts/release/duplicate-draft-consolidation.json" },
+          harness.dependencies,
+        ),
+        /failed/iu,
+      )
+      assert.deepEqual(harness.calls, [])
+      assert.equal(harness.writerCalls, 0)
+    })
+  }
+})
+
+test("verify rejects fully rehashed self-consistent historical semantic tampering before live composition", async (t) => {
+  const cases = [
+    [
+      "one duplicate semantic projection",
+      (receipt) => {
+        mutateHistoricalEvidence(receipt, DUPLICATE_DRAFT_IDS[0], (evidence) => {
+          evidence.semantic.name = "self-consistent changed duplicate"
+        })
+      },
+    ],
+    [
+      "one duplicate asset projection",
+      (receipt) => {
+        mutateHistoricalEvidence(receipt, DUPLICATE_DRAFT_IDS[0], (evidence) => {
+          evidence.assets[0].label = "self-consistent changed asset"
+        })
+      },
+    ],
+    [
+      "payload proof digest",
+      (receipt) => {
+        receipt.record.proposedEnvelope.record.payloadProof.consolidationPayloadSha256 = "f".repeat(
+          64,
+        )
+        for (const { event } of receipt.record.journalEnvelope.record.events) {
+          if (
+            event.type === "delete-authority-observed" ||
+            event.type === "final-authority-observed"
+          ) {
+            event.payload.authority.payloadProof.consolidationPayloadSha256 = "f".repeat(64)
+          }
+        }
+      },
+    ],
+    [
+      "targetRead semantic evidence and digest",
+      (receipt) => {
+        const event = receipt.record.journalEnvelope.record.events.find(
+          ({ event: candidate }) => candidate.type === "delete-authority-observed",
+        ).event
+        const targetId = event.payload.targetReleaseId
+        const target = event.payload.authority.releases.find(({ id }) => id === targetId)
+        target.semantic.name = "self-consistent changed target"
+        event.payload.authority.targetRead.evidence.semantic.name = target.semantic.name
+        event.payload.authority.targetRead.evidenceSha256 = canonicalRecordSha256(
+          event.payload.authority.targetRead.evidence,
+        )
+      },
+    ],
+    [
+      "authority stage Release set",
+      (receipt) => {
+        const event = receipt.record.journalEnvelope.record.events.find(
+          ({ event: candidate }) =>
+            candidate.type === "delete-authority-observed" &&
+            candidate.payload.authority.stage === "pre-delete-2",
+        ).event
+        event.payload.authority.releases.push(
+          structuredClone(receipt.record.proposedEnvelope.record.releases[1]),
+        )
+      },
+    ],
+    [
+      "proposal and full history pair",
+      (receipt) => {
+        for (const releaseId of [DUPLICATE_DRAFT_SURVIVOR_ID, ...DUPLICATE_DRAFT_IDS]) {
+          mutateHistoricalEvidence(receipt, releaseId, (evidence) => {
+            evidence.semantic.name = "self-consistent alternate release title"
+          })
+        }
+        const proof = receipt.record.proposedEnvelope.record.payloadProof
+        proof.consolidationPayloadSha256 = currentConsolidationPayloadSha256(
+          receipt.record.proposedEnvelope.record.releases,
+        )
+        for (const { event } of receipt.record.journalEnvelope.record.events) {
+          if (
+            event.type === "delete-authority-observed" ||
+            event.type === "final-authority-observed"
+          ) {
+            event.payload.authority.payloadProof = structuredClone(proof)
+          }
+        }
+      },
+    ],
+    [
+      "base asset proof",
+      (receipt) => {
+        const proof = receipt.record.proposedEnvelope.record.payloadProof
+        const assetName = proof.baseAssetSet[0].name
+        const changedSha256 = "f".repeat(64)
+        for (const releaseId of [DUPLICATE_DRAFT_SURVIVOR_ID, ...DUPLICATE_DRAFT_IDS]) {
+          mutateHistoricalEvidence(receipt, releaseId, (evidence) => {
+            const asset = evidence.assets.find(({ name }) => name === assetName)
+            asset.digest = `sha256:${changedSha256}`
+            asset.downloadSha256 = changedSha256
+          })
+        }
+        proof.baseAssetSet[0].sha256 = changedSha256
+        proof.baseAssetSetSha256 = canonicalRecordSha256(proof.baseAssetSet)
+        proof.consolidationPayloadSha256 = currentConsolidationPayloadSha256(
+          receipt.record.proposedEnvelope.record.releases,
+        )
+        for (const { event } of receipt.record.journalEnvelope.record.events) {
+          if (
+            event.type === "delete-authority-observed" ||
+            event.type === "final-authority-observed"
+          ) {
+            event.payload.authority.payloadProof = structuredClone(proof)
+          }
+        }
+      },
+    ],
+    [
+      "attestation proof",
+      (receipt) => {
+        const proof = receipt.record.proposedEnvelope.record.payloadProof
+        proof.attestationVerification.subjects[0].sha256 = "f".repeat(64)
+        for (const { event } of receipt.record.journalEnvelope.record.events) {
+          if (
+            event.type === "delete-authority-observed" ||
+            event.type === "final-authority-observed"
+          ) {
+            event.payload.authority.payloadProof = structuredClone(proof)
+          }
+        }
+      },
+    ],
+  ]
+
+  for (const [name, mutate] of cases) {
+    await t.test(name, async (t) => {
+      const harness = await verificationFixture(t)
+      const tampered = structuredClone(harness.receipt)
+      mutate(tampered)
+      rebuildSelfConsistentTestReceipt(tampered)
       await writeFile(harness.receiptPath, `${JSON.stringify(tampered)}\n`)
       await assert.rejects(
         verifyDuplicateDraftConsolidation(
@@ -592,7 +984,9 @@ test("CLI performs the complete production-composed consolidation using only ext
 })
 
 test("production-composed CLI stops after target one when main advances before target two", async (t) => {
-  const harness = await productionPerformRehearsalFixture(t, { driftMainAfterFirstDelete: true })
+  const harness = await productionPerformRehearsalFixture(t, {
+    driftMainAfterFirstDelete: true,
+  })
   assert.equal(await runDuplicateDraftConsolidationCli(harness.options), 1)
   assert.deepEqual(harness.deleteIds, [DUPLICATE_DRAFT_IDS[0]])
   assert.equal(harness.stderr.value, "Duplicate-draft perform failed.\n")
@@ -600,7 +994,9 @@ test("production-composed CLI stops after target one when main advances before t
 })
 
 test("perform recovers post-rename receipt ambiguity only after fresh final validation", async (t) => {
-  const harness = await performFixture(t, { postRenameReceiptFailureOnce: true })
+  const harness = await performFixture(t, {
+    postRenameReceiptFailureOnce: true,
+  })
   await assert.rejects(
     performDuplicateDraftConsolidation(harness.input, harness.dependencies),
     /failed/iu,
@@ -675,8 +1071,12 @@ test("perform rejects a canonical completed history that omitted perform-initial
     recordedAt: harness.proposal.record.inspectedAt,
   })
   await harness.persistJournal(genesis)
-  await harness.dependencies.performOneDeletion({ targetReleaseId: DUPLICATE_DRAFT_IDS[0] })
-  await harness.dependencies.performOneDeletion({ targetReleaseId: DUPLICATE_DRAFT_IDS[1] })
+  await harness.dependencies.performOneDeletion({
+    targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+  })
+  await harness.dependencies.performOneDeletion({
+    targetReleaseId: DUPLICATE_DRAFT_IDS[1],
+  })
   harness.calls.length = 0
   await assert.rejects(
     performDuplicateDraftConsolidation(harness.input, harness.dependencies),
@@ -707,7 +1107,11 @@ test("journal replay rejects reordered, duplicate, and wrong-target perform-init
       appendJournalEvent(
         correct,
         "npm-observed",
-        { targetReleaseId: DUPLICATE_DRAFT_IDS[0], attemptNumber: 1, inventory },
+        {
+          targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+          attemptNumber: 1,
+          inventory,
+        },
         inventory.completedAt,
       ),
     /npm|state|legal/iu,
@@ -717,7 +1121,11 @@ test("journal replay rejects reordered, duplicate, and wrong-target perform-init
       appendJournalEvent(
         genesis,
         "npm-observed",
-        { targetReleaseId: DUPLICATE_DRAFT_IDS[1], attemptNumber: 1, inventory },
+        {
+          targetReleaseId: DUPLICATE_DRAFT_IDS[1],
+          attemptNumber: 1,
+          inventory,
+        },
         inventory.completedAt,
       ),
     /target|current/iu,
@@ -737,7 +1145,11 @@ test("journal replay rejects reordered, duplicate, and wrong-target perform-init
           authority.observedAt,
         ),
         "npm-observed",
-        { targetReleaseId: DUPLICATE_DRAFT_IDS[0], attemptNumber: 1, inventory },
+        {
+          targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+          attemptNumber: 1,
+          inventory,
+        },
         new Date(Date.parse(authority.observedAt) + 1_000).toISOString(),
       ),
     /npm|state|legal/iu,
@@ -745,7 +1157,9 @@ test("journal replay rejects reordered, duplicate, and wrong-target perform-init
 })
 
 test("perform resumes the durable initial npm stage by repeating payload proof before any DELETE", async (t) => {
-  const harness = await performFixture(t, { failInitialVerificationOnce: true })
+  const harness = await performFixture(t, {
+    failInitialVerificationOnce: true,
+  })
   await assert.rejects(
     performDuplicateDraftConsolidation(harness.input, harness.dependencies),
     /failed/iu,
@@ -2246,7 +2660,9 @@ async function inspectionFixture(t, options = {}) {
 async function productionPerformRehearsalFixture(t, options = {}) {
   const inspection = await inspectionFixture(t)
   await inspectDuplicateDrafts(exactInput(), inspection.dependencies)
-  await mkdir(path.join(inspection.root, "scripts", "release"), { recursive: true })
+  await mkdir(path.join(inspection.root, "scripts", "release"), {
+    recursive: true,
+  })
   const proposal = parseConsolidationEnvelope(
     "proposed",
     await readPrivateEnvelope(
@@ -2581,7 +2997,12 @@ async function performFixture(t, options = {}) {
       completedAt,
     )
     await persistJournal(journal)
-    return { status: "converged", targetReleaseId, attemptNumber: 1, basis: "confirmed-204" }
+    return {
+      status: "converged",
+      targetReleaseId,
+      attemptNumber: 1,
+      basis: "confirmed-204",
+    }
   }
   const captureFinal = async () => {
     calls.push("final")
@@ -2590,7 +3011,10 @@ async function performFixture(t, options = {}) {
     const authority = {
       stage: "final",
       controller: structuredClone(proposal.record.controller),
-      annotatedTag: { ...structuredClone(proposal.record.annotatedTag), observedAt },
+      annotatedTag: {
+        ...structuredClone(proposal.record.annotatedTag),
+        observedAt,
+      },
       workflowAuthority: {
         ...structuredClone(proposal.record.workflowAuthority),
         observedAt,
@@ -2703,8 +3127,10 @@ async function performFixture(t, options = {}) {
 }
 
 async function verificationFixture(t, options = {}) {
-  const performed = await performFixture(t)
-  await performDuplicateDraftConsolidation(performed.input, performed.dependencies)
+  const performed = options.performed ?? (await performFixture(t))
+  if (options.performed === undefined) {
+    await performDuplicateDraftConsolidation(performed.input, performed.dependencies)
+  }
   const receipt = parseConsolidationEnvelope(
     "final",
     await readTrackedReceipt(
@@ -3030,7 +3456,9 @@ async function oneDeletionFixture(t, options) {
         operation: "releases",
         httpStatus: 200,
         code: null,
-        value: currentRawReleases({ heavyVerification: current.phase === "npm-observed" }),
+        value: currentRawReleases({
+          heavyVerification: current.phase === "npm-observed",
+        }),
       }
     },
     async getRelease({ releaseId }) {

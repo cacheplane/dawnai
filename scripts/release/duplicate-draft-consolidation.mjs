@@ -11,6 +11,8 @@ import {
   assertEvidenceEqualsProposal,
   inspectEquivalentDrafts,
   inspectEquivalentRemainingDrafts,
+  semanticAssetProjection,
+  semanticReleaseProjection,
 } from "./duplicate-draft-consolidation-evidence.mjs"
 import {
   readPrivateEnvelope,
@@ -30,10 +32,12 @@ import { classifyConsolidationReleases } from "./duplicate-draft-consolidation-r
 import {
   canonicalConsolidationEnvelopeBytes,
   canonicalEventEnvelope,
+  canonicalRecordSha256,
   createConsolidationEnvelope,
   DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
   parseConsolidationEnvelope,
 } from "./duplicate-draft-consolidation-schema.mjs"
+import { parseReleaseMarker } from "./metadata.mjs"
 
 const REPOSITORY = Object.freeze({
   name: "cacheplane/dawnai",
@@ -208,6 +212,7 @@ function assertCompleteVerificationReceipt(receipt) {
   ) {
     throw new Error("Receipt controller identity is invalid")
   }
+  assertHistoricalEvidenceBinding(journal, proposal)
   assertMandatoryPerformHistory(journal, proposal)
   const state = deriveConsolidationState(journal)
   if (
@@ -230,6 +235,158 @@ function assertCompleteVerificationReceipt(receipt) {
   ) {
     throw new Error("Receipt is not the exact canonical terminal result")
   }
+}
+
+function assertHistoricalEvidenceBinding(journal, proposalEnvelope) {
+  const proposal = proposalEnvelope.record
+  assertProposalPayloadProof(proposal)
+  const proposedById = new Map(proposal.releases.map((release) => [release.id, release]))
+  const stablePackages = stableNpmObservation(proposal.npmInventories[0]).packages
+
+  for (const { event } of journal.record.events) {
+    if (event.type === "npm-observed") {
+      if (
+        event.payload.inventory.stage !== "perform-initial" ||
+        !isDeepStrictEqual(stableNpmObservation(event.payload.inventory).packages, stablePackages)
+      ) {
+        throw new Error("Journal npm evidence differs from the reviewed proposal")
+      }
+      continue
+    }
+    if (event.type === "resume-reconciliation") {
+      if (event.payload.classification === "present-unchanged-retryable") {
+        assertHistoricalRelease(
+          event.payload.releaseEvidence,
+          proposedById.get(event.payload.targetReleaseId),
+          "Retry reconciliation",
+        )
+      }
+      continue
+    }
+    if (event.type === "delete-authority-observed") {
+      const expectedStage =
+        event.payload.targetReleaseId === DUPLICATES[0] ? "pre-delete-1" : "pre-delete-2"
+      const expectedIds =
+        expectedStage === "pre-delete-1" ? [SURVIVOR, ...DUPLICATES] : [SURVIVOR, DUPLICATES[1]]
+      assertHistoricalAuthority(
+        event.payload.authority,
+        proposal,
+        proposedById,
+        expectedStage,
+        expectedIds,
+      )
+      const targetRead = event.payload.authority.targetRead
+      if (
+        targetRead === null ||
+        targetRead.evidence.id !== event.payload.targetReleaseId ||
+        targetRead.evidenceSha256 !== canonicalRecordSha256(targetRead.evidence)
+      ) {
+        throw new Error("Delete authority target read is not the exact reviewed target")
+      }
+      assertHistoricalRelease(
+        targetRead.evidence,
+        proposedById.get(event.payload.targetReleaseId),
+        "Delete authority target read",
+      )
+      continue
+    }
+    if (event.type === "final-authority-observed") {
+      assertHistoricalAuthority(event.payload.authority, proposal, proposedById, "final", [
+        SURVIVOR,
+      ])
+    }
+  }
+}
+
+function assertProposalPayloadProof(proposal) {
+  const releases = proposal.releases
+  const releaseProjection = semanticReleaseProjection(releases[0])
+  const assetProjection = releases[0].assets.map(semanticAssetProjection)
+  for (const release of releases) {
+    if (
+      release.semantic.name !== `Dawn v${CANDIDATE.version}` ||
+      !isDeepStrictEqual(semanticReleaseProjection(release), releaseProjection) ||
+      !isDeepStrictEqual(release.assets.map(semanticAssetProjection), assetProjection)
+    ) {
+      throw new Error("Proposal does not prove exact three-way Release payload parity")
+    }
+  }
+
+  const marker = parseReleaseMarker(releases[0].semantic.body)
+  const markerSubjects = marker.attestationSet?.subjects.map(({ subjectName, subjectSha256 }) => ({
+    name: subjectName,
+    sha256: subjectSha256,
+  }))
+  const markerBaseAssetSet =
+    marker.attestationSet === null
+      ? null
+      : [
+          { name: "release-record.json", sha256: marker.releaseRecordSha256 },
+          ...marker.attestationSet.subjects.map(({ subjectName, subjectSha256 }) => ({
+            name: subjectName,
+            sha256: subjectSha256,
+          })),
+          ...marker.attestationSet.subjects.map(({ bundleName, bundleSha256 }) => ({
+            name: bundleName,
+            sha256: bundleSha256,
+          })),
+        ]
+  const proof = proposal.payloadProof
+  const payloadProjection = releases.map((release) => ({
+    release: semanticReleaseProjection(release),
+    assets: release.assets.map(semanticAssetProjection),
+  }))
+  if (
+    marker.phase !== "ESCROWED" ||
+    marker.version !== CANDIDATE.version ||
+    marker.commitSha !== CANDIDATE.commitSha ||
+    marker.tag !== CANDIDATE.tag ||
+    marker.attestationSet?.repository !== REPOSITORY.name ||
+    marker.baseAssetSetSha256 !== proof.baseAssetSetSha256 ||
+    !isDeepStrictEqual(markerBaseAssetSet, proof.baseAssetSet) ||
+    !isDeepStrictEqual(markerSubjects, proof.attestationVerification.subjects) ||
+    proof.baseAssetSetSha256 !== canonicalRecordSha256(proof.baseAssetSet) ||
+    proof.consolidationPayloadSha256 !== canonicalRecordSha256(payloadProjection)
+  ) {
+    throw new Error("Proposal payload proof is not bound to its canonical Release evidence")
+  }
+}
+
+function assertHistoricalAuthority(authority, proposal, proposedById, stage, expectedIds) {
+  if (
+    authority.stage !== stage ||
+    !isDeepStrictEqual(
+      authority.releases.map(({ id }) => id),
+      expectedIds,
+    ) ||
+    !isDeepStrictEqual(authority.controller, proposal.controller) ||
+    !isDeepStrictEqual(
+      withoutObservationTime(authority.annotatedTag),
+      withoutObservationTime(proposal.annotatedTag),
+    ) ||
+    !isDeepStrictEqual(
+      withoutObservationTime(authority.workflowAuthority),
+      withoutObservationTime(proposal.workflowAuthority),
+    ) ||
+    !isDeepStrictEqual(
+      stableNpmObservation(authority.npmInventory).packages,
+      stableNpmObservation(proposal.npmInventories[0]).packages,
+    ) ||
+    !isDeepStrictEqual(authority.payloadProof, proposal.payloadProof) ||
+    (stage === "final") !== (authority.targetRead === null)
+  ) {
+    throw new Error("Historical authority differs from the reviewed stage evidence")
+  }
+  for (const release of authority.releases) {
+    assertHistoricalRelease(release, proposedById.get(release.id), "Historical authority")
+  }
+}
+
+function assertHistoricalRelease(actual, proposed, label) {
+  if (proposed === undefined || actual.id !== proposed.id || actual.role !== proposed.role) {
+    throw new Error(`${label} identifies an unreviewed Release`)
+  }
+  assertEvidenceEqualsProposal(actual, proposed)
 }
 
 export async function performDuplicateDraftConsolidation(input, dependencies) {
