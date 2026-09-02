@@ -74,19 +74,31 @@ const AGGREGATE_ESCROW_BYTES = 3 * RELEASE_PAYLOAD_LIMITS.escrowBytes
 
 export async function inspectEquivalentDrafts(input) {
   const context = snapshotInspectionInput(input)
+  return inspectManagedDraftSet(context, [context.survivorId, ...context.duplicateIds])
+}
+
+export async function inspectEquivalentRemainingDrafts(input) {
+  const { stage, ...context } = snapshotRemainingInspectionInput(input)
+  const orderedIds =
+    stage === "pre-delete-1"
+      ? [context.survivorId, ...context.duplicateIds]
+      : [context.survivorId, context.duplicateIds[1]]
+  return inspectManagedDraftSet(context, orderedIds)
+}
+
+async function inspectManagedDraftSet(context, orderedIds) {
   const managed = candidateReleases(context.releases, context.candidate)
   if (managed.published.length !== 0) {
     throw new Error("A published Release already matches the candidate")
   }
-  if (managed.drafts.length !== 3) {
-    throw new Error("Exactly three managed candidate drafts are required")
+  if (managed.drafts.length !== orderedIds.length) {
+    throw new Error(`Exactly ${orderedIds.length} managed candidate drafts are required`)
   }
 
-  const orderedIds = [context.survivorId, ...context.duplicateIds]
   const byId = new Map(
     managed.drafts.map((entry) => [canonicalId(entry.release.id, "Release id"), entry]),
   )
-  if (byId.size !== 3 || orderedIds.some((id) => !byId.has(id))) {
+  if (byId.size !== orderedIds.length || orderedIds.some((id) => !byId.has(id))) {
     throw new Error("Managed Release roles do not match the approved exact IDs and order")
   }
   const selected = orderedIds.map((id, index) => ({
@@ -118,7 +130,7 @@ export async function inspectEquivalentDrafts(input) {
     releases.push(result.evidence)
     hydration.push(result)
   }
-  assertThreeWayParity(releases)
+  assertManagedParity(releases)
   for (let index = 1; index < hydration.length; index += 1) {
     if (
       hydration[index].baseAssetSetSha256 !== hydration[0].baseAssetSetSha256 ||
@@ -129,7 +141,7 @@ export async function inspectEquivalentDrafts(input) {
     }
   }
   if (
-    counter.downloads !== 135 ||
+    counter.downloads !== context.accounting.downloadedAssets + orderedIds.length * 45 ||
     counter.downloads > DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumAssetDownloads ||
     counter.bytes > AGGREGATE_ESCROW_BYTES
   ) {
@@ -395,6 +407,41 @@ function snapshotInspectionInput(input) {
     github: bindBoundary(value.github, ["downloadReleaseAsset"], "GitHub asset reader"),
     attestations: bindBoundary(value.attestations, ["verify"], "Attestation verifier"),
     accounting,
+  }
+}
+
+function snapshotRemainingInspectionInput(input) {
+  const value = snapshotPlain(input, "remaining duplicate draft evidence input", {
+    allowFunctions: true,
+  })
+  assertExactKeys(
+    value,
+    [
+      "stage",
+      "candidate",
+      "survivorId",
+      "duplicateIds",
+      "releases",
+      "github",
+      "attestations",
+      ...(Object.hasOwn(value, "accounting") ? ["accounting"] : []),
+    ],
+    "remaining duplicate draft evidence input",
+  )
+  if (value.stage !== "pre-delete-1" && value.stage !== "pre-delete-2") {
+    throw new TypeError("Remaining duplicate draft evidence stage is invalid")
+  }
+  return {
+    stage: value.stage,
+    ...snapshotInspectionInput({
+      candidate: value.candidate,
+      survivorId: value.survivorId,
+      duplicateIds: value.duplicateIds,
+      releases: value.releases,
+      github: value.github,
+      attestations: value.attestations,
+      ...(Object.hasOwn(value, "accounting") ? { accounting: value.accounting } : {}),
+    }),
   }
 }
 
@@ -872,7 +919,7 @@ function parseServiceIdentity(value, label) {
   }
 }
 
-function assertThreeWayParity(releases) {
+function assertManagedParity(releases) {
   const releaseProjection = semanticReleaseProjection(releases[0])
   const assetProjection = releases[0].assets.map(semanticAssetProjection)
   for (const release of releases.slice(1)) {

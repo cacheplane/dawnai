@@ -265,6 +265,173 @@ test("one-target retry refreshes npm only beyond the exact two-minute boundary",
   }
 })
 
+test("second-target retry verifies the exact remaining set across the npm freshness boundary", async (t) => {
+  for (const { ageMs, stale } of [
+    { ageMs: 120_000, stale: false },
+    { ageMs: 120_001, stale: true },
+  ]) {
+    await t.test(`${ageMs}ms`, async (t) => {
+      const harness = await oneDeletionFixture(t, {
+        targetIndex: 1,
+        deleteClassifications: ["transport-ambiguous", "confirmed-204"],
+        freshAuthorityAdvanceMs: stale ? 61_000 : 1_000,
+      })
+      await performOneDuplicateDeletion(
+        harness.input,
+        harness.dependenciesWithWallClockTimeline(
+          retryWallClockTimeline(harness.authorityTime, ageMs, {
+            heavyVerificationMs: 20_000,
+          }),
+        ),
+      )
+
+      const journalBytes = await readFile(harness.input.journalPath)
+      assert.ok(journalBytes.byteLength <= DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes)
+      const journal = parseConsolidationEnvelope("journal", journalBytes)
+      const npmEvents = journal.record.events.filter(({ event }) => event.type === "npm-observed")
+      assert.equal(npmEvents.length, stale ? 1 : 0)
+      assert.equal(
+        harness.events.filter((entry) => entry.startsWith("payload-download:")).length,
+        stale ? 90 : 0,
+      )
+      assert.equal(
+        harness.events.filter((entry) => entry === "payload-attestations").length,
+        stale ? 2 : 0,
+      )
+      if (stale) {
+        assert.equal(npmEvents[0].event.payload.inventory.stage, "perform-initial")
+        assert.equal(harness.waits.at(-1), 40_000)
+      }
+      const retryAuthorityIndex = harness.events.lastIndexOf("authority:pre-delete-2:379986168")
+      assert.deepEqual(harness.events.slice(retryAuthorityIndex), [
+        "authority:pre-delete-2:379986168",
+        "durable:authority",
+        "durable:intent",
+        "delete:379986168",
+        "durable:outcome:confirmed-204",
+        "direct:379986168",
+        "list",
+      ])
+    })
+  }
+})
+
+test("second-target stale retry rejects changed, missing, or extra remaining Release evidence", async (t) => {
+  for (const mutation of ["metadata-included", "asset-included", "missing", "extra"]) {
+    await t.test(mutation, async (t) => {
+      const harness = await oneDeletionFixture(t, {
+        targetIndex: 1,
+        deleteClassifications: ["transport-ambiguous"],
+        retryRemainingMutation: mutation,
+      })
+      await assert.rejects(
+        performOneDuplicateDeletion(
+          harness.input,
+          harness.dependenciesWithWallClockTimeline(
+            retryWallClockTimeline(harness.authorityTime, 120_001),
+          ),
+        ),
+        /failed/iu,
+      )
+      assert.equal(harness.events.filter((entry) => entry.startsWith("delete:")).length, 1)
+      assert.equal(
+        harness.events.filter((entry) => entry.startsWith("payload-download:")).length,
+        mutation === "metadata-included" ? 45 : mutation === "asset-included" ? 90 : 0,
+      )
+      const state = deriveConsolidationState(
+        await readPrivateEnvelope(
+          harness.input.journalPath,
+          DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+        ),
+      )
+      assert.equal(state.phase, "npm-observed")
+    })
+  }
+})
+
+test("second-target stale retry resumes npm durability crashes without replaying the uncertain DELETE", async (t) => {
+  for (const faultAt of ["after-npm-journal", "after-npm-head"]) {
+    await t.test(faultAt, async (t) => {
+      const harness = await oneDeletionFixture(t, {
+        targetIndex: 1,
+        deleteClassifications: ["transport-ambiguous", "confirmed-204"],
+        freshAuthorityAdvanceMs: 61_000,
+      })
+      await assert.rejects(
+        performOneDuplicateDeletion(
+          harness.input,
+          harness.dependenciesWithWallClockTimeline(
+            retryWallClockTimeline(harness.authorityTime, 120_001),
+            faultAt,
+          ),
+        ),
+        /failed/iu,
+      )
+      const interrupted = parseConsolidationEnvelope(
+        "journal",
+        await readPrivateEnvelope(
+          harness.input.journalPath,
+          DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+        ),
+      )
+      const npmEvent = interrupted.record.events.find(({ event }) => event.type === "npm-observed")
+      assert.ok(npmEvent)
+      assert.equal(deriveConsolidationState(interrupted).phase, "npm-observed")
+      assert.equal(harness.events.filter((entry) => entry.startsWith("delete:")).length, 1)
+
+      const completedAt = Date.parse(npmEvent.event.payload.inventory.completedAt)
+      await performOneDuplicateDeletion(
+        harness.input,
+        harness.dependenciesWithWallClockTimeline(
+          Object.freeze([
+            new Date(completedAt + 30_000).toISOString(),
+            new Date(completedAt + 60_000).toISOString(),
+          ]),
+        ),
+      )
+      assert.equal(harness.events.filter((entry) => entry.startsWith("delete:")).length, 2)
+      const resumed = parseConsolidationEnvelope(
+        "journal",
+        await readPrivateEnvelope(
+          harness.input.journalPath,
+          DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+        ),
+      )
+      assert.equal(
+        resumed.record.events.filter(({ event }) => event.type === "npm-observed").length,
+        1,
+      )
+    })
+  }
+})
+
+test("second-target stale retry rejects a future or reversing wall clock", async (t) => {
+  for (const scenario of ["future", "reversal"]) {
+    await t.test(scenario, async (t) => {
+      const harness = await oneDeletionFixture(t, {
+        targetIndex: 1,
+        deleteClassifications: ["transport-ambiguous"],
+      })
+      const authorityMs = Date.parse(harness.authorityTime)
+      const timeline =
+        scenario === "future"
+          ? Object.freeze([new Date(authorityMs - 1).toISOString()])
+          : Object.freeze([
+              new Date(authorityMs + 120_001).toISOString(),
+              new Date(authorityMs + 120_000).toISOString(),
+            ])
+      await assert.rejects(
+        performOneDuplicateDeletion(
+          harness.input,
+          harness.dependenciesWithWallClockTimeline(timeline),
+        ),
+        /failed/iu,
+      )
+      assert.equal(harness.events.filter((entry) => entry.startsWith("delete:")).length, 1)
+    })
+  }
+})
+
 test("one-target stale npm retry resumes either npm durability crash without duplicating evidence", async (t) => {
   for (const faultAt of ["after-npm-journal", "after-npm-head"]) {
     await t.test(faultAt, async (t) => {
@@ -1369,50 +1536,93 @@ async function oneDeletionFixture(t, options) {
     confirmationSha256,
     recordedAt: proposal.record.inspectedAt,
   })
-  await writePrivateEnvelope(journalPath, canonicalConsolidationEnvelopeBytes("journal", journal))
-  await writePrivateEnvelope(headPath, testJournalHeadBytes(journalPath, journal))
 
   const events = []
   const waits = []
   const requestBudgets = []
-  const targetReleaseId = DUPLICATE_DRAFT_IDS[0]
+  const targetIndex = options.targetIndex ?? 0
+  const targetReleaseId = DUPLICATE_DRAFT_IDS[targetIndex]
+  if (targetIndex !== 0 && targetIndex !== 1) throw new Error("invalid fixture target index")
+  if (targetIndex === 1) {
+    const seedAuthorityTime = new Date(
+      Date.parse(proposal.record.inspectedAt) + 1_000,
+    ).toISOString()
+    const seedTargetEvidence = proposal.record.releases.find(
+      ({ id }) => id === DUPLICATE_DRAFT_IDS[0],
+    )
+    const seedAuthority = deletionAuthorityFixture({
+      proposal,
+      stage: "pre-delete-1",
+      targetEvidence: seedTargetEvidence,
+      observedAt: seedAuthorityTime,
+      releases: proposal.record.releases,
+    })
+    journal = appendJournalEvent(
+      journal,
+      "delete-authority-observed",
+      {
+        targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+        attemptNumber: 1,
+        authority: seedAuthority,
+      },
+      seedAuthorityTime,
+    )
+    const seedIntentTime = new Date(Date.parse(seedAuthorityTime) + 1_000).toISOString()
+    journal = appendJournalEvent(
+      journal,
+      "delete-intent",
+      {
+        targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+        attemptNumber: 1,
+        authorityEventSha256: journal.record.events.at(-1).eventSha256,
+      },
+      seedIntentTime,
+    )
+    const seedOutcomeTime = new Date(Date.parse(seedIntentTime) + 1_000).toISOString()
+    journal = appendJournalEvent(
+      journal,
+      "delete-outcome",
+      {
+        targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+        attemptNumber: 1,
+        classification: "confirmed-204",
+        httpStatus: 204,
+        observedAt: seedOutcomeTime,
+      },
+      seedOutcomeTime,
+    )
+    const seedConvergenceTime = new Date(Date.parse(seedOutcomeTime) + 1_000).toISOString()
+    journal = appendJournalEvent(
+      journal,
+      "absence-converged",
+      {
+        targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+        attemptNumber: 1,
+        basis: "confirmed-204",
+        directGet404At: seedConvergenceTime,
+        listAbsentAt: seedConvergenceTime,
+        attempts: 1,
+        completedAt: seedConvergenceTime,
+      },
+      seedConvergenceTime,
+    )
+  }
+  await writePrivateEnvelope(journalPath, canonicalConsolidationEnvelopeBytes("journal", journal))
+  await writePrivateEnvelope(headPath, testJournalHeadBytes(journalPath, journal))
   const authorityTime = new Date(
-    Math.max(Date.now(), Date.parse(proposal.record.inspectedAt) + 1_000),
+    Math.max(Date.now(), Date.parse(journal.record.updatedAt) + 1_000),
   ).toISOString()
   const targetEvidence = proposal.record.releases.find(({ id }) => id === targetReleaseId)
-  const authority = {
-    stage: "pre-delete-1",
-    controller: structuredClone(proposal.record.controller),
-    annotatedTag: {
-      ...structuredClone(proposal.record.annotatedTag),
-      observedAt: authorityTime,
-    },
-    workflowAuthority: {
-      ...structuredClone(proposal.record.workflowAuthority),
-      observedAt: authorityTime,
-    },
-    npmInventory: {
-      ...structuredClone(proposal.record.npmInventories[1]),
-      stage: "pre-delete-1",
-      startedAt: authorityTime,
-      completedAt: authorityTime,
-      packages: proposal.record.npmInventories[1].packages.map((entry) => ({
-        ...structuredClone(entry),
-        observedAt: authorityTime,
-      })),
-    },
-    releases: structuredClone(proposal.record.releases),
-    payloadProof: structuredClone(proposal.record.payloadProof),
-    targetRead: {
-      releaseGetStartedAt: authorityTime,
-      releaseGetCompletedAt: authorityTime,
-      assetsListStartedAt: authorityTime,
-      assetsListCompletedAt: authorityTime,
-      evidence: structuredClone(targetEvidence),
-      evidenceSha256: canonicalRecordSha256(targetEvidence),
-    },
+  const authority = deletionAuthorityFixture({
+    proposal,
+    stage: targetIndex === 0 ? "pre-delete-1" : "pre-delete-2",
+    targetEvidence,
     observedAt: authorityTime,
-  }
+    releases:
+      targetIndex === 0
+        ? proposal.record.releases
+        : [proposal.record.releases[0], proposal.record.releases[2]],
+  })
   let deleted = false
   let deleteCalls = 0
   let authorityCaptures = 0
@@ -1424,13 +1634,23 @@ async function oneDeletionFixture(t, options) {
   const unsupported = async () => {
     throw new Error("unexpected fake adapter operation")
   }
-  const currentRawReleases = () => {
+  const currentRawReleases = ({ heavyVerification = false } = {}) => {
     const releases = inspection.releaseFixture.releases
       .filter(
         (release) =>
-          !deleted ||
-          options.retainDeletedInList === true ||
-          String(release.id) !== targetReleaseId,
+          !(
+            targetIndex === 1 &&
+            String(release.id) === DUPLICATE_DRAFT_IDS[0] &&
+            !(heavyVerification && options.retryRemainingMutation === "extra")
+          ) &&
+          !(
+            heavyVerification &&
+            options.retryRemainingMutation === "missing" &&
+            String(release.id) === DUPLICATE_DRAFT_SURVIVOR_ID
+          ) &&
+          (!deleted ||
+            options.retainDeletedInList === true ||
+            String(release.id) !== targetReleaseId),
       )
       .map((release) => structuredClone(release))
     const target = releases.find(({ id }) => String(id) === targetReleaseId)
@@ -1441,6 +1661,12 @@ async function oneDeletionFixture(t, options) {
         target.published_at = "2026-09-01T12:35:00Z"
       }
       if (options.currentMutation === "malformed") target.body = "{"
+      if (heavyVerification && options.retryRemainingMutation === "metadata-included") {
+        target.name = "changed"
+      }
+      if (heavyVerification && options.retryRemainingMutation === "asset-included") {
+        target.assets[0].label = "changed"
+      }
     }
     return releases
   }
@@ -1477,7 +1703,7 @@ async function oneDeletionFixture(t, options) {
         operation: "releases",
         httpStatus: 200,
         code: null,
-        value: currentRawReleases(),
+        value: currentRawReleases({ heavyVerification: current.phase === "npm-observed" }),
       }
     },
     async getRelease({ releaseId }) {
@@ -1752,6 +1978,42 @@ async function oneDeletionFixture(t, options) {
         wallClockTimeline,
       })
     },
+  }
+}
+
+function deletionAuthorityFixture({ proposal, stage, targetEvidence, observedAt, releases }) {
+  return {
+    stage,
+    controller: structuredClone(proposal.record.controller),
+    annotatedTag: {
+      ...structuredClone(proposal.record.annotatedTag),
+      observedAt,
+    },
+    workflowAuthority: {
+      ...structuredClone(proposal.record.workflowAuthority),
+      observedAt,
+    },
+    npmInventory: {
+      ...structuredClone(proposal.record.npmInventories[1]),
+      stage,
+      startedAt: observedAt,
+      completedAt: observedAt,
+      packages: proposal.record.npmInventories[1].packages.map((entry) => ({
+        ...structuredClone(entry),
+        observedAt,
+      })),
+    },
+    releases: structuredClone(releases),
+    payloadProof: structuredClone(proposal.record.payloadProof),
+    targetRead: {
+      releaseGetStartedAt: observedAt,
+      releaseGetCompletedAt: observedAt,
+      assetsListStartedAt: observedAt,
+      assetsListCompletedAt: observedAt,
+      evidence: structuredClone(targetEvidence),
+      evidenceSha256: canonicalRecordSha256(targetEvidence),
+    },
+    observedAt,
   }
 }
 

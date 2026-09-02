@@ -10,6 +10,7 @@ import {
 import {
   assertEvidenceEqualsProposal,
   inspectEquivalentDrafts,
+  inspectEquivalentRemainingDrafts,
 } from "./duplicate-draft-consolidation-evidence.mjs"
 import {
   readPrivateEnvelope,
@@ -423,7 +424,9 @@ async function completeStaleRetryPreparation(context, journal, state) {
   const sourceAdapters = await context.createAdapters()
   const adapters = bindAdapters(sourceAdapters)
   const releases = await readReleaseEnumeration({ adapters })
-  const inspected = await inspectEquivalentDrafts({
+  const stage = deletionStage(state)
+  const inspected = await inspectEquivalentRemainingDrafts({
+    stage,
     candidate: CANDIDATE,
     survivorId: SURVIVOR,
     duplicateIds: DUPLICATES,
@@ -431,7 +434,7 @@ async function completeStaleRetryPreparation(context, journal, state) {
     github: adapters.github,
     attestations: adapters.attestations,
   })
-  assertRetryPayloadMatchesProposal(inspected, context.proposal.record)
+  assertRetryPayloadMatchesProposal(inspected, context.proposal.record, stage)
   const gapStartedAt = Date.parse(state.lastRetryNpmInventory.completedAt)
   const afterVerification = Date.parse(
     timestampValue(context.retryWallNow(), "retry payload verification clock"),
@@ -455,20 +458,29 @@ async function completeStaleRetryPreparation(context, journal, state) {
   return { journal: current.journal, result: null, preparedAttempt }
 }
 
-function assertRetryPayloadMatchesProposal(inspected, proposal) {
-  if (
-    !Array.isArray(inspected.releases) ||
-    inspected.releases.length !== proposal.releases.length
-  ) {
+function assertRetryPayloadMatchesProposal(inspected, proposal, stage) {
+  const proposedReleases =
+    stage === "pre-delete-1" ? proposal.releases : [proposal.releases[0], proposal.releases[2]]
+  if (!Array.isArray(inspected.releases) || inspected.releases.length !== proposedReleases.length) {
     throw new Error("Retry payload verification returned incomplete Releases")
   }
-  for (let index = 0; index < proposal.releases.length; index += 1) {
-    if (inspected.releases[index].id !== proposal.releases[index].id) {
+  for (let index = 0; index < proposedReleases.length; index += 1) {
+    if (inspected.releases[index].id !== proposedReleases[index].id) {
       throw new Error("Retry payload verification changed fixed Release order")
     }
-    assertEvidenceEqualsProposal(inspected.releases[index], proposal.releases[index])
+    assertEvidenceEqualsProposal(inspected.releases[index], proposedReleases[index])
   }
-  if (!isDeepStrictEqual(inspected.payloadProof, proposal.payloadProof)) {
+  const payloadProofMatches =
+    isDeepStrictEqual(inspected.payloadProof.baseAssetSet, proposal.payloadProof.baseAssetSet) &&
+    inspected.payloadProof.baseAssetSetSha256 === proposal.payloadProof.baseAssetSetSha256 &&
+    isDeepStrictEqual(
+      inspected.payloadProof.attestationVerification,
+      proposal.payloadProof.attestationVerification,
+    ) &&
+    (stage === "pre-delete-2" ||
+      inspected.payloadProof.consolidationPayloadSha256 ===
+        proposal.payloadProof.consolidationPayloadSha256)
+  if (!payloadProofMatches) {
     throw new Error("Retry payload proof differs from the reviewed proposal")
   }
 }
