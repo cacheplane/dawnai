@@ -419,7 +419,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
       const existing = current.assets.find((asset) => asset.name === args.name) ?? null
       if (existing !== null) {
         assertExistingEvidenceAsset(existing, args, kind)
-        await verifyRecoveryCandidateTag(context)
+        await verifyRecoveryCandidateTag(context, args.expectedTagObjectSha)
         return deepFreeze({
           releaseId,
           assetId: existing.id,
@@ -429,7 +429,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         })
       }
 
-      await verifyRecoveryCandidateTag(context)
+      await verifyRecoveryCandidateTag(context, args.expectedTagObjectSha)
       const observation = await observeIssuedRecoveryMutation(
         context,
         () =>
@@ -440,7 +440,11 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
             contentType: "application/octet-stream",
             maximumRequestBytes: RECOVERY_ASSET_BYTES,
           }),
-        { releaseId, originalBody: current.body },
+        {
+          releaseId,
+          originalBody: current.body,
+          expectedTagObjectSha: args.expectedTagObjectSha,
+        },
       )
       const { response, snapshot: postSnapshot } = requireExactMutationObservation(observation)
       let created
@@ -476,10 +480,11 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
     async quarantineDuplicateBodyIfCurrent(input) {
       const args = snapshotExactWriterInput(
         input,
-        ["expectedSnapshot", "expectedBodySha256", "expectedNotice"],
+        ["expectedSnapshot", "expectedTagObjectSha", "expectedBodySha256", "expectedNotice"],
         "quarantine",
       )
       const expected = normalizeExpectedWriterSnapshot(args.expectedSnapshot)
+      assertExpectedTagObjectSha(args.expectedTagObjectSha)
       if (Buffer.from(args.expectedNotice, "utf8").includes(Buffer.from(token, "utf8"))) {
         throw new TypeError("Recovery notice contains configured credentials")
       }
@@ -490,6 +495,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         expected,
         expected.body,
         baseline.projection,
+        args.expectedTagObjectSha,
       )
       const current = preWrite.snapshot
       const observation = await observeIssuedRecoveryMutation(
@@ -505,6 +511,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         {
           releaseId: current.releaseId,
           originalBody: current.body,
+          expectedTagObjectSha: args.expectedTagObjectSha,
           recordFence: true,
         },
       )
@@ -561,8 +568,10 @@ function snapshotWriterOptions(value) {
 
 function snapshotRecoveryAssetInput(value, token) {
   if (!isPlainObject(value)) throw new TypeError("Recovery asset input schema is invalid")
-  const expectedFields = ["expectedSnapshot", "name", "bytes", "sha256"]
+  const expectedFields = ["expectedSnapshot", "expectedTagObjectSha", "name", "bytes", "sha256"]
   assertExactDataFields(value, expectedFields, "Recovery asset input")
+  const expectedTagObjectSha = Object.getOwnPropertyDescriptor(value, "expectedTagObjectSha").value
+  assertExpectedTagObjectSha(expectedTagObjectSha)
   const copied = snapshotExactEvidenceBytes(Object.getOwnPropertyDescriptor(value, "bytes").value)
   if (copied.includes(Buffer.from(token, "utf8"))) {
     throw new TypeError("Recovery evidence bytes contain configured credentials")
@@ -571,6 +580,7 @@ function snapshotRecoveryAssetInput(value, token) {
     expectedSnapshot: snapshotJson(
       Object.getOwnPropertyDescriptor(value, "expectedSnapshot").value,
     ),
+    expectedTagObjectSha,
     name: Object.getOwnPropertyDescriptor(value, "name").value,
     bytes: copied,
     sha256: Object.getOwnPropertyDescriptor(value, "sha256").value,
@@ -643,6 +653,10 @@ function isEnumerableData(descriptor) {
     descriptor.get === undefined &&
     descriptor.set === undefined
   )
+}
+
+function assertExpectedTagObjectSha(value) {
+  if (!isSha(value)) throw new TypeError("Expected candidate tag object SHA is invalid")
 }
 
 function normalizeExpectedWriterSnapshot(value) {
@@ -906,7 +920,7 @@ function validateQuarantineInput(snapshot, args) {
   }
 }
 
-async function verifyRecoveryCandidateTag(context) {
+async function verifyRecoveryCandidateTag(context, expectedTagObjectSha) {
   try {
     const ref = requirePresent(
       await context.github.getRef({ ref: `tags/${CANDIDATE_TAG}` }),
@@ -918,7 +932,7 @@ async function verifyRecoveryCandidateTag(context) {
       ref.ref !== `refs/tags/${CANDIDATE_TAG}` ||
       !isObject(ref.object) ||
       ref.object.type !== "tag" ||
-      !isSha(ref.object.sha)
+      ref.object.sha !== expectedTagObjectSha
     ) {
       writeFail("CANDIDATE_TAG_CONFLICT", "Candidate tag identity is not exact")
     }
@@ -947,7 +961,7 @@ async function verifyRecoveryCandidateTag(context) {
 async function observeIssuedRecoveryMutation(
   context,
   request,
-  { releaseId, originalBody, recordFence = false },
+  { releaseId, originalBody, expectedTagObjectSha, recordFence = false },
 ) {
   let response
   let requestError = null
@@ -959,7 +973,7 @@ async function observeIssuedRecoveryMutation(
   let tagError = null
   let tagObjectSha = null
   try {
-    tagObjectSha = await verifyRecoveryCandidateTag(context)
+    tagObjectSha = await verifyRecoveryCandidateTag(context, expectedTagObjectSha)
   } catch (error) {
     tagError = error
   }
@@ -1057,9 +1071,15 @@ async function readCurrentWriterObservation(context, releaseId, originalBody) {
   }
 }
 
-async function readQuarantinePreWriteFence(context, expected, originalBody, baselineProjection) {
+async function readQuarantinePreWriteFence(
+  context,
+  expected,
+  originalBody,
+  baselineProjection,
+  expectedTagObjectSha,
+) {
   const [tagObjectSha, current] = await Promise.all([
-    verifyRecoveryCandidateTag(context),
+    verifyRecoveryCandidateTag(context, expectedTagObjectSha),
     readCurrentWriterObservation(context, expected.releaseId, originalBody),
   ])
   if (!sameJson(current.snapshot, expected) || !sameJson(current.projection, baselineProjection)) {

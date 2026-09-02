@@ -120,6 +120,7 @@ test("recovery writer uploads only exact candidate-derived evidence with pre/pos
 
   const receipt = await writer.uploadEvidenceAssetIfAbsentAndEqual({
     expectedSnapshot: fixture.untouchedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     name: fixture.archiveName,
     bytes: fixture.archiveBytes,
     sha256: fixture.archiveSha256,
@@ -183,6 +184,7 @@ test("recovery writer accepts an existing evidence asset only after exact downlo
 
   const receipt = await writer.uploadEvidenceAssetIfAbsentAndEqual({
     expectedSnapshot: fixture.bodyArchivedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     name: fixture.archiveName,
     bytes: fixture.archiveBytes,
     sha256: fixture.archiveSha256,
@@ -222,6 +224,7 @@ test("recovery writer accepts an existing evidence asset only after exact downlo
   await assert.rejects(
     unequal.uploadEvidenceAssetIfAbsentAndEqual({
       expectedSnapshot: fixture.bodyArchivedSnapshot,
+      expectedTagObjectSha: TAG_OBJECT,
       name: fixture.archiveName,
       bytes: fixture.archiveBytes,
       sha256: fixture.archiveSha256,
@@ -292,6 +295,7 @@ test("recovery writer quarantines with exact non-atomic pre/post fence receipts"
 
   const result = await writer.quarantineDuplicateBodyIfCurrent({
     expectedSnapshot: fixture.receiptArchivedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     expectedBodySha256: fixture.archiveSha256,
     expectedNotice: fixture.notice,
   })
@@ -375,6 +379,7 @@ test("recovery writer completes concurrent final pre-write tag and projection fe
 
   const operation = writer.quarantineDuplicateBodyIfCurrent({
     expectedSnapshot: fixture.receiptArchivedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     expectedBodySha256: fixture.archiveSha256,
     expectedNotice: fixture.notice,
   })
@@ -463,6 +468,7 @@ test("recovery writer blocks pre/post projection drift including asset identity 
       await assert.rejects(
         writer.quarantineDuplicateBodyIfCurrent({
           expectedSnapshot: fixture.receiptArchivedSnapshot,
+          expectedTagObjectSha: TAG_OBJECT,
           expectedBodySha256: fixture.archiveSha256,
           expectedNotice: fixture.notice,
         }),
@@ -473,6 +479,62 @@ test("recovery writer blocks pre/post projection drift including asset identity 
       )
     })
   }
+})
+
+test("recovery writer binds POST and PATCH fences to the evidence annotated tag object", async (t) => {
+  const fixture = writerFixture()
+  for (const method of ["POST", "PATCH"]) {
+    await t.test(method, async () => {
+      const harness = mutationFenceHarness(fixture, {
+        method,
+        failure: "replacement",
+        replaceTagObject: true,
+      })
+      await assert.rejects(
+        harness.operation(),
+        (error) => error.code === "POST_WRITE_TAG_FENCE_CONFLICT",
+      )
+      assert.equal(harness.calls.filter(({ init }) => init.method === method).length, 1)
+    })
+  }
+})
+
+test("recovery writer requires an exact visible lowercase evidence tag object SHA", async () => {
+  const fixture = writerFixture()
+  let calls = 0
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    fetchImpl: async () => {
+      calls += 1
+      assert.fail("invalid tag-object evidence must fail before network access")
+    },
+  })
+  const validUpload = uploadInput(fixture)
+  const validQuarantine = {
+    expectedSnapshot: fixture.receiptArchivedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
+    expectedBodySha256: fixture.archiveSha256,
+    expectedNotice: fixture.notice,
+  }
+  for (const valid of [validUpload, validQuarantine]) {
+    const invoke = (input) =>
+      Object.hasOwn(input, "name")
+        ? writer.uploadEvidenceAssetIfAbsentAndEqual(input)
+        : writer.quarantineDuplicateBodyIfCurrent(input)
+    const { expectedTagObjectSha: _missing, ...missing } = valid
+    await assert.rejects(invoke(missing), /schema|tag|sha/iu)
+    await assert.rejects(
+      invoke({ ...valid, expectedTagObjectSha: TAG_OBJECT.toUpperCase() }),
+      /tag|sha/iu,
+    )
+    const hidden = { ...valid }
+    Object.defineProperty(hidden, "expectedTagObjectSha", {
+      value: TAG_OBJECT,
+      enumerable: false,
+    })
+    await assert.rejects(invoke(hidden), /schema|tag|sha/iu)
+  }
+  assert.equal(calls, 0)
 })
 
 test("recovery writer rejects non-candidate inputs and concurrent drift before mutation", async () => {
@@ -487,6 +549,7 @@ test("recovery writer rejects non-candidate inputs and concurrent drift before m
   })
   const baseInput = {
     expectedSnapshot: fixture.untouchedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     name: fixture.archiveName,
     bytes: fixture.archiveBytes,
     sha256: fixture.archiveSha256,
@@ -583,6 +646,7 @@ test("recovery writer bounds a stalled mutation response body", async () => {
 
   const operation = writer.uploadEvidenceAssetIfAbsentAndEqual({
     expectedSnapshot: fixture.untouchedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     name: fixture.archiveName,
     bytes: fixture.archiveBytes,
     sha256: fixture.archiveSha256,
@@ -621,6 +685,7 @@ test("recovery writer bounds a stalled mutation response body", async () => {
   })
   const stalledOperation = stalledFetch.uploadEvidenceAssetIfAbsentAndEqual({
     expectedSnapshot: fixture.untouchedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     name: fixture.archiveName,
     bytes: fixture.archiveBytes,
     sha256: fixture.archiveSha256,
@@ -657,6 +722,7 @@ test("recovery writer snapshots only exact intrinsic byte containers without inv
   })
   const inputFor = (bytes) => ({
     expectedSnapshot: fixture.untouchedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     name: fixture.archiveName,
     bytes,
     sha256: fixture.archiveSha256,
@@ -957,6 +1023,7 @@ test("recovery writer never sends configured credential bytes as evidence or not
   await assert.rejects(
     writer.quarantineDuplicateBodyIfCurrent({
       expectedSnapshot: fixture.receiptArchivedSnapshot,
+      expectedTagObjectSha: TAG_OBJECT,
       expectedBodySha256: fixture.archiveSha256,
       expectedNotice: fixture.notice,
     }),
@@ -1014,6 +1081,7 @@ test("recovery writer rejects configured credentials in live response data witho
       await assert.rejects(
         writer.uploadEvidenceAssetIfAbsentAndEqual({
           expectedSnapshot,
+          expectedTagObjectSha: TAG_OBJECT,
           name: fixture.archiveName,
           bytes: fixture.archiveBytes,
           sha256: fixture.archiveSha256,
@@ -1093,6 +1161,7 @@ test("recovery writer rejects post-upload snapshot or candidate-tag drift", asyn
       await assert.rejects(
         writer.uploadEvidenceAssetIfAbsentAndEqual({
           expectedSnapshot: fixture.untouchedSnapshot,
+          expectedTagObjectSha: TAG_OBJECT,
           name: fixture.archiveName,
           bytes: fixture.archiveBytes,
           sha256: fixture.archiveSha256,
@@ -1108,7 +1177,7 @@ test("recovery writer rejects post-upload snapshot or candidate-tag drift", asyn
         "tag-object",
         "POST",
         "tag-ref",
-        "tag-object",
+        ...(drift === "candidate tag" ? [] : ["tag-object"]),
         "release",
         "assets",
         ...(drift === "candidate tag" ? ["asset-download"] : []),
@@ -2582,6 +2651,7 @@ function callKind({ url, init }) {
 function uploadInput(fixture) {
   return {
     expectedSnapshot: fixture.untouchedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
     name: fixture.archiveName,
     bytes: fixture.archiveBytes,
     sha256: fixture.archiveSha256,
@@ -2658,6 +2728,7 @@ function writerReadStreamHarness(fixture, { location, response, timeoutMs = 1_00
     operation: () =>
       writer.uploadEvidenceAssetIfAbsentAndEqual({
         expectedSnapshot: fixture.bodyArchivedSnapshot,
+        expectedTagObjectSha: TAG_OBJECT,
         name: fixture.archiveName,
         bytes: fixture.archiveBytes,
         sha256: fixture.archiveSha256,
@@ -2666,14 +2737,32 @@ function writerReadStreamHarness(fixture, { location, response, timeoutMs = 1_00
   }
 }
 
-function mutationFenceHarness(fixture, { method, failure }) {
+function mutationFenceHarness(fixture, { method, failure, replaceTagObject = false }) {
   let mutated = false
+  let tagReads = 0
   const calls = []
   const writer = createDuplicateDraftRecoveryWriter({
     token: "secret-token",
     fetchImpl: routingFetch(calls, (url, init) => {
-      if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) return jsonResponse(candidateTagRef())
+      if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) {
+        tagReads += 1
+        return jsonResponse(
+          replaceTagObject && tagReads === 2
+            ? {
+                ref: "refs/tags/v0.8.22",
+                object: { type: "tag", sha: "e".repeat(40) },
+              }
+            : candidateTagRef(),
+        )
+      }
       if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
+      if (url === `${BASE}/git/tags/${"e".repeat(40)}`) {
+        return jsonResponse({
+          sha: "e".repeat(40),
+          tag: "v0.8.22",
+          object: { type: "commit", sha: CANDIDATE_SHA },
+        })
+      }
       if (url === `${BASE}/releases/${DUPLICATE_ID}` && init.method === "PATCH") {
         mutated = true
         return failedMutationResponse(failure, writerRelease(fixture.notice), 200)
@@ -2726,6 +2815,7 @@ function mutationFenceHarness(fixture, { method, failure }) {
         ? writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture))
         : writer.quarantineDuplicateBodyIfCurrent({
             expectedSnapshot: fixture.receiptArchivedSnapshot,
+            expectedTagObjectSha: TAG_OBJECT,
             expectedBodySha256: fixture.archiveSha256,
             expectedNotice: fixture.notice,
           }),
