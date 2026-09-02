@@ -28,6 +28,18 @@ const PRIVATE_READ_PROVENANCE = new WeakMap();
 const PRIVATE_TRANSACTION_CONTEXT = new AsyncLocalStorage();
 const JOURNAL_BASENAME = "duplicate-draft-consolidation.journal.json";
 const JOURNAL_HEAD_BASENAME = "duplicate-draft-consolidation.journal.head.json";
+const LOCK_RECORD_BYTES = 2048;
+const LOCK_TIMESTAMP_PATTERN =
+	/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/u;
+const PROCESS_START_IDENTITY = `${process.pid}:${Math.trunc(
+	Date.now() - process.uptime() * 1000,
+)}`;
+
+// Approved threat model: one operator and cooperative in-scope writers. Every
+// consolidation journal/head publication must hold this module's lease. An
+// arbitrary external filesystem writer is out of scope; no cross-process
+// lockfile protocol can make its rename atomic with ours. Identity checks make
+// such interference fail closed when observed, but are not a general CAS claim.
 
 const POLICIES = Object.freeze({
 	private: Object.freeze({ label: "private envelope", mode: PRIVATE_MODE }),
@@ -49,6 +61,17 @@ export async function writePrivateEnvelope(
 	expectedCurrent,
 ) {
 	const target = snapshotPath(filePath);
+	const lockTarget = privateLockTarget(target);
+	if (lockTarget !== null && expectedCurrent !== undefined) {
+		assertActivePrivateLease(lockTarget);
+		return writeEvidence(
+			target,
+			bytes,
+			dependencies,
+			POLICIES.private,
+			expectedCurrent,
+		);
+	}
 	return withPrivateWriteLock(target, dependencies, () =>
 		writeEvidence(
 			target,
@@ -646,8 +669,10 @@ async function withPrivateWriteLock(target, dependencies, operation) {
 	const lockTarget = privateLockTarget(target);
 	if (lockTarget === null) return operation();
 	const active = PRIVATE_TRANSACTION_CONTEXT.getStore();
-	if (active?.lockTarget === lockTarget) return operation();
-	if (active !== undefined) {
+	if (active?.active === true && active.lockTarget === lockTarget) {
+		return operation(() => assertActivePrivateLease(lockTarget, active));
+	}
+	if (active?.active === true) {
 		throw new Error("Private envelope transaction cannot acquire another lock");
 	}
 	const runtime = snapshotDependencies(dependencies, true);
@@ -674,13 +699,30 @@ async function withPrivateWriteLock(target, dependencies, operation) {
 	let primaryError = null;
 	let result;
 	try {
-		handle = await openNoFollow(
-			runtime.operations,
-			lockTarget,
-			fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL,
-			"private envelope lock",
-			PRIVATE_MODE,
-		);
+		try {
+			handle = await openNoFollow(
+				runtime.operations,
+				lockTarget,
+				fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL,
+				"private envelope lock",
+				PRIVATE_MODE,
+			);
+		} catch (error) {
+			if (errorCode(error) !== "EEXIST") throw error;
+			await quarantineProvablyDeadLock({
+				runtime,
+				lockTarget,
+				identifier,
+				parentGuard,
+			});
+			handle = await openNoFollow(
+				runtime.operations,
+				lockTarget,
+				fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL,
+				"private envelope lock",
+				PRIVATE_MODE,
+			);
+		}
 		operations = snapshotHandleOperations(handle, [
 			"chmod",
 			"close",
@@ -689,10 +731,10 @@ async function withPrivateWriteLock(target, dependencies, operation) {
 			"write",
 		]);
 		await operations.chmod(PRIVATE_MODE);
-		const lockBytes = Buffer.from(
-			`${JSON.stringify({ schemaVersion: 1, pid: process.pid, owner: identifier })}\n`,
-			"utf8",
-		);
+		const lockBytes = canonicalPrivateLockBytes({
+			lockTarget,
+			nonce: identifier,
+		});
 		const written = await operations.write(
 			lockBytes,
 			0,
@@ -723,10 +765,16 @@ async function withPrivateWriteLock(target, dependencies, operation) {
 		if (!sameFileState(identity, current))
 			throw new Error("Private envelope lock path changed during acquisition");
 		await parentGuard.operations.sync();
-		result = await PRIVATE_TRANSACTION_CONTEXT.run(
-			Object.freeze({ lockTarget }),
-			operation,
-		);
+		const lease = { active: true, id: identifier, lockTarget };
+		result = await PRIVATE_TRANSACTION_CONTEXT.run(lease, async () => {
+			try {
+				return await operation(() =>
+					assertActivePrivateLease(lockTarget, lease),
+				);
+			} finally {
+				lease.active = false;
+			}
+		});
 	} catch (error) {
 		primaryError = error;
 	}
@@ -777,6 +825,211 @@ async function withPrivateWriteLock(target, dependencies, operation) {
 		"Private envelope transaction and lock cleanup both failed",
 	);
 	return result;
+}
+
+async function quarantineProvablyDeadLock({
+	runtime,
+	lockTarget,
+	identifier,
+	parentGuard,
+}) {
+	const before = await runtime.operations.lstat(lockTarget, { bigint: true });
+	assertPrivateLockFile(before, runtime.effectiveUserId);
+	if (before.size <= 0n || before.size > BigInt(LOCK_RECORD_BYTES)) {
+		throw new Error("Existing private lock record has an invalid byte length");
+	}
+	const handle = await openNoFollow(
+		runtime.operations,
+		lockTarget,
+		fsConstants.O_RDONLY,
+		"existing private envelope lock",
+	);
+	const operations = snapshotHandleOperations(handle, [
+		"close",
+		"read",
+		"stat",
+	]);
+	let closed = false;
+	try {
+		const opened = await operations.stat({ bigint: true });
+		assertPrivateLockFile(opened, runtime.effectiveUserId);
+		if (!sameFileState(before, opened)) {
+			throw new Error("Existing private lock changed before recovery read");
+		}
+		const first = await readExactHandleBytes(
+			operations,
+			Number(opened.size),
+			"existing private lock",
+		);
+		const afterFirst = await operations.stat({ bigint: true });
+		const second = await readExactHandleBytes(
+			operations,
+			Number(opened.size),
+			"existing private lock repeat",
+		);
+		const afterSecond = await operations.stat({ bigint: true });
+		const current = await runtime.operations.lstat(lockTarget, {
+			bigint: true,
+		});
+		if (
+			!first.equals(second) ||
+			!sameFileState(opened, afterFirst) ||
+			!sameFileState(afterFirst, afterSecond) ||
+			!sameFileState(afterSecond, current)
+		) {
+			throw new Error("Existing private lock changed during recovery read");
+		}
+		const record = parseCanonicalPrivateLock(first, lockTarget);
+		assertProvablyDeadProcess(record);
+		await operations.close();
+		closed = true;
+		const finalCurrent = await runtime.operations.lstat(lockTarget, {
+			bigint: true,
+		});
+		if (!sameFileState(current, finalCurrent)) {
+			throw new Error("Existing private lock changed before quarantine");
+		}
+		const quarantinePath = `${lockTarget}.${identifier}.quarantine`;
+		await runtime.operations.rename(lockTarget, quarantinePath);
+		const quarantined = await runtime.operations.lstat(quarantinePath, {
+			bigint: true,
+		});
+		assertPrivateLockFile(quarantined, runtime.effectiveUserId);
+		if (!sameFileObject(finalCurrent, quarantined)) {
+			throw new Error(
+				"Quarantined private lock identity changed during recovery",
+			);
+		}
+		await parentGuard.operations.sync();
+	} finally {
+		if (!closed) await operations.close();
+	}
+}
+
+function canonicalPrivateLockBytes({ lockTarget, nonce }) {
+	return Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			pid: process.pid,
+			processStartIdentity: PROCESS_START_IDENTITY,
+			nonce,
+			path: lockTarget,
+			createdAt: new Date().toISOString(),
+		})}\n`,
+		"utf8",
+	);
+}
+
+function parseCanonicalPrivateLock(bytes, lockTarget) {
+	let record;
+	try {
+		record = JSON.parse(
+			new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+		);
+	} catch {
+		throw new Error("Existing private lock record is malformed");
+	}
+	const expectedKeys = [
+		"schemaVersion",
+		"pid",
+		"processStartIdentity",
+		"nonce",
+		"path",
+		"createdAt",
+	];
+	const keys =
+		record !== null && typeof record === "object"
+			? Reflect.ownKeys(record)
+			: [];
+	if (
+		record === null ||
+		typeof record !== "object" ||
+		utilTypes.isProxy(record) ||
+		Object.getPrototypeOf(record) !== Object.prototype ||
+		keys.length !== expectedKeys.length ||
+		keys.some((key, index) => key !== expectedKeys[index]) ||
+		record.schemaVersion !== 1 ||
+		!Number.isSafeInteger(record.pid) ||
+		record.pid <= 0 ||
+		(record.processStartIdentity !== null &&
+			(typeof record.processStartIdentity !== "string" ||
+				record.processStartIdentity.length === 0 ||
+				Buffer.byteLength(record.processStartIdentity, "utf8") > 256)) ||
+		typeof record.nonce !== "string" ||
+		!UUID_PATTERN.test(record.nonce) ||
+		record.path !== lockTarget ||
+		typeof record.createdAt !== "string" ||
+		!LOCK_TIMESTAMP_PATTERN.test(record.createdAt) ||
+		Number.isNaN(Date.parse(record.createdAt))
+	) {
+		throw new Error("Existing private lock record is invalid");
+	}
+	const canonical = Buffer.from(`${JSON.stringify(record)}\n`, "utf8");
+	if (!bytes.equals(canonical)) {
+		throw new Error("Existing private lock record is not canonical");
+	}
+	return record;
+}
+
+function assertProvablyDeadProcess(record) {
+	try {
+		process.kill(record.pid, 0);
+	} catch (error) {
+		if (errorCode(error) === "ESRCH") return;
+		throw new Error("Existing private lock owner status is unknown", {
+			cause: error,
+		});
+	}
+	throw new Error(
+		"Existing private lock owner is live or its PID may have been reused",
+	);
+}
+
+function assertPrivateLockFile(status, expectedUserId) {
+	if (!status.isFile() || status.isSymbolicLink()) {
+		throw new Error("Existing private lock must be a regular no-follow file");
+	}
+	if (status.nlink !== 1n) {
+		throw new Error("Existing private lock must have exactly one link");
+	}
+	if (status.uid !== expectedUserId) {
+		throw new Error(
+			"Existing private lock must have the current effective owner",
+		);
+	}
+	if (Number(status.mode & 0o7777n) !== PRIVATE_MODE) {
+		throw new Error("Existing private lock must have exact mode 0600");
+	}
+}
+
+async function readExactHandleBytes(operations, size, label) {
+	const bytes = Buffer.allocUnsafe(size);
+	let offset = 0;
+	while (offset < size) {
+		const requested = Math.min(IO_CHUNK_BYTES, size - offset);
+		const result = await operations.read(bytes, offset, requested, offset);
+		const count = resultCount(result, "bytesRead", requested, `${label} read`);
+		if (count === 0) break;
+		offset += count;
+	}
+	if (offset !== size)
+		throw new Error(`${capitalize(label)} read is incomplete`);
+	return bytes;
+}
+
+function assertActivePrivateLease(lockTarget, expectedLease) {
+	const lease = PRIVATE_TRANSACTION_CONTEXT.getStore();
+	if (
+		lease === undefined ||
+		lease.active !== true ||
+		lease.lockTarget !== lockTarget ||
+		(expectedLease !== undefined && lease !== expectedLease)
+	) {
+		throw new Error(
+			"Authenticated journal access requires the active exact transaction lease",
+		);
+	}
+	return lease;
 }
 
 function privateLockTarget(target) {

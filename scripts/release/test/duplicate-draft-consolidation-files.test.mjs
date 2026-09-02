@@ -106,6 +106,162 @@ test("an existing exact journal lock fails closed before replacement", async (t)
 	assert.deepEqual(await readFile(target), Buffer.from("original\n"));
 });
 
+test("a provably dead canonical lock is quarantined before a new journal lease", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(
+		repository,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+	const lockPath = path.join(
+		path.dirname(target),
+		`.${path.basename(target)}.lock`,
+	);
+	await writeFile(
+		lockPath,
+		canonicalLockRecord({ lockPath, pid: 2_147_483_647 }),
+		{ mode: 0o600 },
+	);
+
+	await writePrivateEnvelope(target, Buffer.from("recovered\n"));
+
+	assert.deepEqual(await readFile(target), Buffer.from("recovered\n"));
+	const names = await readdir(path.dirname(target));
+	assert.equal(names.includes(path.basename(lockPath)), false);
+	assert.equal(
+		names.some(
+			(name) =>
+				name.startsWith(`${path.basename(lockPath)}.`) &&
+				name.endsWith(".quarantine"),
+		),
+		true,
+	);
+});
+
+test("live and PID-reused lock owners are never stolen", async (t) => {
+	for (const processStartIdentity of [null, "different-process-start"]) {
+		await t.test(String(processStartIdentity), async (t) => {
+			const repository = await temporaryRepository(t);
+			const { target, lockPath } = await journalLockPaths(repository);
+			const record = JSON.parse(
+				canonicalLockRecord({ lockPath, pid: process.pid }).toString("utf8"),
+			);
+			record.processStartIdentity = processStartIdentity;
+			await writeFile(lockPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+
+			await assert.rejects(
+				writePrivateEnvelope(target, Buffer.from("blocked\n")),
+				/live|PID|reused|owner|lock/iu,
+			);
+			assert.equal((await lstat(lockPath)).isFile(), true);
+			await assert.rejects(readFile(target), /ENOENT/iu);
+		});
+	}
+});
+
+test("malformed, symlinked, hardlinked, wrong-mode, and wrong-owner locks fail closed", async (t) => {
+	for (const kind of ["malformed", "symlink", "hardlink", "mode", "owner"]) {
+		await t.test(kind, async (t) => {
+			const repository = await temporaryRepository(t);
+			const { target, lockPath } = await journalLockPaths(repository);
+			const recordPath = path.join(path.dirname(lockPath), `${kind}.record`);
+			const bytes = canonicalLockRecord({
+				lockPath,
+				pid: 2_147_483_647,
+			});
+			let dependencies;
+			if (kind === "malformed") {
+				await writeFile(lockPath, "not-json\n", { mode: 0o600 });
+			} else if (kind === "symlink") {
+				await writeFile(recordPath, bytes, { mode: 0o600 });
+				await symlink(recordPath, lockPath);
+			} else if (kind === "hardlink") {
+				await writeFile(recordPath, bytes, { mode: 0o600 });
+				await link(recordPath, lockPath);
+			} else {
+				await writeFile(lockPath, bytes, {
+					mode: kind === "mode" ? 0o644 : 0o600,
+				});
+				if (kind === "owner") {
+					dependencies = { effectiveUserId: () => effectiveUserId() + 1 };
+				}
+			}
+
+			await assert.rejects(
+				writePrivateEnvelope(target, Buffer.from("blocked\n"), dependencies),
+				/lock|regular|follow|link|mode|owner|canonical|record|invalid/iu,
+			);
+			await assert.rejects(readFile(target), /ENOENT/iu);
+		});
+	}
+});
+
+test("stale-lock replacement during quarantine is detected without publishing", async (t) => {
+	const repository = await temporaryRepository(t);
+	const { target, lockPath } = await journalLockPaths(repository);
+	await writeFile(
+		lockPath,
+		canonicalLockRecord({ lockPath, pid: 2_147_483_647 }),
+		{ mode: 0o600 },
+	);
+	const displacedPath = `${lockPath}.displaced`;
+	const fileSystem = fileSystemWith({
+		async rename(source, destination) {
+			if (source === lockPath && destination.endsWith(".quarantine")) {
+				await rename(source, displacedPath);
+				await writeFile(
+					source,
+					canonicalLockRecord({
+						lockPath,
+						pid: 2_147_483_646,
+						nonce: "abcdefab-cdef-4abc-8def-abcdefabcdef",
+					}),
+					{ mode: 0o600 },
+				);
+			}
+			return rename(source, destination);
+		},
+	});
+
+	await assert.rejects(
+		writePrivateEnvelope(target, Buffer.from("blocked\n"), { fileSystem }),
+		/identity|changed|quarantine|lock/iu,
+	);
+	assert.equal((await lstat(displacedPath)).isFile(), true);
+	await assert.rejects(readFile(target), /ENOENT/iu);
+});
+
+test("lock acquisition failure before identity never removes an unproven path", async (t) => {
+	const repository = await temporaryRepository(t);
+	const { target, lockPath } = await journalLockPaths(repository);
+	let lockUnlinks = 0;
+	const fileSystem = fileSystemWith({
+		async open(filePath, flags, mode) {
+			const handle = await open(filePath, flags, mode);
+			if (filePath !== lockPath) return handle;
+			return wrapHandle(handle, {
+				async chmod() {
+					throw new Error("injected crash before lock identity");
+				},
+			});
+		},
+		async unlink(filePath) {
+			if (filePath === lockPath) lockUnlinks += 1;
+			return unlink(filePath);
+		},
+	});
+
+	await assert.rejects(
+		writePrivateEnvelope(target, Buffer.from("blocked\n"), { fileSystem }),
+		/crash|identity|lock|transaction/iu,
+	);
+	assert.equal(lockUnlinks, 0);
+	assert.equal((await lstat(lockPath)).isFile(), true);
+	await assert.rejects(readFile(target), /ENOENT/iu);
+});
+
 test("journal serialization blocks a final-check to rename overwrite race", async (t) => {
 	const repository = await temporaryRepository(t);
 	const target = path.join(
@@ -138,18 +294,28 @@ test("journal serialization blocks a final-check to rename overwrite race", asyn
 			return rename(source, destination);
 		},
 	});
-	const first = writePrivateEnvelope(
+	const first = writePrivateEnvelope.withExclusiveTransaction(
 		target,
-		Buffer.from("first\n"),
+		() =>
+			writePrivateEnvelope(
+				target,
+				Buffer.from("first\n"),
+				{ fileSystem },
+				current,
+			),
 		{ fileSystem },
-		current,
 	);
 	await firstRenameReached;
-	const second = writePrivateEnvelope(
+	const second = writePrivateEnvelope.withExclusiveTransaction(
 		target,
-		Buffer.from("second\n"),
+		() =>
+			writePrivateEnvelope(
+				target,
+				Buffer.from("second\n"),
+				{ fileSystem },
+				current,
+			),
 		{ fileSystem },
-		current,
 	);
 	await assert.rejects(second, /lock|exclusive|exist|transaction/iu);
 	releaseFirstRename();
@@ -157,6 +323,115 @@ test("journal serialization blocks a final-check to rename overwrite race", asyn
 
 	assert.equal(journalRenames, 1);
 	assert.deepEqual(await readFile(target), Buffer.from("first\n"));
+});
+
+test("authenticated journal CAS requires an active exact transaction lease", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(
+		repository,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+	await writePrivateEnvelope(target, Buffer.from("original\n"));
+	const current = await readPrivateEnvelope(target, MAXIMUM_BYTES);
+
+	await assert.rejects(
+		writePrivateEnvelope(
+			target,
+			Buffer.from("outside lease\n"),
+			undefined,
+			current,
+		),
+		/active|lease|transaction|lock/iu,
+	);
+	await writePrivateEnvelope.withExclusiveTransaction(target, async () => {
+		const leasedCurrent = await readPrivateEnvelope(target, MAXIMUM_BYTES);
+		await writePrivateEnvelope(
+			target,
+			Buffer.from("inside lease\n"),
+			undefined,
+			leasedCurrent,
+		);
+	});
+	assert.deepEqual(await readFile(target), Buffer.from("inside lease\n"));
+});
+
+test("every in-scope journal and head publication holds the cooperative writer lock", async (t) => {
+	const repository = await temporaryRepository(t);
+	const releaseDirectory = path.join(repository, ".dawn", "release");
+	await mkdir(releaseDirectory, { recursive: true, mode: 0o700 });
+	const lockPath = path.join(
+		releaseDirectory,
+		".duplicate-draft-consolidation.journal.json.lock",
+	);
+	for (const basename of [
+		"duplicate-draft-consolidation.journal.json",
+		"duplicate-draft-consolidation.journal.head.json",
+	]) {
+		const target = path.join(releaseDirectory, basename);
+		let observedLock = false;
+		const fileSystem = fileSystemWith({
+			async rename(source, destination) {
+				if (destination === target) {
+					const lock = await lstat(lockPath);
+					observedLock = lock.isFile() && (lock.mode & 0o777) === 0o600;
+				}
+				return rename(source, destination);
+			},
+		});
+		await writePrivateEnvelope(target, Buffer.from(`${basename}\n`), {
+			fileSystem,
+		});
+		assert.equal(observedLock, true);
+	}
+});
+
+test("deferred work cannot inherit a revoked lease while another writer holds the lock", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(
+		repository,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+	await writePrivateEnvelope(target, Buffer.from("original\n"));
+	let releaseDeferred;
+	const deferredGate = new Promise((resolve) => {
+		releaseDeferred = resolve;
+	});
+	let deferred;
+	await writePrivateEnvelope.withExclusiveTransaction(target, async () => {
+		deferred = (async () => {
+			await deferredGate;
+			return writePrivateEnvelope.withExclusiveTransaction(target, async () =>
+				readPrivateEnvelope(target, MAXIMUM_BYTES),
+			);
+		})();
+	});
+
+	let signalSecondLease;
+	const secondLeaseEntered = new Promise((resolve) => {
+		signalSecondLease = resolve;
+	});
+	let releaseSecondLease;
+	const secondLeaseGate = new Promise((resolve) => {
+		releaseSecondLease = resolve;
+	});
+	const second = writePrivateEnvelope.withExclusiveTransaction(
+		target,
+		async () => {
+			signalSecondLease();
+			await secondLeaseGate;
+		},
+	);
+	await secondLeaseEntered;
+	releaseDeferred();
+	await assert.rejects(deferred, /active|lease|lock|exclusive|exist/iu);
+	releaseSecondLease();
+	await second;
 });
 
 test("tracked receipts accept ordinary nonexecutable Git mode 0644", async (t) => {
@@ -868,4 +1143,36 @@ async function entries(directory) {
 function effectiveUserId() {
 	assert.equal(typeof process.geteuid, "function");
 	return process.geteuid();
+}
+
+async function journalLockPaths(repository) {
+	const target = path.join(
+		repository,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+	return {
+		target,
+		lockPath: path.join(path.dirname(target), `.${path.basename(target)}.lock`),
+	};
+}
+
+function canonicalLockRecord({
+	lockPath,
+	pid = process.pid,
+	nonce = "12345678-1234-4123-8123-123456789abc",
+}) {
+	return Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			pid,
+			processStartIdentity: null,
+			nonce,
+			path: lockPath,
+			createdAt: "2026-09-01T12:00:00.000Z",
+		})}\n`,
+		"utf8",
+	);
 }

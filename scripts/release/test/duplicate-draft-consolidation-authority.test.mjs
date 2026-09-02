@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { unlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -516,6 +517,57 @@ test("missing or replaced committed journal heads burn the permit before DELETE"
 	}
 });
 
+test("removing the journal head from the raw writer clock prevents DELETE send", async () => {
+	const fixture = await authorityFixture();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const permit = await captured.networkEpoch.consume(
+		await journalIntentConsumption(captured, fixture),
+	);
+	const captureCompletedAt = Date.parse(captured.authority.observedAt);
+	let reads = 0;
+	fixture.setClock(() => {
+		reads += 1;
+		if (reads === 3) unlinkSync(fixture.journalHeadPath);
+		return new Date(captureCompletedAt + reads).toISOString();
+	});
+
+	await assert.rejects(
+		fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		/head|journal|identity|lease|missing/iu,
+	);
+	assert.equal(
+		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
+	);
+});
+
+test("removing the journal head inside fetch prevents confirmed classification", async () => {
+	let fixture;
+	fixture = await authorityFixture({
+		deleteHook: async () => rm(fixture.journalHeadPath),
+	});
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const permit = await captured.networkEpoch.consume(
+		await journalIntentConsumption(captured, fixture),
+	);
+
+	await assert.rejects(
+		fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		/head|journal|identity|lease|missing/iu,
+	);
+	assert.equal(
+		fixture.networkOperations.filter((entry) => entry.startsWith("delete:"))
+			.length,
+		1,
+	);
+});
+
 test("a nested adapter call during DELETE invalidates an outer 204", async () => {
 	let fixture;
 	fixture = await authorityFixture({
@@ -588,37 +640,58 @@ test("rejects a constant-counter bypass and concurrent terminal-read race", asyn
 	await assert.rejects(pendingCapture, /terminal|epoch|failed/iu);
 });
 
-test("a fabricated authority cannot arm DELETE after only terminal reads", async () => {
+test("a full public capture exposes no raw trace, callback, or transition boundary", async () => {
 	const victim = await authorityFixture();
-	const terminal = victim.adapters.authorityEpoch.beginTerminalRead({
-		releaseId: DUPLICATE_DRAFT_IDS[0],
-	});
-	await terminal.github.getRelease({ releaseId: DUPLICATE_DRAFT_IDS[0] });
-	await terminal.github.listReleaseAssets({
-		releaseId: DUPLICATE_DRAFT_IDS[0],
-	});
-	const epoch = terminal.seal();
-	assert.equal(Object.hasOwn(epoch, "armTransition"), false);
+	const captured = await captureConsolidationAuthority(victim.input);
+	const forbidden = new Set([
+		"authorityEpoch",
+		"beginAuthorityCapture",
+		"beginTerminalRead",
+		"bindAuthority",
+		"acceptTransitionBoundary",
+		"armTransition",
+		"armTask6Transition",
+		"trace",
+	]);
+	for (const value of [victim.adapters, captured, captured.networkEpoch]) {
+		for (const key of Reflect.ownKeys(new Proxy(value, {}))) {
+			assert.equal(forbidden.has(key), false);
+		}
+	}
+	await assert.rejects(
+		victim.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit: Object.freeze({}),
+		}),
+		/permit|guard|one-use|valid/iu,
+	);
 	assert.equal(
 		victim.networkOperations.some((entry) => entry.startsWith("delete:")),
 		false,
 	);
 });
 
-test("skipped or reordered broad reads invalidate the exclusive capture", async () => {
+test("caller reads outside capture cannot substitute for the private trace", async () => {
 	const fixture = await authorityFixture();
-	const capture = fixture.adapters.authorityEpoch.beginAuthorityCapture({
-		stage: "pre-delete-1",
-		proposal: fixture.proposal,
-		targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-	});
-	await assert.rejects(
-		capture.github.getRepository(),
-		/order|trace|capture|authority/iu,
+	await fixture.adapters.github.getRepository();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	assert.equal(captured.authority.stage, "pre-delete-1");
+	assert.equal(Object.hasOwn(fixture.adapters, "beginAuthorityCapture"), false);
+	assert.equal(
+		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
 	);
-	await assert.rejects(
+});
+
+test("concurrent high-level captures cannot share one private trace", async () => {
+	const fixture = await authorityFixture();
+	const results = await Promise.allSettled([
 		captureConsolidationAuthority(fixture.input),
-		/capture|adapter|state|authority/iu,
+		captureConsolidationAuthority(fixture.input),
+	]);
+	assert.equal(
+		results.some(({ status }) => status === "rejected"),
+		true,
 	);
 	assert.equal(
 		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
@@ -626,24 +699,7 @@ test("skipped or reordered broad reads invalidate the exclusive capture", async 
 	);
 });
 
-test("concurrent broad reads invalidate the complete capture trace", async () => {
-	const fixture = await authorityFixture();
-	const capture = fixture.adapters.authorityEpoch.beginAuthorityCapture({
-		stage: "pre-delete-1",
-		proposal: fixture.proposal,
-		targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-	});
-	const first = capture.local.readState();
-	const second = capture.local.readState();
-	await assert.rejects(second, /concurrent|order|trace|capture|authority/iu);
-	await assert.rejects(first, /invalid|trace|capture|authority/iu);
-	await assert.rejects(
-		captureConsolidationAuthority(fixture.input),
-		/capture|adapter|state|authority/iu,
-	);
-});
-
-test("raw authority capture rejects a complete Release trace that violates its stage", async (t) => {
+test("safe authority capture rejects a complete Release trace that violates its stage", async (t) => {
 	await t.test(
 		"pre-delete-2 rejects the first target reappearing",
 		async () => {
@@ -745,34 +801,19 @@ test("raw authority capture rejects a complete Release trace that violates its s
 	});
 });
 
-test("attestation trace rejects arbitrary arguments despite an expected-looking result", async () => {
-	let fixture;
-	fixture = await authorityFixture({
-		attestationVerify: async () =>
-			fixture.proposal.payloadProof.attestationVerification,
-	});
-	const capture = await rawCaptureThroughReleaseList(fixture);
-	for (const name of CANONICAL_RELEASE_PACKAGE_ORDER) {
-		await capture.npm.observePackageVersion({
-			name,
-			version: fixture.proposal.candidate.version,
-		});
-	}
-	const first = fixture.remainingReleases[0];
-	const expected = fixture.proposal.releases.find(
-		({ id }) => id === String(first.id),
-	);
-	for (const rawAsset of first.assets) {
-		const asset = expected.assets.find(({ id }) => id === String(rawAsset.id));
-		await capture.github.downloadReleaseAsset({
-			releaseId: String(first.id),
-			assetId: asset.id,
-			maximumBytes: asset.size,
-		});
-	}
+test("caller attestation activity cannot enter the private authority trace", async () => {
+	const fixture = await authorityFixture();
 	await assert.rejects(
-		capture.attestations.verify({ arbitrary: "caller-authored" }),
-		/attestation|argument|trace|proposal|guard/iu,
+		fixture.adapters.attestations.verify({ arbitrary: "caller-authored" }),
+		/attestation|bundle|record|argument|input|verify/iu,
+	);
+	assert.equal(
+		Reflect.ownKeys(fixture.adapters).includes("beginAuthorityCapture"),
+		false,
+	);
+	assert.equal(
+		Reflect.ownKeys(fixture.adapters).includes("authorityEpoch"),
+		false,
 	);
 });
 
@@ -1693,39 +1734,14 @@ test("redacts dependency failures instead of exposing untrusted controls", async
 });
 
 async function assertRawReleaseTraceRejected(fixture) {
-	const capture = await rawCaptureBeforeReleaseList(fixture);
 	await assert.rejects(
-		capture.github.listReleases(),
+		captureConsolidationAuthority(fixture.input),
 		/release|managed|candidate|duplicate|published|trace|authority/iu,
 	);
 	assert.equal(
 		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
 		false,
 	);
-}
-
-async function rawCaptureThroughReleaseList(fixture) {
-	const capture = await rawCaptureBeforeReleaseList(fixture);
-	await capture.github.listReleases();
-	return capture;
-}
-
-async function rawCaptureBeforeReleaseList(fixture) {
-	const capture = fixture.adapters.authorityEpoch.beginAuthorityCapture({
-		stage: fixture.input.stage,
-		proposal: fixture.proposal,
-		targetReleaseId: fixture.input.targetReleaseId,
-	});
-	await capture.local.readState();
-	await capture.github.getRepository();
-	await capture.github.getAuthenticatedUser();
-	await capture.github.getDefaultBranchSha();
-	await capture.github.getWorkflowState();
-	await capture.github.listNonterminalWorkflowRuns(EXACT_WORKFLOW_RUN_QUERY);
-	await capture.github.getAnnotatedTag({
-		name: fixture.proposal.candidate.tag,
-	});
-	return capture;
 }
 
 async function authorityFixture({

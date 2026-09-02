@@ -11,11 +11,15 @@ import { createGitHubReader as defaultCreateGitHubReader } from "./adapters/gith
 import { createHttpGet } from "./adapters/http.mjs";
 import { createNpmReader as defaultCreateNpmReader } from "./adapters/npm.mjs";
 import { createCliAttestationVerifier as defaultCreateCliAttestationVerifier } from "./artifact-store.mjs";
+import { captureConsolidationAuthorityCore } from "./duplicate-draft-consolidation-authority-core.mjs";
 import {
 	assertEvidenceEqualsProposal,
 	captureDirectTargetRead,
 } from "./duplicate-draft-consolidation-evidence.mjs";
-import { readPrivateEnvelope } from "./duplicate-draft-consolidation-files.mjs";
+import {
+	readPrivateEnvelope,
+	writePrivateEnvelope,
+} from "./duplicate-draft-consolidation-files.mjs";
 import {
 	appendJournalEvent,
 	deriveConsolidationState,
@@ -307,12 +311,16 @@ export async function createDuplicateDraftConsolidationAdapters(options) {
 	});
 
 	const adapters = { local, github, npm, attestations, writer };
-	Object.defineProperty(adapters, "authorityEpoch", {
-		value: networkGuard.createAuthorityCapability(rawGithub, adapters),
-		enumerable: false,
-		writable: false,
-		configurable: false,
-	});
+	Object.defineProperty(
+		adapters,
+		"captureConsolidationAuthority",
+		hiddenMethod((input) => {
+			return captureConsolidationAuthorityCore(
+				input,
+				networkGuard.createAuthorityCapability(rawGithub, adapters),
+			);
+		}),
+	);
 	Object.freeze(adapters);
 	return adapters;
 }
@@ -392,6 +400,15 @@ export function createExactDuplicateDeleteEffect(options) {
 			}
 			permitBinding.armed = false;
 			permitBinding.used = true;
+			if (
+				typeof permitBinding.assertActiveLease !== "function" ||
+				typeof permitBinding.verifyPreSend !== "function"
+			) {
+				throw new Error(
+					"Delete permit has no active journal transaction lease",
+				);
+			}
+			permitBinding.assertActiveLease();
 			if (releaseId === survivorId || !approved.has(releaseId)) {
 				throw new TypeError(
 					"Release ID is the survivor or is not an approved duplicate",
@@ -409,6 +426,9 @@ export function createExactDuplicateDeleteEffect(options) {
 					"Delete permit expired at the writer's final pre-send clock",
 				);
 			}
+			permitBinding.assertActiveLease();
+			await permitBinding.verifyPreSend();
+			permitBinding.assertActiveLease();
 			const deadline = deleteDeadline(timeoutMs, callerSignal);
 			let response;
 			try {
@@ -1945,59 +1965,68 @@ function createNetworkGuard({ cwd, now }) {
 			record.used = true;
 			permitBinding.used = true;
 			try {
-				const beforeRead = trustedNow();
-				if (beforeRead > record.authorityExpiresAt) {
-					throw new Error(
-						"Delete permit expired with its absolute npm authority",
-					);
-				}
-				const currentJournal = await readPrivateEnvelope(
-					journalPath,
-					DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
-				);
-				if (
-					!sameAuthenticatedPrivateRead(
-						currentJournal,
-						record.committedJournal,
-						journalPath,
-					)
-				) {
-					throw new Error(
-						"Delete journal identity or bytes changed after permit issuance",
-					);
-				}
 				const journalHeadPath = `${journalPath.slice(0, -"journal.json".length)}journal.head.json`;
-				const currentHead = await readPrivateEnvelope(
-					journalHeadPath,
-					16 * 1024,
-				);
-				if (
-					!sameAuthenticatedPrivateRead(
-						currentHead,
-						record.committedHead,
-						journalHeadPath,
-					)
-				) {
-					throw new Error(
-						"Delete journal head identity or bytes changed after permit issuance",
-					);
-				}
-				const immediatelyBeforeSend = trustedNow();
-				if (immediatelyBeforeSend > record.authorityExpiresAt) {
-					throw new Error(
-						"Delete permit expired with its absolute npm authority",
-					);
-				}
-			} catch (error) {
-				state = "spent";
-				throw error;
-			}
-			permitBinding.armed = true;
-			permitBinding.used = false;
-			state = "deleting";
-			try {
-				return await context.run(record.session.deleteToken, () =>
-					runRequest("approved DELETE", operation),
+				return await writePrivateEnvelope.withExclusiveTransaction(
+					journalPath,
+					async (assertActiveLease) => {
+						const verifyCommittedState = async () => {
+							assertActiveLease();
+							const currentJournal = await readPrivateEnvelope(
+								journalPath,
+								DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+							);
+							if (
+								!sameAuthenticatedPrivateRead(
+									currentJournal,
+									record.committedJournal,
+									journalPath,
+								)
+							) {
+								throw new Error(
+									"Delete journal identity or bytes changed after permit issuance",
+								);
+							}
+							const currentHead = await readPrivateEnvelope(
+								journalHeadPath,
+								16 * 1024,
+							);
+							if (
+								!sameAuthenticatedPrivateRead(
+									currentHead,
+									record.committedHead,
+									journalHeadPath,
+								)
+							) {
+								throw new Error(
+									"Delete journal head identity or bytes changed after permit issuance",
+								);
+							}
+							assertActiveLease();
+						};
+						const beforeRead = trustedNow();
+						if (beforeRead > record.authorityExpiresAt) {
+							throw new Error(
+								"Delete permit expired with its absolute npm authority",
+							);
+						}
+						await verifyCommittedState();
+						const immediatelyBeforeSend = trustedNow();
+						if (immediatelyBeforeSend > record.authorityExpiresAt) {
+							throw new Error(
+								"Delete permit expired with its absolute npm authority",
+							);
+						}
+						permitBinding.assertActiveLease = assertActiveLease;
+						permitBinding.verifyPreSend = verifyCommittedState;
+						permitBinding.armed = true;
+						permitBinding.used = false;
+						state = "deleting";
+						const outcome = await context.run(record.session.deleteToken, () =>
+							runRequest("approved DELETE", operation),
+						);
+						await verifyCommittedState();
+						return outcome;
+					},
 				);
 			} finally {
 				state = "spent";
