@@ -189,10 +189,9 @@ test("production reads bind repository, workflow, immutable setting, annotated t
         total_count: 1,
         jobs: [
           job(11, "publish-npm", {
-            status: "queued",
-            conclusion: null,
-            started_at: null,
-            completed_at: null,
+            conclusion: "skipped",
+            started_at: "2026-08-27T20:27:31Z",
+            completed_at: "2026-08-27T20:27:30Z",
           }),
         ],
       })
@@ -429,18 +428,16 @@ test("candidate jobs bind the run and exhaust every attempt through the current 
   const exactJobs = [
     job(21, "prepare"),
     job(22, "publish-npm", {
-      status: "queued",
-      conclusion: null,
-      started_at: null,
-      completed_at: null,
+      conclusion: "skipped",
+      started_at: "2026-08-27T20:27:31Z",
+      completed_at: "2026-08-27T20:27:30Z",
     }),
     job(23, "prepare", { run_attempt: 2 }),
     job(24, "publish-npm", {
       run_attempt: 2,
-      status: "queued",
-      conclusion: null,
-      started_at: null,
-      completed_at: null,
+      conclusion: "skipped",
+      started_at: "2026-08-27T20:27:31Z",
+      completed_at: "2026-08-27T20:27:31Z",
     }),
   ]
   const exactReader = createDuplicateDraftRecoveryReader({
@@ -490,6 +487,41 @@ test("candidate jobs bind the run and exhaust every attempt through the current 
       reader.readCandidatePublishJobs(10, 2),
       (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
     )
+  }
+})
+
+test("skipped publish jobs preserve production scheduler timestamps without execution authority", async () => {
+  for (const [startedAt, completedAt] of [
+    ["2026-08-27T20:27:31Z", "2026-08-27T20:27:30Z"],
+    ["2026-08-27T20:27:31Z", "2026-08-27T20:27:31Z"],
+  ]) {
+    const reader = createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: async () =>
+        jsonResponse({
+          total_count: 1,
+          jobs: [
+            job(11, "publish-npm", {
+              conclusion: "skipped",
+              started_at: startedAt,
+              completed_at: completedAt,
+            }),
+          ],
+        }),
+    })
+    assert.deepEqual(await reader.readCandidatePublishJobs(10, 1), [
+      {
+        id: 11,
+        runId: 10,
+        runAttempt: 1,
+        name: "publish-npm",
+        status: "completed",
+        conclusion: "skipped",
+        startedAt,
+        completedAt,
+      },
+    ])
   }
 })
 
@@ -826,7 +858,10 @@ test("terminal pagination rejects a later last page and accepts the current last
     fetchImpl: async (url) =>
       url.endsWith("page=2")
         ? jsonResponse([releaseRow(101)], 200, {
-            link: `<${BASE}/releases?per_page=100&page=2>; rel="last"`,
+            link: [
+              `<${BASE}/releases?per_page=100&page=1>; rel="prev"`,
+              `<${BASE}/releases?per_page=100&page=1>; rel="first"`,
+            ].join(", "),
           })
         : jsonResponse(
             Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
@@ -848,7 +883,7 @@ test("pagination requires a stable advertised last page across the operation", a
       firstLast: 3,
       terminalLink: `<${BASE}/releases?per_page=100&page=2>; rel="last"`,
     },
-    { firstLast: 2, terminalLink: null },
+    { firstLast: 3, terminalLink: null },
   ]) {
     const reader = createDuplicateDraftRecoveryReader({
       root: "/workspace",

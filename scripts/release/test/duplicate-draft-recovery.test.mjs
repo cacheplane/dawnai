@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
-
 import {
   canonicalDuplicateDraftEvidence,
   canonicalRecoveryNotice,
@@ -14,6 +13,10 @@ import {
   recoveryReceiptAssetName,
   verifyDuplicateDraftEvidence,
 } from "../duplicate-draft-recovery.mjs"
+import {
+  createDuplicateDraftRecoveryReader,
+  DuplicateDraftRecoveryReadError,
+} from "../duplicate-draft-recovery-adapters.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
 import { canonicalReleaseBody, parseReleaseMarker } from "../metadata.mjs"
 
@@ -28,6 +31,7 @@ const POLICY = {
   ],
 }
 const CANONICAL_OPAQUE_TAG = "untagged-be0ff4bee4ba43b521a9"
+const GITHUB_BASE = "https://api.github.com/repos/cacheplane/dawnai"
 
 const ORIGINAL_ASSETS = Array.from({ length: 45 }, (_, index) => ({
   id: 101 + index,
@@ -676,10 +680,10 @@ function captureReader({
             runId,
             runAttempt: index + 1,
             name: "publish-npm",
-            status: "queued",
-            conclusion: null,
-            startedAt: null,
-            completedAt: null,
+            status: "completed",
+            conclusion: "skipped",
+            startedAt: "2026-08-27T20:27:31Z",
+            completedAt: "2026-08-27T20:27:30Z",
           }))
         : typeof jobs === "function"
           ? jobs(runId, runAttempt)
@@ -753,6 +757,61 @@ test("captures canonical frozen evidence through only the read boundary", async 
   }
 })
 
+test("adapter canonical and duplicate snapshots compose directly into capture", async () => {
+  const tags = new Map([
+    [POLICY.canonicalReleaseId, CANONICAL_OPAQUE_TAG],
+    ...POLICY.duplicates.map(({ releaseId, tagName }) => [releaseId, tagName]),
+  ])
+  const adapter = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${MERGE_COMMIT_SHA}\n`,
+    fetchImpl: async (url) => {
+      const match = new RegExp(
+        `^${GITHUB_BASE}/releases/(\\d+)(/assets\\?per_page=100)?$`,
+        "u",
+      ).exec(url)
+      assert.ok(match, `unexpected URL ${url}`)
+      const releaseId = Number(match[1])
+      assert.equal(tags.has(releaseId), true)
+      if (match[2] !== undefined) {
+        return jsonResponse(
+          ORIGINAL_ASSETS.map((asset, index) => ({
+            id: releaseId * 100 + index,
+            name: asset.name,
+            digest: `sha256:${asset.sha256}`,
+            size: 1,
+          })),
+        )
+      }
+      return jsonResponse({
+        id: releaseId,
+        tag_name: tags.get(releaseId),
+        body: ORIGINAL_BODY,
+        draft: true,
+        prerelease: false,
+        immutable: false,
+        target_commitish: "main",
+      })
+    },
+  })
+  const { reader: fixtureReader } = captureReader()
+  const reader = Object.freeze({
+    ...fixtureReader,
+    readReleaseSnapshot: adapter.readReleaseSnapshot,
+  })
+
+  const evidence = await captureDuplicateDraftRecoveryEvidence({
+    reviewedCommit: MERGE_COMMIT_SHA,
+    reader,
+    now: () => Date.parse(RECOVERY_CAPTURED_AT),
+  })
+  assert.equal(Object.hasOwn(evidence.releases.canonical, "evidenceAssets"), false)
+  assert.deepEqual(
+    evidence.releases.duplicates.map(({ evidenceAssets }) => evidenceAssets),
+    [[], []],
+  )
+})
+
 test("capture rejects a writer-bearing dependency before any read", async () => {
   const { reader: exactReader, calls } = captureReader()
   const reader = Object.freeze({ ...exactReader, writer: Object.freeze({}) })
@@ -803,6 +862,67 @@ test("capture rejects hidden, symbolic, accessor, inherited, and unfrozen capabi
   }
 })
 
+test("capture preserves only allowlisted adapter diagnostics without remote details", async () => {
+  const remoteDetail = "secret-token https://evil.example/remote-body"
+  for (const { method, readCode, captureCode } of [
+    {
+      method: "readReviewedMergeAuthority",
+      readCode: "PAGINATION_DRIFT",
+      captureCode: "READ_PAGINATION_DRIFT",
+    },
+    {
+      method: "readWorkflowState",
+      readCode: "RELEASE_WORKFLOW_CONFLICT",
+      captureCode: "READ_RELEASE_WORKFLOW_CONFLICT",
+    },
+    {
+      method: "readReleaseRuns",
+      readCode: "RELEASE_RUNS_UNAVAILABLE",
+      captureCode: "READ_RELEASE_RUNS_UNAVAILABLE",
+    },
+  ]) {
+    const { reader: baseReader } = captureReader()
+    const reader = Object.freeze({
+      ...baseReader,
+      [method]: async () => {
+        throw new DuplicateDraftRecoveryReadError(readCode, remoteDetail)
+      },
+    })
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => {
+        assert.equal(error.code, captureCode)
+        assert.equal(error.message, `Recovery capture read ${method} failed`)
+        assert.equal(JSON.stringify(error).includes(remoteDetail), false)
+        assert.equal(error.message.includes("secret-token"), false)
+        assert.equal(error.message.includes("evil.example"), false)
+        return true
+      },
+    )
+  }
+
+  const { reader: baseReader } = captureReader()
+  const reader = Object.freeze({
+    ...baseReader,
+    readWorkflowState: async () => {
+      throw new DuplicateDraftRecoveryReadError("UNREVIEWED_REMOTE_CODE", remoteDetail)
+    },
+  })
+  await assert.rejects(
+    captureDuplicateDraftRecoveryEvidence({
+      reviewedCommit: MERGE_COMMIT_SHA,
+      reader,
+      now: () => Date.parse(RECOVERY_CAPTURED_AT),
+    }),
+    (error) =>
+      error.code === "WORKFLOW_STATE_UNAVAILABLE" && !error.message.includes("secret-token"),
+  )
+})
+
 test("capture checks jobs for every observed candidate run and rejects started publish-npm", async () => {
   const candidateRuns = [
     {
@@ -837,10 +957,10 @@ test("capture checks jobs for every observed candidate run and rejects started p
           runId,
           runAttempt,
           name: "publish-npm",
-          status: startedEarlierAttempt ? "completed" : "queued",
-          conclusion: startedEarlierAttempt ? "failure" : null,
-          startedAt: startedEarlierAttempt ? RECOVERY_CAPTURED_AT : null,
-          completedAt: startedEarlierAttempt ? RECOVERY_CAPTURED_AT : null,
+          status: "completed",
+          conclusion: startedEarlierAttempt ? "failure" : "skipped",
+          startedAt: "2026-08-27T20:27:31Z",
+          completedAt: startedEarlierAttempt ? RECOVERY_CAPTURED_AT : "2026-08-27T20:27:30Z",
         }
       }),
   })
@@ -884,6 +1004,68 @@ test("capture treats completed publish jobs without start timestamps as malforme
     }),
     (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
   )
+})
+
+test("capture accepts skipped scheduler timestamps and blocks publishers that may have executed", async () => {
+  for (const [startedAt, completedAt] of [
+    ["2026-08-27T20:27:31Z", "2026-08-27T20:27:30Z"],
+    ["2026-08-27T20:27:31Z", "2026-08-27T20:27:31Z"],
+  ]) {
+    const { reader } = captureReader({
+      jobs: [
+        {
+          id: 701,
+          runId: 700,
+          runAttempt: 1,
+          name: "publish-npm",
+          status: "completed",
+          conclusion: "skipped",
+          startedAt,
+          completedAt,
+        },
+      ],
+    })
+    await captureDuplicateDraftRecoveryEvidence({
+      reviewedCommit: MERGE_COMMIT_SHA,
+      reader,
+      now: () => Date.parse(RECOVERY_CAPTURED_AT),
+    })
+  }
+
+  for (const job of [
+    {
+      status: "in_progress",
+      conclusion: null,
+      startedAt: RECOVERY_CAPTURED_AT,
+      completedAt: null,
+    },
+    ...["cancelled", "success", "failure"].map((conclusion) => ({
+      status: "completed",
+      conclusion,
+      startedAt: RECOVERY_CAPTURED_AT,
+      completedAt: RECOVERY_CAPTURED_AT,
+    })),
+  ]) {
+    const { reader } = captureReader({
+      jobs: [
+        {
+          id: 701,
+          runId: 700,
+          runAttempt: 1,
+          name: "publish-npm",
+          ...job,
+        },
+      ],
+    })
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => error.code === "CANDIDATE_PUBLISH_JOB_STARTED",
+    )
+  }
 })
 
 test("capture requires calendar-valid run and job timestamps while accepting canonical boundaries", async () => {
@@ -957,10 +1139,10 @@ test("capture requires calendar-valid run and job timestamps while accepting can
         runId: 700,
         runAttempt: 1,
         name: "publish-npm",
-        status: "queued",
-        conclusion: null,
-        startedAt: null,
-        completedAt: null,
+        status: "completed",
+        conclusion: "skipped",
+        startedAt: "2026-08-27T20:27:31Z",
+        completedAt: "2026-08-27T20:27:30Z",
       },
     ],
   })
@@ -990,10 +1172,10 @@ test("capture requires exact run identity, attempt coverage, and one publisher p
     runId: 800,
     runAttempt: 1,
     name: "publish-npm",
-    status: "queued",
-    conclusion: null,
-    startedAt: null,
-    completedAt: null,
+    status: "completed",
+    conclusion: "skipped",
+    startedAt: "2026-08-27T20:27:31Z",
+    completedAt: "2026-08-27T20:27:30Z",
   }
   const attemptTwo = { ...attemptOne, id: 802, runAttempt: 2 }
   for (const jobs of [
@@ -1418,4 +1600,11 @@ function reverseObjectOrder(value) {
     )
   }
   return value
+}
+
+function jsonResponse(value, status = 200, headers = {}) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json", ...headers },
+  })
 }

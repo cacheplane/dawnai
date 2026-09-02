@@ -81,6 +81,64 @@ const CAPTURE_READER_METHODS = [
   "readReleaseSnapshot",
   "listCandidateReleases",
 ]
+const RECOVERY_READ_ERROR_CODES = new Set([
+  "CANDIDATE_JOBS_MALFORMED",
+  "CANDIDATE_JOBS_OVER_LIMIT",
+  "CANDIDATE_JOBS_UNAVAILABLE",
+  "CANDIDATE_TAG_CONFLICT",
+  "CANDIDATE_TAG_MALFORMED",
+  "CANDIDATE_TAG_UNAVAILABLE",
+  "IMMUTABLE_RELEASES_DISABLED",
+  "IMMUTABLE_RELEASES_MALFORMED",
+  "IMMUTABLE_RELEASES_UNAVAILABLE",
+  "LOCAL_HEAD_UNAVAILABLE",
+  "NPM_VERSION_NOT_ABSENT",
+  "PAGINATION_DRIFT",
+  "RECOVERY_ASSET_BYTES_CONFLICT",
+  "RECOVERY_ASSET_CREDENTIAL_CONFLICT",
+  "RECOVERY_ASSET_UNAVAILABLE",
+  "RECOVERY_ASSET_UNEXPECTED",
+  "RECOVERY_BODY_ARCHIVE_CONFLICT",
+  "RELEASE_ASSETS_MALFORMED",
+  "RELEASE_ASSETS_OVER_LIMIT",
+  "RELEASE_ASSETS_UNAVAILABLE",
+  "RELEASE_LIST_MALFORMED",
+  "RELEASE_LIST_OVER_LIMIT",
+  "RELEASE_LIST_UNAVAILABLE",
+  "RELEASE_MALFORMED",
+  "RELEASE_RUNS_MALFORMED",
+  "RELEASE_RUNS_OVER_LIMIT",
+  "RELEASE_RUNS_UNAVAILABLE",
+  "RELEASE_UNAVAILABLE",
+  "RELEASE_WORKFLOW_CONFLICT",
+  "RELEASE_WORKFLOW_MALFORMED",
+  "RELEASE_WORKFLOW_UNAVAILABLE",
+  "REMOTE_MAIN_MALFORMED",
+  "REMOTE_MAIN_UNAVAILABLE",
+  "REPOSITORY_IDENTITY_CONFLICT",
+  "REPOSITORY_MALFORMED",
+  "REPOSITORY_UNAVAILABLE",
+  "REVIEWED_ASSOCIATED_PULL_REQUEST_MALFORMED",
+  "REVIEWED_ASSOCIATED_PULL_REQUEST_UNAVAILABLE",
+  "REVIEWED_CI_RUNS_MALFORMED",
+  "REVIEWED_CI_RUNS_OVER_LIMIT",
+  "REVIEWED_CI_RUNS_UNAVAILABLE",
+  "REVIEWED_COMMIT_MALFORMED",
+  "REVIEWED_COMMIT_NOT_LOCAL_HEAD",
+  "REVIEWED_COMMIT_NOT_REMOTE_MAIN",
+  "REVIEWED_HEAD_COMMIT_MALFORMED",
+  "REVIEWED_HEAD_COMMIT_UNAVAILABLE",
+  "REVIEWED_MERGE_COMMIT_MALFORMED",
+  "REVIEWED_MERGE_COMMIT_UNAVAILABLE",
+  "REVIEWED_PULL_REQUEST_AMBIGUOUS",
+  "REVIEWED_PULL_REQUEST_CONFLICT",
+  "REVIEWED_TREE_MISMATCH",
+  "REVIEWED_VALIDATE_CHECKS_MALFORMED",
+  "REVIEWED_VALIDATE_CHECKS_OVER_LIMIT",
+  "REVIEWED_VALIDATE_CHECKS_UNAVAILABLE",
+  "REVIEWED_VALIDATE_MALFORMED",
+  "REVIEWED_VALIDATE_NOT_SUCCESSFUL",
+])
 
 export const DUPLICATE_DRAFT_RECOVERY_POLICY = deepFreeze({
   repository: "cacheplane/dawnai",
@@ -960,7 +1018,38 @@ async function captureRead(reader, method, args, code) {
     return snapshotJson(await reader[method](...args))
   } catch (error) {
     if (error instanceof DuplicateDraftRecoveryCaptureError) throw error
+    const readCode = knownRecoveryReadCode(error)
+    if (readCode !== null) {
+      captureFail(`READ_${readCode}`, `Recovery capture read ${method} failed`)
+    }
     captureFail(code, `Recovery capture read ${method} failed`)
+  }
+}
+
+function knownRecoveryReadCode(error) {
+  try {
+    if (!(error instanceof Error)) return null
+    const prototype = Object.getPrototypeOf(error)
+    const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor")
+    const name = Object.getOwnPropertyDescriptor(error, "name")
+    const code = Object.getOwnPropertyDescriptor(error, "code")
+    if (
+      constructorDescriptor === undefined ||
+      !("value" in constructorDescriptor) ||
+      constructorDescriptor.value?.name !== "DuplicateDraftRecoveryReadError" ||
+      name === undefined ||
+      !("value" in name) ||
+      name.value !== "DuplicateDraftRecoveryReadError" ||
+      code === undefined ||
+      !("value" in code) ||
+      typeof code.value !== "string" ||
+      !RECOVERY_READ_ERROR_CODES.has(code.value)
+    ) {
+      return null
+    }
+    return code.value
+  } catch {
+    return null
   }
 }
 
@@ -1061,9 +1150,7 @@ function assertNoStartedPublishJob(value, expectedRunId, currentAttempt) {
       !coherentCaptureTerminalState(job.status, job.conclusion) ||
       (job.status === "completed"
         ? job.startedAt === null || job.completedAt === null
-        : job.completedAt !== null ||
-          (job.status === "in_progress") !== (job.startedAt !== null)) ||
-      !orderedCaptureTimestamps(job.startedAt, job.completedAt)
+        : job.completedAt !== null || (job.status === "in_progress") !== (job.startedAt !== null))
     ) {
       captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
@@ -1086,7 +1173,15 @@ function assertNoStartedPublishJob(value, expectedRunId, currentAttempt) {
       )
     }
   }
-  if (publishJobs.some(({ startedAt }) => startedAt !== null)) {
+  if (
+    publishJobs.some(
+      ({ status, conclusion }) =>
+        !(
+          (status === "queued" && conclusion === null) ||
+          (status === "completed" && conclusion === "skipped")
+        ),
+    )
+  ) {
     captureFail("CANDIDATE_PUBLISH_JOB_STARTED", "A candidate publish-npm job has already started")
   }
 }

@@ -535,8 +535,7 @@ function normalizeCandidateJobs(value, expectedRunId, currentAttempt) {
       !JOB_STATUSES.has(job.status) ||
       !isNullableTimestamp(job.started_at) ||
       !isNullableTimestamp(job.completed_at) ||
-      !coherentJobState(job) ||
-      !orderedTimestamps(job.started_at, job.started_at, job.completed_at)
+      !coherentJobState(job)
     ) {
       fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
@@ -739,7 +738,7 @@ async function normalizeReleaseSnapshot({
     body: raw.body,
     marker,
     assets,
-    evidenceAssets,
+    ...(releaseId === DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ? {} : { evidenceAssets }),
   })
 }
 
@@ -862,8 +861,9 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
     const observedLastPage =
       last === undefined ? null : (normalizePaginationPage(last, path)?.page ?? null)
     if (
-      (advertisedLastPage !== null && observedLastPage === null) ||
-      (advertisedLastPage !== null && observedLastPage !== advertisedLastPage)
+      advertisedLastPage !== null &&
+      observedLastPage !== null &&
+      observedLastPage !== advertisedLastPage
     ) {
       fail("PAGINATION_DRIFT", "Recovery read pagination last page changed")
     }
