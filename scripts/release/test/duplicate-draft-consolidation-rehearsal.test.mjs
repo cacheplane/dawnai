@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { fileURLToPath } from "node:url"
 import {
   performDuplicateDraftConsolidation,
   performOneDuplicateDeletion,
@@ -41,6 +43,9 @@ const INSPECT_COMMAND = Object.freeze([
   PROPOSAL,
 ])
 const VERIFY_COMMAND = Object.freeze(["verify", "--receipt", RECEIPT])
+const PROCESS_LOSS_CHILD = fileURLToPath(
+  new URL("./support/duplicate-draft-consolidation-process-loss-child.mjs", import.meta.url),
+)
 const PROCESS_LOSS_CASES = Object.freeze([
   Object.freeze({ name: "clean completion", fault: null, expectedIntents: 2 }),
   Object.freeze({
@@ -252,6 +257,158 @@ test("full inspect, perform, and verify rehearsal survives every approved proces
     })
   }
 })
+
+test("a fresh process recovers the durable lock and intent after an actual SIGKILL", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("SIGKILL is not supported on Windows")
+    return
+  }
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "dawn-consolidation-kill-")))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const statePath = path.join(root, "fake-service.json")
+  const readyPath = path.join(root, "delete-entered")
+
+  assert.equal((await runFreshChild("init", root, statePath, readyPath)).code, 0)
+  const inspect = await runFreshChild("inspect", root, statePath, readyPath)
+  assert.equal(inspect.code, 0, inspect.stderr)
+  const proposal = parseConsolidationEnvelope(
+    "proposed",
+    await readPrivateEnvelope(
+      path.join(root, PROPOSAL),
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes,
+    ),
+  )
+
+  const state = JSON.parse(await readFile(statePath, "utf8"))
+  state.armBeforeDelete = true
+  await writeFile(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 })
+  const killed = startFreshChild("perform", root, statePath, readyPath)
+  await Promise.race([
+    waitForPath(readyPath, 10_000),
+    killed.result.then((result) => {
+      throw new Error(`Child exited before the durable boundary: ${result.stderr}`)
+    }),
+  ])
+  killed.child.kill("SIGKILL")
+  const killedResult = await killed.result
+  assert.equal(killedResult.code, null)
+  assert.equal(killedResult.signal, "SIGKILL")
+
+  const journalBeforeResume = parseConsolidationEnvelope(
+    "journal",
+    await readPrivateEnvelope(
+      path.join(root, JOURNAL),
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+    ),
+  )
+  assert.equal(
+    journalBeforeResume.record.events.at(-1).event.type,
+    "delete-intent",
+    "the killed process must have durably recorded intent while holding the lock",
+  )
+  const lockName = ".duplicate-draft-consolidation.journal.json.lock"
+  assert.ok((await readdir(path.join(root, ".dawn", "release"))).includes(lockName))
+
+  const resumable = JSON.parse(await readFile(statePath, "utf8"))
+  resumable.armBeforeDelete = false
+  await writeFile(statePath, `${JSON.stringify(resumable)}\n`, { mode: 0o600 })
+  const resumed = await runFreshChild("resume", root, statePath, readyPath)
+  const resumeJournal = parseConsolidationEnvelope(
+    "journal",
+    await readPrivateEnvelope(
+      path.join(root, JOURNAL),
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+    ),
+  )
+  assert.equal(
+    resumed.code,
+    0,
+    `${resumed.stderr}\nfiles=${(await readdir(path.join(root, ".dawn", "release"))).join(",")} events=${resumeJournal.record.events.map(({ event }) => `${event.type}:${event.payload.targetReleaseId ?? "-"}`).join(",")}`,
+  )
+  const service = JSON.parse(await readFile(statePath, "utf8"))
+  assert.deepEqual(service.deleteEffects, [...DUPLICATE_DRAFT_IDS])
+  assert.deepEqual(service.deleted, [...DUPLICATE_DRAFT_IDS])
+
+  const receipt = parseConsolidationEnvelope(
+    "final",
+    await readTrackedReceipt(
+      path.join(root, RECEIPT),
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes,
+    ),
+  )
+  assertEvidenceEqualsProposal(receipt.record.finalSurvivor, proposal.record.releases[0])
+  assert.equal(receipt.record.proposedEnvelope.recordSha256, proposal.recordSha256)
+  await assertJournalRecovery(root, receipt, 3)
+  assertStableAuthority(receipt, proposal)
+  const releaseDirectory = await readdir(path.join(root, ".dawn", "release"))
+  assert.equal(releaseDirectory.includes(lockName), false)
+  assert.ok(
+    releaseDirectory.some(
+      (name) => name.startsWith(`${lockName}.`) && name.endsWith(".quarantine"),
+    ),
+  )
+
+  const verified = await runFreshChild("verify", root, statePath, readyPath)
+  assert.equal(verified.code, 0, verified.stderr)
+  assert.deepEqual(JSON.parse(verified.stdout), {
+    status: "verified",
+    survivor: DUPLICATE_DRAFT_SURVIVOR_ID,
+    deleted: [...DUPLICATE_DRAFT_IDS],
+    receipt: RECEIPT,
+    receiptSha256: receipt.recordSha256,
+    historicalParity:
+      "Historical duplicate payload parity is supported by embedded pre-delete evidence plus the currently reverified survivor; deleted bytes were not independently re-downloaded.",
+  })
+  assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")).deleteEffects, [
+    ...DUPLICATE_DRAFT_IDS,
+  ])
+})
+
+function startFreshChild(mode, root, statePath, readyPath) {
+  const child = spawn(process.execPath, [PROCESS_LOSS_CHILD, mode, root, statePath, readyPath], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    stdout += chunk
+  })
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    stderr += chunk
+  })
+  return {
+    child,
+    result: new Promise((resolve, reject) => {
+      child.once("error", reject)
+      child.once("exit", (code, signal) => resolve({ code, signal, stderr, stdout }))
+    }),
+  }
+}
+
+async function runFreshChild(mode, root, statePath, readyPath) {
+  const running = startFreshChild(mode, root, statePath, readyPath)
+  const timeout = setTimeout(() => running.child.kill("SIGKILL"), 20_000)
+  try {
+    return await running.result
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function waitForPath(target, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      await stat(target)
+      return
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  throw new Error("Timed out waiting for the child process to reach the durable boundary")
+}
 
 async function createRehearsal(t) {
   const root = await realpath(

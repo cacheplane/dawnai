@@ -126,7 +126,7 @@ test("final release ownership is switched atomically and legacy owners are absen
 test("duplicate-draft consolidation stays isolated from every workflow and preserves release pins", async () => {
   const sources = await readWorkflowSourcesFromRoot(ROOT)
   assert.ok(Object.keys(sources).length > FINAL_WORKFLOW_FILES.length)
-  assertNoDuplicateDraftWorkflowMutation(sources)
+  await assertNoDuplicateDraftWorkflowMutationFromRoot(ROOT)
 
   const pinBytes = await readFile(SCRIPT_PIN_PATH)
   assert.equal(createHash("sha256").update(pinBytes).digest("hex"), STARTING_SCRIPT_PIN_SHA256)
@@ -273,21 +273,6 @@ repos/\${{ github.repository }}/releases/379982100`,
       ),
     ],
     [
-      "matrix exclude",
-      matrixWorkflow(
-        {
-          method: ["GET"],
-          exclude: [
-            {
-              method: "DELETE",
-              endpoint: "/repos/cacheplane/dawnai/releases/379982100",
-            },
-          ],
-        },
-        `curl --request "\${{ matrix.method }}" "\${{ matrix.endpoint }}"`,
-      ),
-    ],
-    [
       "generic matrix axes",
       matrixWorkflow(
         {
@@ -348,6 +333,40 @@ repos/\${{ github.repository }}/releases/379982100`,
         `gh api --method "\${{ matrix.a }}" "\${{ matrix.b }}"`,
       ),
     ],
+    ["gh release delete", runWorkflow("gh release delete opaque-tag --yes")],
+    [
+      "curl GitHub API shell variables",
+      runWorkflow(
+        `curl -X DELETE "\${GITHUB_API_URL}/repos/\${GITHUB_REPOSITORY}/releases/\${RELEASE_ID}"`,
+      ),
+    ],
+    [
+      "Octokit bracket deleteRelease call",
+      runWorkflow(`await github?.rest?.repos?.["deleteRelease"]?.({ release_id })`),
+    ],
+    [
+      "workflow dispatch input defaults",
+      inputDefaultWorkflow(
+        {
+          method: "DELETE",
+          endpoint: "/repos/{owner}/{repo}/releases/{release_id}",
+        },
+        `curl --request "\${{ inputs.method }}" "\${{ inputs.endpoint }}"`,
+      ),
+    ],
+    [
+      "generic environment indirection",
+      runWorkflow('curl --request "$A" "$B"', "|", {
+        A: "DELETE",
+        B: "/repos/cacheplane/dawnai/releases/379982100",
+      }),
+    ],
+    [
+      "generated method and endpoint expressions",
+      runWorkflow(
+        `gh api --method "\${{ fromJSON(inputs.config).verb }}" "\${{ fromJSON(inputs.config).route }}"`,
+      ),
+    ],
   ]
 
   for (const [name, source] of unsafe) {
@@ -385,7 +404,9 @@ jobs:
     `gh api --method "\${{ matrix.method }}" "\${{ matrix.endpoint }}"`,
   )
   assert.doesNotThrow(() =>
-    assertNoDuplicateDraftWorkflowMutation({ "unrelated-matrix.yml": unrelatedMatrix }),
+    assertNoDuplicateDraftWorkflowMutation({
+      "unrelated-matrix.yml": unrelatedMatrix,
+    }),
   )
 
   const unusedDangerousMatrix = matrixWorkflow(
@@ -398,7 +419,9 @@ jobs:
     `gh api --method "\${{ matrix.safeMethod }}" "\${{ matrix.safeEndpoint }}"`,
   )
   assert.doesNotThrow(() =>
-    assertNoDuplicateDraftWorkflowMutation({ "unused-matrix.yml": unusedDangerousMatrix }),
+    assertNoDuplicateDraftWorkflowMutation({
+      "unused-matrix.yml": unusedDangerousMatrix,
+    }),
   )
 
   const separateJobs = `name: separate jobs
@@ -418,7 +441,9 @@ jobs:
       - run: echo /repos/cacheplane/dawnai/releases/379982100
 `
   assert.doesNotThrow(() =>
-    assertNoDuplicateDraftWorkflowMutation({ "separate-jobs.yml": separateJobs }),
+    assertNoDuplicateDraftWorkflowMutation({
+      "separate-jobs.yml": separateJobs,
+    }),
   )
 
   const separateMatrixSteps = matrixWorkflow(
@@ -429,7 +454,9 @@ jobs:
     [`echo "\${{ matrix.a }}"`, `echo "\${{ matrix.b }}"`],
   )
   assert.doesNotThrow(() =>
-    assertNoDuplicateDraftWorkflowMutation({ "separate-matrix-steps.yml": separateMatrixSteps }),
+    assertNoDuplicateDraftWorkflowMutation({
+      "separate-matrix-steps.yml": separateMatrixSteps,
+    }),
   )
 
   const coherentUnknownMatrix = dynamicMatrixWorkflow([
@@ -441,6 +468,122 @@ jobs:
       "coherent-unknown-matrix.yml": coherentUnknownMatrix,
     }),
   )
+
+  const excludedDeleteRow = matrixWorkflow(
+    {
+      a: ["GET", "DELETE"],
+      b: ["/repos/cacheplane/dawnai/releases/379982100"],
+      exclude: [{ a: "DELETE" }],
+    },
+    `curl --request "\${{ matrix.a }}" "\${{ matrix.b }}"`,
+  )
+  assert.doesNotThrow(() =>
+    assertNoDuplicateDraftWorkflowMutation({
+      "excluded-delete-row.yml": excludedDeleteRow,
+    }),
+  )
+
+  const nonComposingInclude = matrixWorkflow(
+    {
+      a: ["GET"],
+      b: ["/repos/cacheplane/dawnai/releases/379982100"],
+      include: [{ a: "DELETE", c: "https://example.invalid/not-a-release" }],
+    },
+    `curl --request "\${{ matrix.a }}" "\${{ matrix.b }}\${{ matrix.c }}"`,
+  )
+  assert.doesNotThrow(() =>
+    assertNoDuplicateDraftWorkflowMutation({
+      "non-composing-include.yml": nonComposingInclude,
+    }),
+  )
+})
+
+test("workflow isolation follows every repository-local executable transitively", async (t) => {
+  const cases = [
+    {
+      name: "package script wrapper",
+      workflow: "pnpm run hidden",
+      packageScripts: { hidden: "bash scripts/hidden.sh" },
+      files: { "scripts/hidden.sh": "gh release delete opaque-tag --yes\n" },
+    },
+    {
+      name: "local composite action",
+      uses: "./.github/actions/hidden",
+      files: {
+        ".github/actions/hidden/action.yml":
+          'runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: curl -X DELETE "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"\n',
+      },
+    },
+    {
+      name: "local JavaScript action entrypoint",
+      uses: "./.github/actions/javascript",
+      files: {
+        ".github/actions/javascript/action.yml": "runs:\n  using: node24\n  main: index.mjs\n",
+        ".github/actions/javascript/index.mjs":
+          'await github.rest.repos["deleteRelease"]({ release_id: 1 })\n',
+      },
+    },
+    {
+      name: "local reusable workflow",
+      jobUses: "./.github/workflows/reusable.yml",
+      files: {
+        ".github/workflows/reusable.yml":
+          "on:\n  workflow_call: {}\njobs:\n  hidden:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh release delete opaque-tag --yes\n",
+      },
+    },
+    {
+      name: "shell wrapper chain",
+      workflow: "bash scripts/first.sh",
+      files: {
+        "scripts/first.sh": "bash scripts/second.sh\n",
+        "scripts/second.sh":
+          "curl --request DELETE https://api.github.com/repos/cacheplane/dawnai/releases/379982100\n",
+      },
+    },
+  ]
+  for (const fixture of cases) {
+    await t.test(fixture.name, async () => {
+      const root = await createWorkflowReachabilityFixture(t, fixture)
+      await assert.rejects(
+        () => assertNoDuplicateDraftWorkflowMutationFromRoot(root),
+        /Release DELETE/u,
+      )
+    })
+  }
+
+  await t.test("unreachable mutation and reachable GET remain safe", async () => {
+    const root = await createWorkflowReachabilityFixture(t, {
+      workflow: "bash scripts/safe.sh",
+      files: {
+        "scripts/safe.sh": "gh api --method GET repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID\n",
+        "scripts/unreachable.sh": "gh release delete opaque-tag --yes\n",
+      },
+    })
+    await assert.doesNotReject(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
+  })
+
+  await t.test("safe wrapper cycles terminate", async () => {
+    const root = await createWorkflowReachabilityFixture(t, {
+      workflow: "bash scripts/a.sh",
+      files: {
+        "scripts/a.sh": "bash scripts/b.sh\n",
+        "scripts/b.sh": "bash scripts/a.sh\n",
+      },
+    })
+    await assert.doesNotReject(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
+  })
+
+  await t.test("reachable symlink escape fails closed", async () => {
+    const root = await createWorkflowReachabilityFixture(t, {
+      workflow: "bash scripts/escape.sh",
+    })
+    const outside = await mkdtemp(path.join(os.tmpdir(), "dawn-workflow-outside-"))
+    t.after(() => rm(outside, { recursive: true, force: true }))
+    await writeFile(path.join(outside, "escape.sh"), "echo safe\n")
+    await mkdir(path.join(root, "scripts"), { recursive: true })
+    await symlink(path.join(outside, "escape.sh"), path.join(root, "scripts", "escape.sh"))
+    await assert.rejects(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
+  })
 })
 
 test("version-pr.yml is version-only and uses only RELEASE_GITHUB_TOKEN", async () => {
@@ -2110,8 +2253,9 @@ function assertNoDuplicateDraftWorkflowMutation(sources) {
     for (const context of workflowExecutionContexts(workflow)) {
       for (const normalized of normalizeExecutionContexts(context)) {
         if (
+          containsGhReleaseDelete(normalized) ||
           containsDeleteReleaseOperation(normalized) ||
-          (containsDeleteMethod(normalized) && containsReleaseEndpoint(normalized))
+          (containsDeleteMethod(normalized) && containsPossibleReleaseEndpoint(normalized))
         ) {
           throw new Error(`${file} contains a Release DELETE endpoint in ${context.label}`)
         }
@@ -2120,23 +2264,165 @@ function assertNoDuplicateDraftWorkflowMutation(sources) {
   }
 }
 
+async function assertNoDuplicateDraftWorkflowMutationFromRoot(root) {
+  const sources = await readWorkflowSourcesFromRoot(root)
+  assertNoDuplicateDraftWorkflowMutation(sources)
+  const packageJson = JSON.parse(
+    await readBoundedFixture(path.join(root, "package.json"), {
+      root,
+      maxBytes: 1024 * 1024,
+    }),
+  )
+  const visited = new Set()
+  let visits = 0
+  const visitFile = async (relative, kind = "script") => {
+    const normalized = normalizeReachablePath(relative)
+    const identity = `${kind}:${normalized}`
+    if (visited.has(identity)) return
+    visited.add(identity)
+    visits += 1
+    if (visits > 256) throw new Error("Workflow executable traversal exceeds the isolation bound")
+    const source = await readBoundedFixture(path.join(root, normalized), {
+      root,
+      maxBytes: 1024 * 1024,
+    })
+    if (kind === "workflow") {
+      await visitWorkflow(parseWorkflowSource(source, normalized), normalized)
+      return
+    }
+    if (kind === "action") {
+      const action = parse(source, { maxAliasCount: 0, uniqueKeys: true })
+      if (!isRecord(action?.runs)) throw new TypeError(`${normalized} is not a local action`)
+      if (action.runs.using === "composite") {
+        for (const step of action.runs.steps ?? []) await visitStep(step, normalized)
+      } else {
+        for (const key of ["pre", "main", "post"]) {
+          if (typeof action.runs[key] === "string") {
+            await visitFile(path.posix.join(path.posix.dirname(normalized), action.runs[key]))
+          }
+        }
+      }
+      return
+    }
+    assertNoReleaseDeleteExecution(source, normalized)
+    if (/\.(?:ba|z)?sh$/u.test(normalized) || !/\.[a-z0-9]+$/iu.test(normalized)) {
+      await visitCommand(source, normalized)
+    }
+  }
+  const visitCommand = async (command, label) => {
+    assertNoReleaseDeleteExecution(command, label)
+    for (const name of packageScriptReferences(command)) {
+      const script = packageJson.scripts?.[name]
+      if (typeof script !== "string") continue
+      const identity = `package:${name}`
+      if (visited.has(identity)) continue
+      visited.add(identity)
+      await visitCommand(script, `package script ${name}`)
+    }
+    for (const file of localCommandFileReferences(command)) await visitFile(file)
+  }
+  const visitStep = async (step, label) => {
+    if (!isRecord(step)) throw new TypeError(`${label} contains an invalid executable step`)
+    if (typeof step.run === "string") await visitCommand(step.run, label)
+    if (typeof step.uses === "string" && step.uses.startsWith("./")) {
+      await visitLocalUses(step.uses)
+    }
+  }
+  const visitLocalUses = async (uses) => {
+    const relative = normalizeReachablePath(uses)
+    if (/\.ya?ml$/u.test(relative)) {
+      await visitFile(relative, "workflow")
+      return
+    }
+    let lastError
+    for (const name of ["action.yml", "action.yaml"]) {
+      try {
+        await visitFile(path.posix.join(relative, name), "action")
+        return
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error
+        lastError = error
+      }
+    }
+    throw lastError
+  }
+  const visitWorkflow = async (workflow, label) => {
+    for (const job of Object.values(workflow.jobs)) {
+      if (!isRecord(job)) continue
+      if (typeof job.uses === "string" && job.uses.startsWith("./")) {
+        await visitLocalUses(job.uses)
+      }
+      for (const step of job.steps ?? []) await visitStep(step, label)
+    }
+  }
+  for (const [file, source] of Object.entries(sources)) {
+    await visitWorkflow(parseWorkflowSource(source, file), file)
+  }
+}
+
+function assertNoReleaseDeleteExecution(value, label) {
+  const normalized = String(value)
+    .replace(/\\\r?\n/gu, "")
+    .toLowerCase()
+  if (
+    containsGhReleaseDelete(normalized) ||
+    containsDeleteReleaseOperation(normalized) ||
+    (containsDeleteMethod(normalized) && containsPossibleReleaseEndpoint(normalized))
+  ) {
+    throw new Error(`${label} contains a Release DELETE endpoint`)
+  }
+}
+
+function normalizeReachablePath(value) {
+  const normalized = path.posix.normalize(String(value).replace(/^\.\//u, ""))
+  if (
+    normalized.length === 0 ||
+    normalized === "." ||
+    normalized.startsWith("../") ||
+    path.posix.isAbsolute(normalized) ||
+    /[\0\r\n]|\$\{\{/u.test(normalized)
+  ) {
+    throw new TypeError("Invalid repository-local executable path")
+  }
+  return normalized
+}
+
+function packageScriptReferences(command) {
+  const names = []
+  const pattern =
+    /(?:^|[\s;&|"'(])(?:pnpm\s+(?:run\s+)?|npm\s+run\s+|yarn\s+(?:run\s+)?)(?!-)([\w:.-]+)/gu
+  for (const match of String(command).matchAll(pattern)) names.push(match[1])
+  return names
+}
+
+function localCommandFileReferences(command) {
+  const files = new Set()
+  const pattern = /(?:^|[\s;&|"'(])(?:node|bash|sh)\s+((?:\.\/)?(?:scripts|\.github)\/[\w./-]+)/gu
+  for (const match of String(command).matchAll(pattern)) files.add(match[1])
+  const direct = /(?:^|[\s;&|"'(])(\.\/(?:scripts|\.github)\/[\w./-]+)/gu
+  for (const match of String(command).matchAll(direct)) files.add(match[1])
+  return files
+}
+
 function workflowExecutionContexts(workflow) {
   const contexts = []
-  const workflowEnv = executionObjectScalars(workflow.env, "workflow.env")
+  const inputDefaults = collectWorkflowInputDefaults(workflow)
+  const workflowEnv = collectScalarMap(workflow.env)
   for (const [jobId, job] of Object.entries(workflow.jobs)) {
     if (!isRecord(job)) continue
-    const jobEnv = [
-      ...executionObjectScalars(job.env, `jobs.${jobId}.env`),
-      ...executionObjectScalars(job.container?.env, `jobs.${jobId}.container.env`),
-    ]
-    const matrixOptions = collectMatrixScalarOptions(job.strategy?.matrix)
+    const jobEnv = mergeScalarMaps(
+      workflowEnv,
+      collectScalarMap(job.container?.env),
+      collectScalarMap(job.env),
+    )
+    const matrixRows = collectStaticMatrixRows(job.strategy?.matrix)
     if (typeof job.uses === "string") {
       contexts.push({
+        env: jobEnv,
+        inputDefaults,
         label: `job ${jobId}`,
-        matrixOptions,
+        matrixRows,
         values: [
-          ...workflowEnv,
-          ...jobEnv,
           `jobs.${jobId}.uses=${job.uses}`,
           ...executionObjectScalars(job.with, `jobs.${jobId}.with`),
           ...executionObjectScalars(job.secrets, `jobs.${jobId}.secrets`),
@@ -2146,56 +2432,129 @@ function workflowExecutionContexts(workflow) {
     if (!Array.isArray(job.steps)) continue
     for (const [stepIndex, step] of job.steps.entries()) {
       if (!isRecord(step)) continue
-      const values = [
-        ...workflowEnv,
-        ...jobEnv,
-        ...executionObjectScalars(step.env, `jobs.${jobId}.steps.${stepIndex}.env`),
-        ...executionObjectScalars(step.with, `jobs.${jobId}.steps.${stepIndex}.with`),
-      ]
+      const env = mergeScalarMaps(jobEnv, collectScalarMap(step.env))
+      const values = [...executionObjectScalars(step.with, `jobs.${jobId}.steps.${stepIndex}.with`)]
       if (typeof step.run === "string") {
         values.push(`jobs.${jobId}.steps.${stepIndex}.run=${step.run}`)
       }
       if (typeof step.uses === "string") {
         values.push(`jobs.${jobId}.steps.${stepIndex}.uses=${step.uses}`)
       }
-      contexts.push({ label: `job ${jobId} step ${stepIndex}`, matrixOptions, values })
+      contexts.push({
+        env,
+        inputDefaults,
+        label: `job ${jobId} step ${stepIndex}`,
+        matrixRows,
+        values,
+      })
     }
   }
   return contexts
 }
 
-function collectMatrixScalarOptions(matrix) {
-  const options = new Map()
-  if (!isRecord(matrix)) return options
-  const add = (key, value) => {
-    const normalizedKey = key.toLowerCase()
-    if (!options.has(normalizedKey)) options.set(normalizedKey, [])
-    if (
-      (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") ||
-      (typeof value === "string" && /\$\{\{/u.test(value))
-    ) {
-      return
-    }
-    const scalar = String(value)
-    const values = options.get(normalizedKey)
-    if (!values.includes(scalar)) values.push(scalar)
+function collectStaticMatrixRows(matrix) {
+  if (!isRecord(matrix)) return { dynamic: matrix !== undefined, rows: [{}] }
+  const axes = Object.entries(matrix).filter(([key]) => key !== "include" && key !== "exclude")
+  if (axes.some(([, values]) => !Array.isArray(values) || !values.every(isStaticScalar))) {
+    return { dynamic: true, rows: [{}] }
   }
-  const addObject = (value) => {
-    if (!isRecord(value)) return
-    for (const [key, entry] of Object.entries(value)) add(key, entry)
-  }
-  for (const [key, value] of Object.entries(matrix)) {
-    if (key === "include" || key === "exclude") {
-      if (Array.isArray(value)) for (const entry of value) addObject(entry)
-      continue
+  let states = [{ base: {}, row: {} }]
+  for (const [key, values] of axes) {
+    const next = []
+    for (const state of states) {
+      for (const value of values) {
+        const scalar = String(value)
+        next.push({
+          base: { ...state.base, [key.toLowerCase()]: scalar },
+          row: { ...state.row, [key.toLowerCase()]: scalar },
+        })
+      }
     }
-    if (Array.isArray(value)) {
-      for (const entry of value) add(key, entry)
-    } else {
-      add(key, value)
+    states = next
+  }
+  const exclusions = staticMatrixObjects(matrix.exclude)
+  if (exclusions === null) return { dynamic: true, rows: [{}] }
+  states = states.filter(({ base }) => !exclusions.some((entry) => rowMatches(base, entry)))
+  const includes = staticMatrixObjects(matrix.include)
+  if (includes === null) return { dynamic: true, rows: [{}] }
+  if (axes.length === 0 && includes.length > 0) {
+    states = includes.map((entry) => ({
+      base: { ...entry },
+      row: { ...entry },
+    }))
+  } else {
+    for (const include of includes) {
+      let applied = false
+      for (const state of states) {
+        if (!rowCompatible(state.base, include)) continue
+        state.row = { ...state.row, ...include }
+        applied = true
+      }
+      if (!applied) states.push({ base: { ...include }, row: { ...include } })
     }
   }
-  return options
+  if (states.length > 1024) throw new Error("Workflow matrix expansion exceeds the isolation bound")
+  return { dynamic: false, rows: states.map(({ row }) => row) }
+}
+
+function staticMatrixObjects(value) {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return null
+  const objects = []
+  for (const entry of value) {
+    if (!isRecord(entry) || Object.values(entry).some((item) => !isStaticScalar(item))) return null
+    objects.push(
+      Object.fromEntries(
+        Object.entries(entry).map(([key, item]) => [key.toLowerCase(), String(item)]),
+      ),
+    )
+  }
+  return objects
+}
+
+function isStaticScalar(value) {
+  return (
+    (typeof value === "string" || typeof value === "number" || typeof value === "boolean") &&
+    !(typeof value === "string" && /\$\{\{/u.test(value))
+  )
+}
+
+function rowMatches(row, expected) {
+  return Object.entries(expected).every(([key, value]) => row[key] === value)
+}
+
+function rowCompatible(row, included) {
+  return Object.entries(included).every(
+    ([key, value]) => !Object.hasOwn(row, key) || row[key] === value,
+  )
+}
+
+function collectWorkflowInputDefaults(workflow) {
+  const defaults = Object.create(null)
+  for (const event of [workflow.on?.workflow_dispatch, workflow.on?.workflow_call]) {
+    if (!isRecord(event?.inputs)) continue
+    for (const [key, descriptor] of Object.entries(event.inputs)) {
+      if (isRecord(descriptor) && isStaticScalar(descriptor.default)) {
+        defaults[key.toLowerCase()] = String(descriptor.default)
+      }
+    }
+  }
+  return defaults
+}
+
+function collectScalarMap(value) {
+  const result = Object.create(null)
+  if (!isRecord(value)) return result
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") {
+      result[key.toLowerCase()] = String(entry)
+    }
+  }
+  return result
+}
+
+function mergeScalarMaps(...maps) {
+  return Object.assign(Object.create(null), ...maps)
 }
 
 function executionObjectScalars(value, prefix) {
@@ -2222,15 +2581,43 @@ function executionObjectScalars(value, prefix) {
 }
 
 function normalizeExecutionContexts(context) {
-  return expandMatrixReferences(context.values.join("\n"), context.matrixOptions).map((value) =>
-    value
-      .replace(/\$\{\{[\s\S]*?\}\}/gu, "__expression__")
-      .replace(/\\\r?\n/gu, "")
-      .toLowerCase(),
+  const resolved = resolveKnownExecutionReferences(context.values.join("\n"), context)
+  const rows = context.matrixRows.dynamic ? [null] : context.matrixRows.rows
+  return rows.flatMap((row) =>
+    expandMatrixReferences(resolved, row, context.matrixRows.dynamic).map((value) =>
+      value
+        .replace(/\$\{\{[\s\S]*?\}\}/gu, "__expression__")
+        .replace(/\\\r?\n/gu, "")
+        .toLowerCase(),
+    ),
   )
 }
 
-function expandMatrixReferences(value, matrixOptions) {
+function resolveKnownExecutionReferences(value, context) {
+  let resolved = value
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const next = resolved
+      .replace(/\$\{\{\s*inputs\.([a-z_][a-z0-9_-]*)\s*\}\}/giu, (match, key) =>
+        Object.hasOwn(context.inputDefaults, key.toLowerCase())
+          ? context.inputDefaults[key.toLowerCase()]
+          : match,
+      )
+      .replace(/\$\{\{\s*env\.([a-z_][a-z0-9_]*)\s*\}\}/giu, (match, key) =>
+        Object.hasOwn(context.env, key.toLowerCase()) ? context.env[key.toLowerCase()] : match,
+      )
+      .replace(/\$\{([a-z_][a-z0-9_]*)\}/giu, (match, key) =>
+        Object.hasOwn(context.env, key.toLowerCase()) ? context.env[key.toLowerCase()] : match,
+      )
+      .replace(/\$([a-z_][a-z0-9_]*)/giu, (match, key) =>
+        Object.hasOwn(context.env, key.toLowerCase()) ? context.env[key.toLowerCase()] : match,
+      )
+    if (next === resolved) return resolved
+    resolved = next
+  }
+  throw new Error("Workflow expression indirection exceeds the isolation bound")
+}
+
+function expandMatrixReferences(value, row, dynamic) {
   const expansions = []
   const visit = (current, assignments) => {
     if (expansions.length >= 1024) {
@@ -2243,12 +2630,17 @@ function expandMatrixReferences(value, matrixOptions) {
     }
     const assignmentKey = reference.key ?? `dynamic:${reference.expression.toLowerCase()}`
     const assigned = assignments.get(assignmentKey)
-    const configured = reference.key === null ? undefined : matrixOptions.get(reference.key)
+    const configured =
+      reference.key !== null && row !== null && Object.hasOwn(row, reference.key)
+        ? row[reference.key]
+        : undefined
     const choices =
       assigned === undefined
-        ? configured?.length
-          ? configured
-          : ["DELETE", "/repos/{owner}/{repo}/releases/{release_id}"]
+        ? configured !== undefined
+          ? [configured]
+          : dynamic || reference.key === null
+            ? ["DELETE", "/repos/{owner}/{repo}/releases/{release_id}"]
+            : [""]
         : [assigned]
     for (const choice of choices) {
       const nextAssignments =
@@ -2278,23 +2670,37 @@ function findMatrixReference(value) {
 }
 
 function containsDeleteMethod(value) {
-  return /(?:^|[\s"'`(])delete\s+(?=\/?repos\/)|(?:^|\s)(?:-x\s*["'`]?\s*delete\b|--(?:method|request)(?:\s+|\s*=\s*)["'`]?\s*delete\b|[^\s=:]*(?:method|request|verb)[^\s=:]*\s*[:=]\s*["'`]?delete\b)/iu.test(
+  return /(?:^|[\s"'`(])delete\s+(?=\/?repos\/)|(?:^|\s)(?:-x\s*["'`]?\s*(?:delete\b|__expression__)|--(?:method|request)(?:\s+|\s*=\s*)["'`]?\s*(?:delete\b|__expression__)|[^\s=:]*(?:method|request|verb)[^\s=:]*\s*[:=]\s*["'`]?(?:delete\b|__expression__))/iu.test(
     value,
   )
 }
 
+function containsGhReleaseDelete(value) {
+  return /\bgh\s+release\s+delete(?:\s|$)/iu.test(value)
+}
+
 function containsDeleteReleaseOperation(value) {
-  return /\bdeleterelease\s*(?:\?\s*\.\s*)?\(/iu.test(value)
+  return /(?:\bdeleterelease\s*(?:\?\s*\.\s*)?\(|["']deleterelease["']\s*\]\s*(?:\?\s*\.\s*)?\()/iu.test(
+    value,
+  )
 }
 
 function containsReleaseEndpoint(value) {
   const segment = String.raw`(?:__expression__|\$[a-z_][a-z0-9_]*|[^/\s"'=:]+)`
   const repository = `(?:${segment}|${segment}/${segment})`
   const releaseId = String.raw`(?:[1-9][0-9]*|__expression__|\$[a-z_][a-z0-9_]*|\$\{[a-z_][a-z0-9_]*\}|\{[a-z_][a-z0-9_]*\})`
+  const host = String.raw`(?:https?://[^/\s"']+|__expression__|\$[a-z_][a-z0-9_]*|\$\{[a-z_][a-z0-9_]*\})`
   return new RegExp(
-    String.raw`(?:^|[\s"'=])(?:https?://[^/\s"']+|__expression__)?/?repos/${repository}/releases/${releaseId}(?:$|[?&#/\s"'])`,
+    String.raw`(?:^|[\s"'=])${host}?/?repos/${repository}/releases/${releaseId}(?:$|[?&#/\s"'])`,
     "iu",
   ).test(value)
+}
+
+function containsPossibleReleaseEndpoint(value) {
+  return (
+    containsReleaseEndpoint(value) ||
+    /\b(?:gh\s+api|curl\b)[^\n]*["']?__expression__["']?/iu.test(value)
+  )
 }
 
 function runWorkflow(run, block = "|", stepEnv, jobEnv) {
@@ -2389,6 +2795,51 @@ jobs:
     steps:
 ${steps}
 `
+}
+
+function inputDefaultWorkflow(defaults, run) {
+  const inputs = Object.entries(defaults)
+    .map(
+      ([key, value]) =>
+        `      ${key}:\n        type: string\n        default: ${JSON.stringify(value)}`,
+    )
+    .join("\n")
+  return `name: fixture
+on:
+  workflow_dispatch:
+    inputs:
+${inputs}
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ${JSON.stringify(run)}
+`
+}
+
+async function createWorkflowReachabilityFixture(t, fixture) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-workflow-reachability-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(path.join(root, ".github", "workflows"), { recursive: true })
+  const step =
+    fixture.uses === undefined
+      ? `      - run: ${JSON.stringify(fixture.workflow ?? "echo safe")}`
+      : `      - uses: ${fixture.uses}`
+  const workflow =
+    fixture.jobUses === undefined
+      ? `on:\n  workflow_dispatch: {}\njobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n${step}\n`
+      : `on:\n  workflow_dispatch: {}\njobs:\n  fixture:\n    uses: ${fixture.jobUses}\n`
+  await writeFile(path.join(root, ".github", "workflows", "fixture.yml"), workflow)
+  await writeFile(
+    path.join(root, "package.json"),
+    `${JSON.stringify({ private: true, scripts: fixture.packageScripts ?? {} }, null, 2)}\n`,
+  )
+  for (const [file, source] of Object.entries(fixture.files ?? {})) {
+    const target = path.join(root, file)
+    await mkdir(path.dirname(target), { recursive: true })
+    await writeFile(target, source)
+  }
+  return root
 }
 
 function parseWorkflowSource(source, file) {
