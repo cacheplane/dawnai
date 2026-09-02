@@ -366,6 +366,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
   const fetchImpl = config.fetchImpl ?? fetch
   const timeoutMs = config.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS
   const maxResponseBytes = config.maxResponseBytes ?? WRITER_MAX_RESPONSE_BYTES
+  const observedNow = config.now ?? Date.now
   if (
     typeof token !== "string" ||
     token.length === 0 ||
@@ -375,6 +376,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
     throw new TypeError("Invalid GitHub token")
   }
   if (typeof fetchImpl !== "function") throw new TypeError("Recovery writer fetch is invalid")
+  if (typeof observedNow !== "function") throw new TypeError("Recovery writer clock is invalid")
   assertBoundedInteger(timeoutMs, 1, WRITER_MAX_TIMEOUT_MS, "Recovery writer timeout")
   assertBoundedInteger(
     maxResponseBytes,
@@ -403,6 +405,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
     timeoutMs,
     maxResponseBytes,
     now: Date.now,
+    observedNow,
     strictCredentials: true,
   })
 
@@ -481,8 +484,14 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         throw new TypeError("Recovery notice contains configured credentials")
       }
       validateQuarantineInput(expected, args)
-      const current = await readExpectedWriterSnapshot(context, expected, expected.body)
-      await verifyRecoveryCandidateTag(context)
+      const baseline = await readExpectedWriterObservation(context, expected, expected.body)
+      const preWrite = await readQuarantinePreWriteFence(
+        context,
+        expected,
+        expected.body,
+        baseline.projection,
+      )
+      const current = preWrite.snapshot
       const observation = await observeIssuedRecoveryMutation(
         context,
         () =>
@@ -493,9 +502,19 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
             contentType: "application/json",
             maximumRequestBytes: 16 * 1024,
           }),
-        { releaseId: current.releaseId, originalBody: current.body },
+        {
+          releaseId: current.releaseId,
+          originalBody: current.body,
+          recordFence: true,
+        },
       )
-      const { response, snapshot: postSnapshot } = requireExactMutationObservation(observation)
+      const {
+        response,
+        snapshot: postSnapshot,
+        projection: postProjection,
+        tagObjectSha: postTagObjectSha,
+        observedAt: postObservedAt,
+      } = requireExactMutationObservation(observation)
       try {
         if (response.httpStatus !== 200) throw new TypeError("Unexpected quarantine status")
         normalizePatchResponse(response.body, current, args.expectedNotice)
@@ -508,10 +527,16 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         marker: null,
       }
       assertExactObservedMutationState(postSnapshot, expectedAfter)
+      assertExactObservedMutationState(postProjection, {
+        ...preWrite.projection,
+        body: args.expectedNotice,
+      })
       return deepFreeze({
+        atomic: false,
         releaseId: current.releaseId,
-        status: "quarantined",
-        bodySha256: sha256(args.expectedNotice),
+        outcome: "performed",
+        preWriteFence: preWrite.fence,
+        postWriteFence: canonicalWriterFence(postObservedAt, postProjection, postTagObjectSha),
       })
     },
   })
@@ -519,7 +544,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
 
 function snapshotWriterOptions(value) {
   if (!isPlainObject(value)) throw new TypeError("Recovery writer options schema is invalid")
-  const allowed = new Set(["token", "fetchImpl", "timeoutMs", "maxResponseBytes"])
+  const allowed = new Set(["token", "fetchImpl", "timeoutMs", "maxResponseBytes", "now"])
   const result = {}
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string" || !allowed.has(key)) {
@@ -912,13 +937,18 @@ async function verifyRecoveryCandidateTag(context) {
     ) {
       writeFail("CANDIDATE_TAG_CONFLICT", "Candidate tag identity is not exact")
     }
+    return ref.object.sha
   } catch (error) {
     if (error instanceof DuplicateDraftRecoveryWriteError) throw error
     writeFail("CANDIDATE_TAG_UNAVAILABLE", "Candidate tag could not be verified")
   }
 }
 
-async function observeIssuedRecoveryMutation(context, request, { releaseId, originalBody }) {
+async function observeIssuedRecoveryMutation(
+  context,
+  request,
+  { releaseId, originalBody, recordFence = false },
+) {
   let response
   let requestError = null
   try {
@@ -927,19 +957,34 @@ async function observeIssuedRecoveryMutation(context, request, { releaseId, orig
     requestError = error
   }
   let tagError = null
+  let tagObjectSha = null
   try {
-    await verifyRecoveryCandidateTag(context)
+    tagObjectSha = await verifyRecoveryCandidateTag(context)
   } catch (error) {
     tagError = error
   }
   let snapshot = null
+  let projection = null
+  let observedAt = null
   let snapshotError = null
   try {
-    snapshot = await readCurrentWriterSnapshot(context, releaseId, originalBody)
+    const current = await readCurrentWriterObservation(context, releaseId, originalBody)
+    snapshot = current.snapshot
+    projection = current.projection
+    observedAt = recordFence ? writerObservedAt(context) : null
   } catch (error) {
     snapshotError = error
   }
-  return { response, requestError, tagError, snapshot, snapshotError }
+  return {
+    response,
+    requestError,
+    tagError,
+    tagObjectSha,
+    snapshot,
+    projection,
+    observedAt,
+    snapshotError,
+  }
 }
 
 function requireExactMutationObservation(observation) {
@@ -952,7 +997,13 @@ function requireExactMutationObservation(observation) {
   if (observation.requestError !== null || observation.snapshotError !== null) {
     writeFail("MUTATION_OUTCOME_AMBIGUOUS", "GitHub recovery mutation outcome is ambiguous")
   }
-  return { response: observation.response, snapshot: observation.snapshot }
+  return {
+    response: observation.response,
+    snapshot: observation.snapshot,
+    projection: observation.projection,
+    tagObjectSha: observation.tagObjectSha,
+    observedAt: observation.observedAt,
+  }
 }
 
 function assertExactObservedMutationState(actual, expected) {
@@ -962,14 +1013,18 @@ function assertExactObservedMutationState(actual, expected) {
 }
 
 async function readExpectedWriterSnapshot(context, expected, originalBody) {
-  const current = await readCurrentWriterSnapshot(context, expected.releaseId, originalBody)
-  if (!sameJson(current, expected)) {
+  return (await readExpectedWriterObservation(context, expected, originalBody)).snapshot
+}
+
+async function readExpectedWriterObservation(context, expected, originalBody) {
+  const current = await readCurrentWriterObservation(context, expected.releaseId, originalBody)
+  if (!sameJson(current.snapshot, expected)) {
     writeFail("RELEASE_SNAPSHOT_CONFLICT", "Duplicate Release snapshot drifted")
   }
   return current
 }
 
-async function readCurrentWriterSnapshot(context, releaseId, originalBody) {
+async function readCurrentWriterObservation(context, releaseId, originalBody) {
   try {
     const release = requirePresent(
       await context.github.getRelease({ releaseId }),
@@ -984,7 +1039,7 @@ async function readCurrentWriterSnapshot(context, releaseId, originalBody) {
       path: `/repos/${OWNER}/${REPOSITORY}/releases/${releaseId}/assets?per_page=100`,
       operation: "RECOVERY_WRITE_ASSETS",
     })
-    const current = await normalizeReleaseSnapshot({
+    const snapshot = await normalizeReleaseSnapshot({
       release: raw,
       rawAssets,
       releaseId,
@@ -992,11 +1047,76 @@ async function readCurrentWriterSnapshot(context, releaseId, originalBody) {
       github: context.github,
       token: context.token,
     })
-    return current
+    return deepFreeze({
+      snapshot,
+      projection: normalizeWriterProjection(raw, rawAssets, snapshot),
+    })
   } catch (error) {
     if (error instanceof DuplicateDraftRecoveryWriteError) throw error
     writeFail("RELEASE_SNAPSHOT_UNAVAILABLE", "Duplicate Release snapshot could not be verified")
   }
+}
+
+async function readQuarantinePreWriteFence(context, expected, originalBody, baselineProjection) {
+  const [tagObjectSha, current] = await Promise.all([
+    verifyRecoveryCandidateTag(context),
+    readCurrentWriterObservation(context, expected.releaseId, originalBody),
+  ])
+  if (!sameJson(current.snapshot, expected) || !sameJson(current.projection, baselineProjection)) {
+    writeFail("RELEASE_SNAPSHOT_CONFLICT", "Duplicate Release snapshot drifted")
+  }
+  const observedAt = writerObservedAt(context)
+  return deepFreeze({
+    snapshot: current.snapshot,
+    projection: current.projection,
+    fence: canonicalWriterFence(observedAt, current.projection, tagObjectSha),
+  })
+}
+
+function normalizeWriterProjection(raw, rawAssets, snapshot) {
+  return deepFreeze({
+    releaseId: snapshot.releaseId,
+    tagName: snapshot.tagName,
+    title: raw.name,
+    targetCommitish: raw.target_commitish,
+    draft: raw.draft,
+    prerelease: raw.prerelease,
+    immutable: raw.immutable,
+    body: snapshot.body,
+    assets: rawAssets.map((asset) => ({
+      id: asset.id,
+      name: asset.name,
+      sha256: asset.digest.slice(7),
+      size: asset.size,
+    })),
+  })
+}
+
+function writerObservedAt(context) {
+  let milliseconds
+  try {
+    milliseconds = context.observedNow()
+  } catch {
+    writeFail("WRITE_FENCE_CLOCK_INVALID", "Recovery write fence clock is invalid")
+  }
+  if (!Number.isSafeInteger(milliseconds)) {
+    writeFail("WRITE_FENCE_CLOCK_INVALID", "Recovery write fence clock is invalid")
+  }
+  let observedAt
+  try {
+    observedAt = new Date(milliseconds).toISOString()
+  } catch {
+    writeFail("WRITE_FENCE_CLOCK_INVALID", "Recovery write fence clock is invalid")
+  }
+  return observedAt
+}
+
+function canonicalWriterFence(observedAt, projection, tagObjectSha) {
+  return deepFreeze({
+    observedAt,
+    projectionSha256: sha256(Buffer.from(JSON.stringify(canonicalize(projection)), "utf8")),
+    tagObjectSha,
+  })
 }
 
 function assertExistingEvidenceAsset(asset, args, kind) {

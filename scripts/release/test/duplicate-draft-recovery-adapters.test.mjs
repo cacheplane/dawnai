@@ -230,12 +230,18 @@ test("recovery writer accepts an existing evidence asset only after exact downlo
   )
 })
 
-test("recovery writer quarantines with an exact body-only compare-and-swap", async () => {
+test("recovery writer quarantines with exact non-atomic pre/post fence receipts", async () => {
   const fixture = writerFixture()
   const calls = []
   let quarantined = false
+  let releaseReads = 0
+  const observedTimes = [
+    Date.parse("2026-09-02T17:00:00.000Z"),
+    Date.parse("2026-09-02T17:00:01.000Z"),
+  ]
   const writer = createDuplicateDraftRecoveryWriter({
     token: "secret-token",
+    now: () => observedTimes.shift(),
     fetchImpl: routingFetch(calls, async (url, init) => {
       if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) return jsonResponse(candidateTagRef())
       if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
@@ -243,18 +249,29 @@ test("recovery writer quarantines with an exact body-only compare-and-swap", asy
         assert.deepEqual(JSON.parse(Buffer.from(init.body).toString("utf8")), {
           body: fixture.notice,
         })
+        assert.equal(new Headers(init.headers).has("if-match"), false)
+        assert.equal(new Headers(init.headers).has("if-unmodified-since"), false)
         assert.equal(Buffer.from(init.body).toString("utf8").includes("name"), false)
         quarantined = true
         return jsonResponse(
           {
             ...writerRelease(fixture.notice),
             body: fixture.notice,
+            updated_at: "2026-09-02T17:00:02Z",
+            html_url: "https://github.com/cacheplane/dawnai/releases/tag/opaque",
+            author: { login: "operator-after" },
           },
           200,
         )
       }
       if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
-        return jsonResponse(writerRelease(quarantined ? fixture.notice : fixture.body))
+        releaseReads += 1
+        return jsonResponse({
+          ...writerRelease(quarantined ? fixture.notice : fixture.body),
+          updated_at: `2026-09-02T17:00:0${releaseReads}Z`,
+          html_url: `https://github.com/cacheplane/dawnai/releases/${releaseReads}`,
+          author: { login: `operator-${releaseReads}` },
+        })
       }
       if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
         return jsonResponse([
@@ -280,30 +297,182 @@ test("recovery writer quarantines with an exact body-only compare-and-swap", asy
   })
 
   assert.deepEqual(result, {
+    atomic: false,
     releaseId: DUPLICATE_ID,
-    status: "quarantined",
-    bodySha256: sha256(Buffer.from(fixture.notice)),
+    outcome: "performed",
+    preWriteFence: {
+      observedAt: "2026-09-02T17:00:00.000Z",
+      projectionSha256: writerProjectionSha256(fixture, fixture.body),
+      tagObjectSha: TAG_OBJECT,
+    },
+    postWriteFence: {
+      observedAt: "2026-09-02T17:00:01.000Z",
+      projectionSha256: writerProjectionSha256(fixture, fixture.notice),
+      tagObjectSha: TAG_OBJECT,
+    },
   })
   assert.equal(Object.isFrozen(result), true)
+  assert.equal(Object.isFrozen(result.preWriteFence), true)
+  assert.equal(Object.isFrozen(result.postWriteFence), true)
   const patch = calls.find(({ init }) => init.method === "PATCH")
   assert.ok(patch)
   assert.deepEqual(Object.keys(JSON.parse(Buffer.from(patch.init.body))).sort(), ["body"])
   assert.equal(calls.filter(({ url }) => url.includes("/git/ref/tags%2Fv0.8.22")).length, 2)
-  assert.deepEqual(calls.map(callKind), [
-    "release",
-    "assets",
-    "asset-download",
-    "asset-download",
-    "tag-ref",
-    "tag-object",
-    "PATCH",
-    "tag-ref",
-    "tag-object",
-    "release",
-    "assets",
-    "asset-download",
-    "asset-download",
-  ])
+  assert.equal(calls.filter(({ init }) => init.method === "PATCH").length, 1)
+})
+
+test("recovery writer completes concurrent final pre-write tag and projection fences before PATCH", async () => {
+  const fixture = writerFixture()
+  const calls = []
+  const preTagStarted = deferred()
+  const preReleaseStarted = deferred()
+  const releasePreTag = deferred()
+  const releasePreSnapshot = deferred()
+  const patchStarted = deferred()
+  let releaseReads = 0
+  let quarantined = false
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    now: () => Date.parse(quarantined ? "2026-09-02T17:00:01Z" : "2026-09-02T17:00:00Z"),
+    fetchImpl: routingFetch(calls, async (url, init) => {
+      if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) {
+        if (!quarantined) {
+          preTagStarted.resolve()
+          await releasePreTag.promise
+        }
+        return jsonResponse(candidateTagRef())
+      }
+      if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
+      if (url === `${BASE}/releases/${DUPLICATE_ID}` && init.method === "PATCH") {
+        patchStarted.resolve()
+        quarantined = true
+        return jsonResponse(writerRelease(fixture.notice))
+      }
+      if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
+        releaseReads += 1
+        if (releaseReads === 2) {
+          preReleaseStarted.resolve()
+          await releasePreSnapshot.promise
+        }
+        return jsonResponse(writerRelease(quarantined ? fixture.notice : fixture.body))
+      }
+      if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+        return jsonResponse([
+          ...fixture.rawAssets,
+          fixture.archiveRawAsset,
+          fixture.receiptRawAsset,
+        ])
+      }
+      if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+        return binaryResponse(fixture.archiveBytes)
+      }
+      if (url === `${BASE}/releases/assets/${fixture.receiptRawAsset.id}`) {
+        return binaryResponse(fixture.receiptBytes)
+      }
+      assert.fail(`unexpected URL ${url}`)
+    }),
+  })
+
+  const operation = writer.quarantineDuplicateBodyIfCurrent({
+    expectedSnapshot: fixture.receiptArchivedSnapshot,
+    expectedBodySha256: fixture.archiveSha256,
+    expectedNotice: fixture.notice,
+  })
+  await Promise.all([preTagStarted.promise, preReleaseStarted.promise])
+  assert.equal(
+    calls.some(({ init }) => init.method === "PATCH"),
+    false,
+  )
+  releasePreTag.resolve()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(
+    calls.some(({ init }) => init.method === "PATCH"),
+    false,
+  )
+  releasePreSnapshot.resolve()
+  await patchStarted.promise
+  await operation
+})
+
+test("recovery writer blocks pre/post projection drift including asset identity and size", async (t) => {
+  const fixture = writerFixture()
+  for (const drift of ["pre-tag", "pre-size", "pre-identity", "post-size"]) {
+    await t.test(drift, async () => {
+      const calls = []
+      let assetReads = 0
+      let quarantined = false
+      const writer = createDuplicateDraftRecoveryWriter({
+        token: "secret-token",
+        now: () => Date.parse("2026-09-02T17:00:00Z"),
+        fetchImpl: routingFetch(calls, async (url, init) => {
+          if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) {
+            return jsonResponse(
+              drift === "pre-tag"
+                ? {
+                    ref: "refs/tags/v0.8.22",
+                    object: { type: "tag", sha: "e".repeat(40) },
+                  }
+                : candidateTagRef(),
+            )
+          }
+          if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
+          if (url === `${BASE}/git/tags/${"e".repeat(40)}`) {
+            return jsonResponse({
+              sha: "e".repeat(40),
+              tag: "v0.8.22",
+              object: { type: "commit", sha: "f".repeat(40) },
+            })
+          }
+          if (url === `${BASE}/releases/${DUPLICATE_ID}` && init.method === "PATCH") {
+            quarantined = true
+            return jsonResponse(writerRelease(fixture.notice))
+          }
+          if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
+            return jsonResponse(writerRelease(quarantined ? fixture.notice : fixture.body))
+          }
+          if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+            assetReads += 1
+            const assets = [...fixture.rawAssets, fixture.archiveRawAsset, fixture.receiptRawAsset]
+            const shouldDrift =
+              (["pre-size", "pre-identity"].includes(drift) && assetReads === 2) ||
+              (drift === "post-size" && assetReads === 3)
+            if (!shouldDrift) return jsonResponse(assets)
+            return jsonResponse(
+              assets.map((asset, index) =>
+                index === 0
+                  ? {
+                      ...asset,
+                      ...(drift === "pre-identity"
+                        ? { id: asset.id + 10_000 }
+                        : { size: asset.size + 1 }),
+                    }
+                  : asset,
+              ),
+            )
+          }
+          if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+            return binaryResponse(fixture.archiveBytes)
+          }
+          if (url === `${BASE}/releases/assets/${fixture.receiptRawAsset.id}`) {
+            return binaryResponse(fixture.receiptBytes)
+          }
+          assert.fail(`unexpected URL ${url}`)
+        }),
+      })
+
+      await assert.rejects(
+        writer.quarantineDuplicateBodyIfCurrent({
+          expectedSnapshot: fixture.receiptArchivedSnapshot,
+          expectedBodySha256: fixture.archiveSha256,
+          expectedNotice: fixture.notice,
+        }),
+      )
+      assert.equal(
+        calls.filter(({ init }) => init.method === "PATCH").length,
+        drift.startsWith("pre-") ? 0 : 1,
+      )
+    })
+  }
 })
 
 test("recovery writer rejects non-candidate inputs and concurrent drift before mutation", async () => {
@@ -973,7 +1142,11 @@ test("recovery writer preserves immediate post-write tag fences on failure paths
                 "asset-download",
                 "asset-download",
                 "tag-ref",
+                "release",
                 "tag-object",
+                "assets",
+                "asset-download",
+                "asset-download",
                 "PATCH",
               ]
         assert.deepEqual(harness.calls.map(callKind), [
@@ -988,6 +1161,11 @@ test("recovery writer preserves immediate post-write tag fences on failure paths
               ? ["asset-download"]
               : ["asset-download", "asset-download"]),
         ])
+        assert.equal(
+          harness.calls.filter(({ init }) => init.method === method).length,
+          1,
+          "issued mutations are never retried",
+        )
       })
     }
   }
@@ -2336,6 +2514,48 @@ function asset(id, name, bytes) {
     digest: `sha256:${sha256(bytes)}`,
     size: bytes.byteLength,
   }
+}
+
+function writerProjectionSha256(fixture, body) {
+  const projection = {
+    releaseId: DUPLICATE_ID,
+    tagName: DUPLICATE_TAG,
+    title: WRITER_TITLE,
+    targetCommitish: "main",
+    draft: true,
+    prerelease: false,
+    immutable: false,
+    body,
+    assets: [...fixture.rawAssets, fixture.archiveRawAsset, fixture.receiptRawAsset].map(
+      ({ id, name, digest, size }) => ({
+        id,
+        name,
+        sha256: digest.slice(7),
+        size,
+      }),
+    ),
+  }
+  return sha256(Buffer.from(JSON.stringify(canonicalizeForTest(projection))))
+}
+
+function canonicalizeForTest(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeForTest)
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalizeForTest(value[key])]),
+  )
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 function sha256(bytes) {
