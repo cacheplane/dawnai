@@ -565,16 +565,23 @@ procedure above may restore authority.
 - Before any intent: the journal may be discarded and `perform` rerun. The
   proposal is reference evidence rather than fresh mutation authority; all live
   parity and authority reads are repeated by `perform`, and any mismatch stops.
-- After `delete-intent` with no later event, directly read the target. If it is
-  present and semantically unchanged, append `present-unchanged-retryable`,
-  refresh all authority, and create a new attempt. If absent, append
-  `absent-ambiguous` and reconcile. Any other state stops.
+- After `delete-intent` with no later event, run the bounded direct GET and
+  complete paginated-list reads. If they repeatedly prove the target present
+  and semantically unchanged, perform one full fresh Task 5 authority capture,
+  append `present-unchanged-retryable` with that capture's actual target
+  evidence, append the same captured authority for the new attempt, and then
+  persist intent, mint the one-use permit, and DELETE with no intervening
+  network. If the bounded reads prove absence, append `absent-ambiguous` and
+  reconcile. Any other state stops.
 - After an ambiguous `delete-outcome`, preserve its exact classification. If
   direct GET returns 404 and complete paginated enumeration excludes the ID,
-  reconcile absence. If the bounded window instead proves the target remained
-  present and exactly unchanged, append `present-unchanged-retryable` and use a
-  fully fresh numbered attempt, subject to the three-attempt cap. Any other
-  result stops. A `confirmed-204` target that is present stops.
+  reconcile absence. If the bounded reads instead repeatedly prove the target
+  present and exactly unchanged, perform one full fresh Task 5 authority
+  capture, append `present-unchanged-retryable` with that capture's actual
+  target evidence, append the same captured authority for the fully fresh
+  numbered attempt, and then persist intent, mint the one-use permit, and
+  DELETE with no intervening network, subject to the three-attempt cap. Any
+  other result stops. A `confirmed-204` target that is present stops.
 - After resolving `379982100`: require Release `379986168` and the survivor still
   exactly match the proposal, repeat all authority checks including fresh npm
   absence, then continue with the second deletion.
