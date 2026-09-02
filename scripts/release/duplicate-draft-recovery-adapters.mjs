@@ -40,6 +40,7 @@ const WRITER_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 const WRITER_MAX_RESPONSE_CHUNKS = 1_024
 const WRITER_MAX_RESPONSE_HEADERS = 128
 const WRITER_MAX_RESPONSE_HEADER_BYTES = 64 * 1024
+const WRITER_MAX_LOCATION_DECODE_PASSES = 6
 const WRITER_SIGNED_DOWNLOAD_HOSTS = new Set([
   "objects.githubusercontent.com",
   "release-assets.githubusercontent.com",
@@ -1321,7 +1322,7 @@ function normalizeStrictWriterResponseHeaders(headers, credential, credentialNam
 
 function decodedLocationContainsCredential(value, credential) {
   let decoded = value
-  for (let depth = 0; depth < 4; depth += 1) {
+  for (let depth = 0; depth < WRITER_MAX_LOCATION_DECODE_PASSES; depth += 1) {
     const next = decoded.replace(/(?:%[0-9a-f]{2})+/giu, (encoded) => {
       const octets = encoded.slice(1).split("%").map(hexByte)
       return new TextDecoder().decode(Uint8Array.from(octets))
@@ -1330,7 +1331,7 @@ function decodedLocationContainsCredential(value, credential) {
     if (Buffer.from(next, "utf8").includes(credential)) return true
     decoded = next
   }
-  return false
+  writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery response Location encoding is unsafe")
 }
 
 function hexByte(value) {

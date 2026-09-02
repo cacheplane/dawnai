@@ -1056,12 +1056,13 @@ test("recovery writer enforces the 64 KiB evidence limit in its first streaming 
 test("recovery writer rejects raw or encoded credentials in redirect headers before follow", async (t) => {
   const fixture = writerFixture()
   const token = "secret-token"
-  const encodedToken = [...token]
-    .map((character) => `%${character.codePointAt(0).toString(16).padStart(2, "0")}`)
-    .join("")
   for (const [label, location] of [
     ["raw", `https://objects.githubusercontent.com/${token}`],
-    ["percent-encoded", `https://objects.githubusercontent.com/${encodedToken}`],
+    ["percent-encoded", `https://objects.githubusercontent.com/${percentEncode(token)}`],
+    [
+      "five-layer percent-encoded",
+      `https://objects.githubusercontent.com/${percentEncode(token, 5)}`,
+    ],
   ]) {
     await t.test(label, async () => {
       const calls = []
@@ -1096,6 +1097,40 @@ test("recovery writer rejects raw or encoded credentials in redirect headers bef
       )
     })
   }
+})
+
+test("recovery writer fails closed when redirect decoding exhausts its safe bound", async () => {
+  const fixture = writerFixture()
+  const calls = []
+  const location = `https://objects.githubusercontent.com/${percentEncode("x", 7)}`
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    fetchImpl: routingFetch(calls, (url) => {
+      if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
+        return jsonResponse(writerRelease(fixture.body))
+      }
+      if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+        return jsonResponse([...fixture.rawAssets, fixture.archiveRawAsset])
+      }
+      if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+        return binaryResponse(new Uint8Array(), 302, { location })
+      }
+      assert.fail(`unresolved redirect encoding must not be followed: ${url}`)
+    }),
+  })
+  await assert.rejects(
+    writer.uploadEvidenceAssetIfAbsentAndEqual({
+      expectedSnapshot: fixture.bodyArchivedSnapshot,
+      expectedTagObjectSha: TAG_OBJECT,
+      name: fixture.archiveName,
+      bytes: fixture.archiveBytes,
+      sha256: fixture.archiveSha256,
+    }),
+  )
+  assert.equal(
+    calls.some(({ url }) => new URL(url).hostname === "objects.githubusercontent.com"),
+    false,
+  )
 })
 
 test("recovery writer positive mutations cover both approved duplicate identities", async (t) => {
@@ -3083,6 +3118,16 @@ function countedBinaryResponse(totalBytes, chunkBytes, { onRead, onCancel }) {
       },
     },
   }
+}
+
+function percentEncode(value, layers = 1) {
+  let encoded = value
+  for (let layer = 0; layer < layers; layer += 1) {
+    encoded = [...Buffer.from(encoded, "utf8")]
+      .map((byte) => `%${byte.toString(16).padStart(2, "0")}`)
+      .join("")
+  }
+  return encoded
 }
 
 function chunkedResponse(bytes, status = 200, headers = {}) {
