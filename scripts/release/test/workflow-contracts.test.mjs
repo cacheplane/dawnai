@@ -11,13 +11,13 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises"
+import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { parse, stringify } from "yaml"
-
 import { classifyReleaseWorkflowAbandonment } from "../abandonment-reachability.mjs"
 import { ARTIFACT_STORE_SPARSE_FILES } from "../artifact-store.mjs"
 import { readBoundedFixture } from "../fixture-io.mjs"
@@ -25,6 +25,11 @@ import { PUBLISHER_SPARSE_FILES } from "../publisher.mjs"
 import { REQUIRED_RELEASE_SMOKE_LANES } from "../smoke-result.mjs"
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url))
+const requireFromCore = createRequire(path.join(ROOT, "packages", "core", "package.json"))
+const typescript = requireFromCore("typescript")
+if (typescript.version !== "6.0.2" || typeof typescript.createSourceFile !== "function") {
+  throw new Error("The packages/core TypeScript compiler parser is unavailable")
+}
 const WORKFLOWS = path.join(ROOT, ".github/workflows")
 const CONTROLLER_SCHEMA_PATH = path.join(ROOT, "scripts/release/controller-schema.json")
 const ENTRYPOINT_ALLOWLIST_PATH = path.join(
@@ -568,6 +573,39 @@ test("workflow isolation follows every repository-local executable transitively"
       },
     },
     {
+      name: "comment-separated static import",
+      workflow: "node scripts/first.mjs",
+      files: {
+        "scripts/first.mjs": "import/*comment*/'./hidden.mjs'\n",
+        "scripts/hidden.mjs": "gh release delete opaque-tag --yes\n",
+      },
+    },
+    {
+      name: "comment-separated CommonJS require",
+      workflow: "node scripts/first.cjs",
+      files: {
+        "scripts/first.cjs": "require/*comment*/('./hidden.cjs')\n",
+        "scripts/hidden.cjs": "gh release delete opaque-tag --yes\n",
+      },
+    },
+    {
+      name: "comment-separated export and dynamic import",
+      workflow: "node scripts/first.mjs",
+      files: {
+        "scripts/first.mjs": "export/*one*/{ value }/*two*/from/*three*/'./middle.mjs'\n",
+        "scripts/middle.mjs": "import/*four*/('./hidden.mjs')\n",
+        "scripts/hidden.mjs": "gh release delete opaque-tag --yes\n",
+      },
+    },
+    {
+      name: "TypeScript import equals",
+      workflow: "pnpm exec tsx scripts/first.ts",
+      files: {
+        "scripts/first.ts": "import hidden = require('./hidden.cjs')\nvoid hidden\n",
+        "scripts/hidden.cjs": "gh release delete opaque-tag --yes\n",
+      },
+    },
+    {
       name: "pnpm exec tsx runner",
       workflow: "pnpm exec tsx scripts/hidden.ts",
       files: { "scripts/hidden.ts": "github.rest.repos.deleteRelease({ release_id: 1 })\n" },
@@ -639,6 +677,32 @@ test("workflow isolation follows every repository-local executable transitively"
       files: { "scripts/hidden.mjs": "echo safe\n" },
     })
     await assert.rejects(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
+  })
+
+  await t.test("comments and generated source do not create module edges", async () => {
+    const root = await createWorkflowReachabilityFixture(t, {
+      workflow: "node scripts/safe.mjs",
+      files: {
+        "scripts/safe.mjs": [
+          "// import './missing-one.mjs'",
+          "const text = \"require('./missing-two.cjs')\"",
+          "const template = `export * from './missing-three.mjs'`",
+          "export const safe = text + template",
+        ].join("\n"),
+      },
+    })
+    await assert.doesNotReject(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
+  })
+
+  await t.test("reachable JavaScript syntax errors fail closed", async () => {
+    const root = await createWorkflowReachabilityFixture(t, {
+      workflow: "node scripts/broken.mjs",
+      files: { "scripts/broken.mjs": "import { from './broken.mjs'\n" },
+    })
+    await assert.rejects(
+      () => assertNoDuplicateDraftWorkflowMutationFromRoot(root),
+      /cannot be parsed/u,
+    )
   })
 })
 
@@ -2373,7 +2437,7 @@ async function assertNoDuplicateDraftWorkflowMutationFromRoot(root) {
       await visitCommand(source, normalized)
     }
     if (/\.[cm]?[jt]sx?$/u.test(normalized)) {
-      for (const reference of localModuleReferences(source)) {
+      for (const reference of localModuleReferences(source, normalized)) {
         await visitResolvedFile(path.posix.dirname(normalized), reference)
       }
       for (const reference of localSpawnReferences(source)) {
@@ -2585,13 +2649,58 @@ function localCommandFileReferences(command) {
   return files
 }
 
-function localModuleReferences(source) {
+function localModuleReferences(source, file) {
   const references = new Set()
-  const executableSource = String(source).replace(/`(?:\\[\s\S]|[^`])*`/gu, "")
-  const pattern =
-    /(?:\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?|\bimport\s*\(|\brequire\s*\()(["'])(\.\.?\/[^"']+)\1/gu
-  for (const match of executableSource.matchAll(pattern)) references.add(match[2])
+  const scriptKind = typescriptScriptKind(file)
+  const sourceFile = typescript.createSourceFile(
+    file,
+    source,
+    typescript.ScriptTarget.Latest,
+    true,
+    scriptKind,
+  )
+  if (sourceFile.parseDiagnostics.length > 0) {
+    const diagnostic = sourceFile.parseDiagnostics[0]
+    const message = typescript.flattenDiagnosticMessageText(diagnostic.messageText, " ")
+    throw new Error(`${file} cannot be parsed as executable JavaScript/TypeScript: ${message}`)
+  }
+  const addLiteral = (node) => {
+    if (typescript.isStringLiteralLike(node) && /^\.\.?\//u.test(node.text)) {
+      references.add(node.text)
+    }
+  }
+  const visit = (node) => {
+    if (
+      (typescript.isImportDeclaration(node) || typescript.isExportDeclaration(node)) &&
+      node.moduleSpecifier !== undefined
+    ) {
+      addLiteral(node.moduleSpecifier)
+    } else if (
+      typescript.isImportEqualsDeclaration(node) &&
+      typescript.isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression !== undefined
+    ) {
+      addLiteral(node.moduleReference.expression)
+    } else if (typescript.isCallExpression(node) && node.arguments.length === 1) {
+      if (
+        node.expression.kind === typescript.SyntaxKind.ImportKeyword ||
+        (typescript.isIdentifier(node.expression) && node.expression.text === "require")
+      ) {
+        addLiteral(node.arguments[0])
+      }
+    }
+    typescript.forEachChild(node, visit)
+  }
+  visit(sourceFile)
   return references
+}
+
+function typescriptScriptKind(file) {
+  if (/\.tsx$/iu.test(file)) return typescript.ScriptKind.TSX
+  if (/\.jsx$/iu.test(file)) return typescript.ScriptKind.JSX
+  if (/\.(?:ts|mts|cts)$/iu.test(file)) return typescript.ScriptKind.TS
+  if (/\.json$/iu.test(file)) return typescript.ScriptKind.JSON
+  return typescript.ScriptKind.JS
 }
 
 function localSpawnReferences(source) {
