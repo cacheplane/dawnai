@@ -200,6 +200,67 @@ test("CLI threads each exact convergence request budget into production adapter 
   assert.equal(adapterOptions.requestBudget, requestBudget)
 })
 
+test("CLI preserves the environment boundary across every mode", async (t) => {
+  const explicitEnvironment = Object.freeze({ HOME: "/fixture/home", PATH: "/fixture/bin" })
+  const controller = new AbortController()
+  const requestBudget = Object.freeze({
+    operation: "release",
+    timeoutMs: 12_345,
+    signal: controller.signal,
+  })
+  const modes = Object.freeze([
+    Object.freeze({ name: "inspect", argv: COMMAND }),
+    Object.freeze({ name: "perform", argv: PERFORM_COMMAND }),
+    Object.freeze({ name: "verify", argv: VERIFY_COMMAND }),
+  ])
+  const environmentCases = Object.freeze([
+    Object.freeze({ name: "omitted", expected: null }),
+    Object.freeze({
+      name: "explicit frozen",
+      value: explicitEnvironment,
+      expected: explicitEnvironment,
+    }),
+    Object.freeze({ name: "explicit undefined", value: undefined, expected: undefined }),
+  ])
+
+  for (const mode of modes) {
+    for (const environmentCase of environmentCases) {
+      await t.test(`${mode.name} ${environmentCase.name}`, async () => {
+        const adapterCalls = []
+        const options = {
+          argv: mode.argv,
+          cwd: process.cwd(),
+          stdout: sink(),
+          stderr: sink(),
+          dependencies: environmentBoundaryDependencies({
+            mode: mode.name,
+            requestBudget,
+            adapterCalls,
+          }),
+        }
+        if (environmentCase.name !== "omitted") {
+          options.environment = environmentCase.value
+        }
+
+        assert.equal(await runDuplicateDraftConsolidationCli(options), 0)
+        assert.equal(adapterCalls.length, mode.name === "perform" ? 2 : 1)
+        for (const adapterOptions of adapterCalls) {
+          if (environmentCase.name === "omitted") {
+            assert.equal(Object.hasOwn(adapterOptions, "environment"), false)
+          } else {
+            assert.equal(Object.hasOwn(adapterOptions, "environment"), true)
+            assert.equal(adapterOptions.environment, environmentCase.expected)
+          }
+        }
+        if (mode.name === "perform") {
+          assert.equal(Object.hasOwn(adapterCalls[0], "requestBudget"), false)
+          assert.equal(adapterCalls[1].requestBudget, requestBudget)
+        }
+      })
+    }
+  }
+})
+
 test("CLI perform rejects digest, confirmation, path, force, survivor, and reordered-ID variants", async () => {
   for (const argv of [
     PERFORM_COMMAND.with(8, CONFIRMATION.replace(PROPOSAL_SHA256, "A".repeat(64))),
@@ -578,6 +639,52 @@ function successfulDependencies() {
       })
     },
   }
+}
+
+function environmentBoundaryDependencies({ mode, requestBudget, adapterCalls }) {
+  const dependencies = {
+    async createAdapters(options) {
+      adapterCalls.push(options)
+      return Object.freeze({})
+    },
+  }
+  if (mode === "inspect") {
+    dependencies.inspect = async (input) =>
+      Object.freeze({
+        proposalSha256: "a".repeat(64),
+        version: input.version,
+        commitSha: input.commitSha,
+        survivor: input.survivor,
+        duplicates: Object.freeze([...input.duplicates]),
+        output: input.output,
+      })
+  } else if (mode === "perform") {
+    dependencies.perform = async (_input, operations) => {
+      await operations.createAdapters()
+      await operations.createAdapters(requestBudget)
+      return Object.freeze({
+        status: "complete",
+        survivor: "379991871",
+        deleted: Object.freeze(["379982100", "379986168"]),
+        receipt: "scripts/release/duplicate-draft-consolidation.json",
+        receiptSha256: "b".repeat(64),
+      })
+    }
+  } else {
+    dependencies.verify = async (_input, operations) => {
+      await operations.createAdapters()
+      return Object.freeze({
+        status: "verified",
+        survivor: "379991871",
+        deleted: Object.freeze(["379982100", "379986168"]),
+        receipt: "scripts/release/duplicate-draft-consolidation.json",
+        receiptSha256: "c".repeat(64),
+        historicalParity:
+          "Historical duplicate payload parity is supported by embedded pre-delete evidence plus the currently reverified survivor; deleted bytes were not independently re-downloaded.",
+      })
+    }
+  }
+  return dependencies
 }
 
 function failingWritable(message) {

@@ -70,11 +70,7 @@ export async function runDuplicateDraftConsolidationCli(options = {}) {
     if (input.mode === "inspect") {
       result = await inspect(input.value, {
         repositoryRoot: invocation.cwd,
-        adapters: await createAdapters({
-          cwd: invocation.cwd,
-          environment: invocation.environment,
-          dependencies: { now },
-        }),
+        adapters: await createAdapters(adapterCompositionOptions(invocation, now)),
         now,
         wait,
         repositoryRootIdentity,
@@ -83,24 +79,14 @@ export async function runDuplicateDraftConsolidationCli(options = {}) {
       result = await perform(input.value, {
         repositoryRoot: invocation.cwd,
         createAdapters: (requestBudget) =>
-          createAdapters({
-            cwd: invocation.cwd,
-            environment: invocation.environment,
-            dependencies: { now },
-            ...(requestBudget === undefined ? {} : { requestBudget }),
-          }),
+          createAdapters(adapterCompositionOptions(invocation, now, requestBudget)),
         now,
         wait,
       })
     } else {
       result = await verify(input.value, {
         repositoryRoot: invocation.cwd,
-        createAdapters: () =>
-          createAdapters({
-            cwd: invocation.cwd,
-            environment: invocation.environment,
-            dependencies: { now },
-          }),
+        createAdapters: () => createAdapters(adapterCompositionOptions(invocation, now)),
       })
     }
     const summary =
@@ -260,7 +246,7 @@ function normalizeOptions(options) {
   const result = {
     argv: values.argv ?? process.argv.slice(2),
     cwd,
-    environment: values.environment ?? process.env,
+    ...(Object.hasOwn(values, "environment") ? { environment: values.environment } : {}),
     stdout,
     stderr,
     dependencies,
@@ -272,6 +258,15 @@ function normalizeOptions(options) {
     result.mode = null
   }
   return result
+}
+
+function adapterCompositionOptions(invocation, now, requestBudget) {
+  return {
+    cwd: invocation.cwd,
+    ...(Object.hasOwn(invocation, "environment") ? { environment: invocation.environment } : {}),
+    dependencies: { now },
+    ...(requestBudget === undefined ? {} : { requestBudget }),
+  }
 }
 
 function bindSink(value) {
