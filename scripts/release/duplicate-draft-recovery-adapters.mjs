@@ -38,6 +38,17 @@ const RECOVERY_ASSET_BYTES = 64 * 1024
 const WRITER_MAX_TIMEOUT_MS = 300_000
 const WRITER_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 const WRITER_MAX_RESPONSE_CHUNKS = 1_024
+const WRITER_MAX_RESPONSE_HEADERS = 128
+const WRITER_MAX_RESPONSE_HEADER_BYTES = 64 * 1024
+const WRITER_SIGNED_DOWNLOAD_HOSTS = new Set([
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+  "github-releases.githubusercontent.com",
+  "pipelines.actions.githubusercontent.com",
+])
+const WRITER_SIGNED_AZURE_HOST_PATTERN = /^productionresultssa[0-9]+\.blob\.core\.windows\.net$/u
+const WRITER_RELEASE_ASSET_PATH_PATTERN =
+  /^\/repos\/cacheplane\/dawnai\/releases\/assets\/[1-9][0-9]*$/u
 const WRITER_TITLE = `Dawn v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}`
 const DUPLICATE_TAG_BY_ID = new Map(
   DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.map(({ releaseId, tagName }) => [releaseId, tagName]),
@@ -1191,10 +1202,12 @@ function safeWriteResponse(value, code) {
 
 function createStrictCredentialFetch(fetchImpl, token, maximumResponseBytes, timeoutMs) {
   const credential = Buffer.from(token, "utf8")
+  const credentialName = Buffer.from(token.toLowerCase(), "utf8")
   return async (url, init) => {
     const deadline = createWriterResponseDeadline(timeoutMs, init?.signal)
     try {
       const parsedUrl = new URL(url)
+      const responseMaximum = strictWriterResponseMaximum(parsedUrl, maximumResponseBytes)
       const existingHeaders = new Headers(init?.headers)
       const authenticatedInit = {
         ...init,
@@ -1209,20 +1222,119 @@ function createStrictCredentialFetch(fetchImpl, token, maximumResponseBytes, tim
           : {}),
       }
       const response = await deadline.race(() => fetchImpl(url, authenticatedInit))
-      const body = response?.body
-      if (body === null || body === undefined || typeof body.getReader !== "function") {
-        return response
+      let status
+      let headers
+      let body
+      try {
+        body = response?.body
+        status = response?.status
+        headers = normalizeStrictWriterResponseHeaders(
+          response?.headers,
+          credential,
+          credentialName,
+        )
+      } catch (error) {
+        cancelResponseBody(body)
+        throw error
       }
-      const bytes = await readStrictWriterResponse(body, maximumResponseBytes, credential, deadline)
+      if (body === null || body === undefined || typeof body.getReader !== "function") {
+        return { status, headers, body }
+      }
+      const bytes = await readStrictWriterResponse(body, responseMaximum, credential, deadline)
       return {
-        status: response.status,
-        headers: response.headers,
+        status,
+        headers,
         body: bufferedResponseBody(bytes),
       }
     } finally {
       deadline.dispose()
     }
   }
+}
+
+function strictWriterResponseMaximum(url, configuredMaximum) {
+  const isReleaseAsset =
+    url.origin === API_ORIGIN &&
+    url.search === "" &&
+    WRITER_RELEASE_ASSET_PATH_PATTERN.test(url.pathname)
+  const hostname = url.hostname.toLowerCase()
+  const isSignedDownload =
+    url.protocol === "https:" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.hash === "" &&
+    (WRITER_SIGNED_DOWNLOAD_HOSTS.has(hostname) || WRITER_SIGNED_AZURE_HOST_PATTERN.test(hostname))
+  return isReleaseAsset || isSignedDownload
+    ? Math.min(configuredMaximum, RECOVERY_ASSET_BYTES)
+    : configuredMaximum
+}
+
+function normalizeStrictWriterResponseHeaders(headers, credential, credentialName) {
+  let iterator
+  try {
+    iterator = Headers.prototype.entries.call(headers)
+  } catch {
+    writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery response headers are malformed")
+  }
+  const normalized = new Headers()
+  let count = 0
+  let totalBytes = 0
+  while (true) {
+    let step
+    try {
+      step = iterator.next()
+    } catch {
+      writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery response headers are malformed")
+    }
+    if (step === null || typeof step !== "object" || typeof step.done !== "boolean") {
+      writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery response headers are malformed")
+    }
+    if (step.done) break
+    if (
+      !Array.isArray(step.value) ||
+      step.value.length !== 2 ||
+      typeof step.value[0] !== "string" ||
+      typeof step.value[1] !== "string"
+    ) {
+      writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery response headers are malformed")
+    }
+    const [name, value] = step.value
+    count += 1
+    totalBytes += Buffer.byteLength(name) + Buffer.byteLength(value)
+    if (count > WRITER_MAX_RESPONSE_HEADERS || totalBytes > WRITER_MAX_RESPONSE_HEADER_BYTES) {
+      writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery response headers are malformed")
+    }
+    if (
+      Buffer.from(name.toLowerCase(), "utf8").includes(credentialName) ||
+      Buffer.from(value, "utf8").includes(credential) ||
+      (name === "location" && decodedLocationContainsCredential(value, credential))
+    ) {
+      writeFail(
+        "REMOTE_CREDENTIAL_CONFLICT",
+        "GitHub recovery response contains configured credentials",
+      )
+    }
+    normalized.append(name, value)
+  }
+  return normalized
+}
+
+function decodedLocationContainsCredential(value, credential) {
+  let decoded = value
+  for (let depth = 0; depth < 4; depth += 1) {
+    const next = decoded.replace(/(?:%[0-9a-f]{2})+/giu, (encoded) => {
+      const octets = encoded.slice(1).split("%").map(hexByte)
+      return new TextDecoder().decode(Uint8Array.from(octets))
+    })
+    if (next === decoded) return false
+    if (Buffer.from(next, "utf8").includes(credential)) return true
+    decoded = next
+  }
+  return false
+}
+
+function hexByte(value) {
+  return Number.parseInt(value, 16)
 }
 
 async function readStrictWriterResponse(body, maximum, credential, deadline) {

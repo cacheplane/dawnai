@@ -35,6 +35,8 @@ const BASE = "https://api.github.com/repos/cacheplane/dawnai"
 const UPLOAD_BASE = "https://uploads.github.com/repos/cacheplane/dawnai"
 const DUPLICATE_ID = 379982100
 const DUPLICATE_TAG = "untagged-a13939767dd2419ade01"
+const SECOND_DUPLICATE_ID = 379986168
+const SECOND_DUPLICATE_TAG = "untagged-20706099efa3c38335a8"
 const WRITER_TITLE = "Dawn v0.8.22"
 
 test("recovery writer exposes only the exact frozen mutation surface", () => {
@@ -1006,6 +1008,133 @@ test("recovery writer applies bounded response controls to every remote read", a
     assert.equal(receipt.status, "existing")
     assert.equal(harness.writeCalls(), 0)
   })
+})
+
+test("recovery writer enforces the 64 KiB evidence limit in its first streaming reader", async (t) => {
+  const fixture = writerFixture()
+  await t.test("a 100 KiB stream is cancelled before full buffering", async () => {
+    let reads = 0
+    let cancellations = 0
+    const harness = writerReadStreamHarness(fixture, {
+      location: "download",
+      response: countedBinaryResponse(100 * 1024, 1024, {
+        onRead: () => {
+          reads += 1
+        },
+        onCancel: () => {
+          cancellations += 1
+        },
+      }),
+    })
+    await assert.rejects(harness.operation())
+    assert.equal(reads, 65)
+    assert.equal(cancellations, 1)
+    assert.equal(harness.writeCalls(), 0)
+  })
+
+  await t.test("an exact 64 KiB stream reaches the downstream byte comparison", async () => {
+    let reads = 0
+    let cancellations = 0
+    const harness = writerReadStreamHarness(fixture, {
+      location: "download",
+      response: countedBinaryResponse(64 * 1024, 1024, {
+        onRead: () => {
+          reads += 1
+        },
+        onCancel: () => {
+          cancellations += 1
+        },
+      }),
+    })
+    await assert.rejects(harness.operation())
+    assert.equal(reads, 65)
+    assert.equal(cancellations, 0)
+    assert.equal(harness.writeCalls(), 0)
+  })
+})
+
+test("recovery writer rejects raw or encoded credentials in redirect headers before follow", async (t) => {
+  const fixture = writerFixture()
+  const token = "secret-token"
+  const encodedToken = [...token]
+    .map((character) => `%${character.codePointAt(0).toString(16).padStart(2, "0")}`)
+    .join("")
+  for (const [label, location] of [
+    ["raw", `https://objects.githubusercontent.com/${token}`],
+    ["percent-encoded", `https://objects.githubusercontent.com/${encodedToken}`],
+  ]) {
+    await t.test(label, async () => {
+      const calls = []
+      const writer = createDuplicateDraftRecoveryWriter({
+        token,
+        fetchImpl: routingFetch(calls, (url) => {
+          if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
+            return jsonResponse(writerRelease(fixture.body))
+          }
+          if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+            return jsonResponse([...fixture.rawAssets, fixture.archiveRawAsset])
+          }
+          if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+            return binaryResponse(new Uint8Array(), 302, { location })
+          }
+          assert.fail(`credential-bearing redirect must not be followed: ${url}`)
+        }),
+      })
+      await assert.rejects(
+        writer.uploadEvidenceAssetIfAbsentAndEqual({
+          expectedSnapshot: fixture.bodyArchivedSnapshot,
+          expectedTagObjectSha: TAG_OBJECT,
+          name: fixture.archiveName,
+          bytes: fixture.archiveBytes,
+          sha256: fixture.archiveSha256,
+        }),
+        (error) => !error.message.includes(token) && !JSON.stringify(error).includes(token),
+      )
+      assert.equal(
+        calls.some(({ url }) => new URL(url).hostname === "objects.githubusercontent.com"),
+        false,
+      )
+    })
+  }
+})
+
+test("recovery writer positive mutations cover both approved duplicate identities", async (t) => {
+  for (const identity of [
+    { releaseId: DUPLICATE_ID, tagName: DUPLICATE_TAG },
+    { releaseId: SECOND_DUPLICATE_ID, tagName: SECOND_DUPLICATE_TAG },
+  ]) {
+    await t.test(String(identity.releaseId), async () => {
+      const fixture = writerFixture(identity)
+      await runPositiveIdentityMutations(fixture)
+    })
+  }
+})
+
+test("recovery writer rejects each approved Release ID paired with the other opaque tag", async () => {
+  let calls = 0
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    fetchImpl: async () => {
+      calls += 1
+      assert.fail("swapped duplicate identity must fail before network access")
+    },
+  })
+  for (const identity of [
+    { releaseId: DUPLICATE_ID, tagName: SECOND_DUPLICATE_TAG },
+    { releaseId: SECOND_DUPLICATE_ID, tagName: DUPLICATE_TAG },
+  ]) {
+    const fixture = writerFixture(identity)
+    await assert.rejects(writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture)))
+    await assert.rejects(
+      writer.quarantineDuplicateBodyIfCurrent({
+        expectedSnapshot: fixture.receiptArchivedSnapshot,
+        expectedTagObjectSha: TAG_OBJECT,
+        expectedBodySha256: fixture.archiveSha256,
+        expectedNotice: fixture.notice,
+      }),
+    )
+  }
+  assert.equal(calls, 0)
 })
 
 test("recovery writer never sends configured credential bytes as evidence or notice content", async () => {
@@ -2351,10 +2480,10 @@ function candidateTagObject() {
   }
 }
 
-function writerRelease(body) {
+function writerRelease(body, { releaseId = DUPLICATE_ID, tagName = DUPLICATE_TAG } = {}) {
   return {
-    id: DUPLICATE_ID,
-    tag_name: DUPLICATE_TAG,
+    id: releaseId,
+    tag_name: tagName,
     name: WRITER_TITLE,
     body,
     draft: true,
@@ -2364,7 +2493,7 @@ function writerRelease(body) {
   }
 }
 
-function writerFixture() {
+function writerFixture({ releaseId = DUPLICATE_ID, tagName = DUPLICATE_TAG } = {}) {
   const manifest = writerManifest()
   const manifestSha256 = sha256(canonicalManifestBytes(manifest))
   const subjects = [
@@ -2423,15 +2552,15 @@ function writerFixture() {
   const body = canonicalReleaseBody({ marker, manifest })
   const archiveBytes = Buffer.from(body)
   const archiveSha256 = sha256(archiveBytes)
-  const archiveName = originalBodyAssetName(DUPLICATE_ID, archiveSha256)
-  const receiptName = recoveryReceiptAssetName(DUPLICATE_ID)
+  const archiveName = originalBodyAssetName(releaseId, archiveSha256)
+  const receiptName = recoveryReceiptAssetName(releaseId)
   const receiptBytes = canonicalRecoveryReceipt({
     repository: "cacheplane/dawnai",
     version: "0.8.22",
     candidateSha: CANDIDATE_SHA,
     recoveryCommit: REVIEWED_COMMIT,
     canonicalReleaseId: 379991871,
-    duplicateReleaseId: DUPLICATE_ID,
+    duplicateReleaseId: releaseId,
     originalBodySha256: archiveSha256,
     baseAssetSetSha256,
     archiveAsset: { name: archiveName, sha256: archiveSha256 },
@@ -2441,7 +2570,7 @@ function writerFixture() {
     repository: "cacheplane/dawnai",
     version: "0.8.22",
     canonicalReleaseId: 379991871,
-    duplicateReleaseId: DUPLICATE_ID,
+    duplicateReleaseId: releaseId,
     originalBodySha256: archiveSha256,
     archiveAssetName: archiveName,
     receiptAssetName: receiptName,
@@ -2456,8 +2585,8 @@ function writerFixture() {
   const archiveRawAsset = asset(1001, archiveName, archiveBytes)
   const receiptRawAsset = asset(1002, receiptName, receiptBytes)
   const snapshotBase = {
-    releaseId: DUPLICATE_ID,
-    tagName: DUPLICATE_TAG,
+    releaseId,
+    tagName,
     body,
     marker: parseReleaseMarker(body),
     assets: normalizedAssets,
@@ -2470,6 +2599,8 @@ function writerFixture() {
     bytes: receiptBytes.toString("utf8"),
   }
   return {
+    releaseId,
+    tagName,
     body,
     rawAssets,
     archiveBytes,
@@ -2656,6 +2787,85 @@ function uploadInput(fixture) {
     bytes: fixture.archiveBytes,
     sha256: fixture.archiveSha256,
   }
+}
+
+async function runPositiveIdentityMutations(fixture) {
+  let evidenceAssets = 0
+  let quarantined = false
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    now: () => Date.parse("2026-09-02T17:00:00Z"),
+    fetchImpl: async (url, init) => {
+      if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) return jsonResponse(candidateTagRef())
+      if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
+      if (url === `${BASE}/releases/${fixture.releaseId}` && init.method === "PATCH") {
+        quarantined = true
+        return jsonResponse(
+          writerRelease(fixture.notice, {
+            releaseId: fixture.releaseId,
+            tagName: fixture.tagName,
+          }),
+        )
+      }
+      if (url === `${BASE}/releases/${fixture.releaseId}`) {
+        return jsonResponse(
+          writerRelease(quarantined ? fixture.notice : fixture.body, {
+            releaseId: fixture.releaseId,
+            tagName: fixture.tagName,
+          }),
+        )
+      }
+      if (url === `${BASE}/releases/${fixture.releaseId}/assets?per_page=100`) {
+        return jsonResponse([
+          ...fixture.rawAssets,
+          ...(evidenceAssets >= 1 ? [fixture.archiveRawAsset] : []),
+          ...(evidenceAssets >= 2 ? [fixture.receiptRawAsset] : []),
+        ])
+      }
+      if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+        return binaryResponse(fixture.archiveBytes)
+      }
+      if (url === `${BASE}/releases/assets/${fixture.receiptRawAsset.id}`) {
+        return binaryResponse(fixture.receiptBytes)
+      }
+      if (
+        url ===
+        `${UPLOAD_BASE}/releases/${fixture.releaseId}/assets?name=${encodeURIComponent(fixture.archiveName)}`
+      ) {
+        evidenceAssets = 1
+        return jsonResponse({ ...fixture.archiveRawAsset, state: "uploaded" }, 201)
+      }
+      if (
+        url ===
+        `${UPLOAD_BASE}/releases/${fixture.releaseId}/assets?name=${encodeURIComponent(recoveryReceiptAssetName(fixture.releaseId))}`
+      ) {
+        evidenceAssets = 2
+        return jsonResponse({ ...fixture.receiptRawAsset, state: "uploaded" }, 201)
+      }
+      assert.fail(`unexpected URL ${url}`)
+    },
+  })
+
+  const archive = await writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture))
+  assert.equal(archive.releaseId, fixture.releaseId)
+  assert.equal(archive.status, "uploaded")
+  const receipt = await writer.uploadEvidenceAssetIfAbsentAndEqual({
+    expectedSnapshot: fixture.bodyArchivedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
+    name: recoveryReceiptAssetName(fixture.releaseId),
+    bytes: fixture.receiptBytes,
+    sha256: sha256(fixture.receiptBytes),
+  })
+  assert.equal(receipt.releaseId, fixture.releaseId)
+  assert.equal(receipt.status, "uploaded")
+  const quarantine = await writer.quarantineDuplicateBodyIfCurrent({
+    expectedSnapshot: fixture.receiptArchivedSnapshot,
+    expectedTagObjectSha: TAG_OBJECT,
+    expectedBodySha256: fixture.archiveSha256,
+    expectedNotice: fixture.notice,
+  })
+  assert.equal(quarantine.releaseId, fixture.releaseId)
+  assert.equal(quarantine.outcome, "performed")
 }
 
 function uploadStreamHarness(
@@ -2845,6 +3055,31 @@ function streamResponse(read, status = 201, headers = {}) {
     body: {
       getReader() {
         return { read, cancel: async () => {}, releaseLock() {} }
+      },
+    },
+  }
+}
+
+function countedBinaryResponse(totalBytes, chunkBytes, { onRead, onCancel }) {
+  let offset = 0
+  return {
+    status: 200,
+    headers: new Headers({ "content-type": "application/octet-stream" }),
+    body: {
+      getReader() {
+        return {
+          async read() {
+            onRead()
+            if (offset === totalBytes) return { done: true, value: undefined }
+            const size = Math.min(chunkBytes, totalBytes - offset)
+            offset += size
+            return { done: false, value: Buffer.alloc(size, 120) }
+          },
+          async cancel() {
+            onCancel()
+          },
+          releaseLock() {},
+        }
       },
     },
   }
