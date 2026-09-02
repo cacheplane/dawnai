@@ -9,13 +9,20 @@ import {
   DEFAULT_HTTP_TIMEOUT_MS,
 } from "./adapters/http.mjs"
 import { createNpmReader } from "./adapters/npm.mjs"
-import { DUPLICATE_DRAFT_RECOVERY_POLICY } from "./duplicate-draft-recovery.mjs"
+import {
+  canonicalRecoveryNotice,
+  canonicalRecoveryReceipt,
+  DUPLICATE_DRAFT_RECOVERY_POLICY,
+  originalBodyAssetName,
+  recoveryReceiptAssetName,
+} from "./duplicate-draft-recovery.mjs"
 import { parseReleaseMarker } from "./metadata.mjs"
 
 const OWNER = "cacheplane"
 const REPOSITORY = "dawnai"
 const REPOSITORY_ID = "1210070282"
 const API_ORIGIN = "https://api.github.com"
+const UPLOAD_ORIGIN = "https://uploads.github.com"
 const API_VERSION = "2022-11-28"
 const RELEASE_WORKFLOW_ID = 260503756
 const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml"
@@ -28,6 +35,13 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const MAX_PAGES = 100
 const MAX_RECORDS = 10_000
 const RECOVERY_ASSET_BYTES = 64 * 1024
+const WRITER_MAX_TIMEOUT_MS = 300_000
+const WRITER_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+const WRITER_TITLE = `Dawn v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}`
+const DUPLICATE_TAG_BY_ID = new Map(
+  DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.map(({ releaseId, tagName }) => [releaseId, tagName]),
+)
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const NONTERMINAL_STATUSES = new Set(["requested", "waiting", "pending", "queued", "in_progress"])
 const RUN_STATUSES = new Set([...NONTERMINAL_STATUSES, "completed"])
 const JOB_STATUSES = new Set(["waiting", "pending", "queued", "in_progress", "completed"])
@@ -337,6 +351,818 @@ export function createDuplicateDraftRecoveryReader({
       return deepFreeze(candidates.sort((left, right) => left.releaseId - right.releaseId))
     },
   })
+}
+
+/** Build the immutable, candidate-specific production mutation boundary. */
+export function createDuplicateDraftRecoveryWriter(options = {}) {
+  const config = snapshotWriterOptions(options)
+  const token = config.token
+  const fetchImpl = config.fetchImpl ?? fetch
+  const timeoutMs = config.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS
+  const maxResponseBytes = config.maxResponseBytes ?? WRITER_MAX_RESPONSE_BYTES
+  if (
+    typeof token !== "string" ||
+    token.length === 0 ||
+    token.length > 4096 ||
+    hasUnsafeTokenCharacters(token)
+  ) {
+    throw new TypeError("Invalid GitHub token")
+  }
+  if (typeof fetchImpl !== "function") throw new TypeError("Recovery writer fetch is invalid")
+  assertBoundedInteger(timeoutMs, 1, WRITER_MAX_TIMEOUT_MS, "Recovery writer timeout")
+  assertBoundedInteger(
+    maxResponseBytes,
+    1,
+    WRITER_MAX_RESPONSE_BYTES,
+    "Recovery writer response limit",
+  )
+  const github = createGitHubReader({
+    owner: OWNER,
+    repo: REPOSITORY,
+    repositoryId: REPOSITORY_ID,
+    token,
+    fetchImpl,
+    timeoutMs,
+    maxResponseBytes,
+    now: Date.now,
+    maxPages: MAX_PAGES,
+    maxRecords: MAX_RECORDS,
+  })
+  const http = createHttpGet({ fetchImpl, timeoutMs, maxResponseBytes })
+  const context = Object.freeze({
+    token,
+    github,
+    http,
+    fetchImpl,
+    timeoutMs,
+    maxResponseBytes,
+    now: Date.now,
+  })
+
+  return Object.freeze({
+    async uploadEvidenceAssetIfAbsentAndEqual(input) {
+      const args = snapshotRecoveryAssetInput(input, token)
+      const expected = normalizeExpectedWriterSnapshot(args.expectedSnapshot)
+      const releaseId = expected.releaseId
+      const kind = validateEvidenceUpload(expected, args)
+      await verifyRecoveryCandidateTag(context)
+      const current = await readExpectedWriterSnapshot(context, expected, expected.body)
+      const existing = current.assets.find((asset) => asset.name === args.name) ?? null
+      if (existing !== null) {
+        assertExistingEvidenceAsset(existing, args, kind)
+        await verifyRecoveryCandidateTag(context)
+        return deepFreeze({
+          releaseId,
+          assetId: existing.id,
+          name: args.name,
+          status: "existing",
+          sha256: args.sha256,
+        })
+      }
+
+      const response = await requestRecoveryJson(context, {
+        url: `${UPLOAD_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/${releaseId}/assets?name=${encodeURIComponent(args.name)}`,
+        method: "POST",
+        bytes: args.bytes,
+        contentType: "application/octet-stream",
+        maximumRequestBytes: RECOVERY_ASSET_BYTES,
+      })
+      if (response.httpStatus !== 201) {
+        writeFail("EVIDENCE_UPLOAD_REJECTED", "GitHub evidence upload did not return HTTP 201")
+      }
+      const created = normalizeUploadResponse(response.body, args)
+      const appendedAsset = {
+        id: created.id,
+        name: args.name,
+        sha256: args.sha256,
+        ...(kind === "receipt" ? { bytes: args.bytes.toString("utf8") } : {}),
+      }
+      const expectedAfter = {
+        ...current,
+        assets: [...current.assets, appendedAsset],
+        evidenceAssets: [...current.evidenceAssets, kind],
+      }
+      await readExpectedWriterSnapshot(context, expectedAfter, current.body)
+      await verifyRecoveryCandidateTag(context)
+      return deepFreeze({
+        releaseId,
+        assetId: created.id,
+        name: args.name,
+        status: "uploaded",
+        sha256: args.sha256,
+      })
+    },
+
+    async quarantineDuplicateBodyIfCurrent(input) {
+      const args = snapshotExactWriterInput(
+        input,
+        ["expectedSnapshot", "expectedBodySha256", "expectedNotice"],
+        "quarantine",
+      )
+      const expected = normalizeExpectedWriterSnapshot(args.expectedSnapshot)
+      if (Buffer.from(args.expectedNotice, "utf8").includes(Buffer.from(token, "utf8"))) {
+        throw new TypeError("Recovery notice contains configured credentials")
+      }
+      validateQuarantineInput(expected, args)
+      await verifyRecoveryCandidateTag(context)
+      const current = await readExpectedWriterSnapshot(context, expected, expected.body)
+      const response = await requestRecoveryJson(context, {
+        url: `${API_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/${current.releaseId}`,
+        method: "PATCH",
+        body: { body: args.expectedNotice },
+        contentType: "application/json",
+        maximumRequestBytes: 16 * 1024,
+      })
+      if (response.httpStatus !== 200) {
+        writeFail("QUARANTINE_PATCH_REJECTED", "GitHub quarantine update did not return HTTP 200")
+      }
+      normalizePatchResponse(response.body, current, args.expectedNotice)
+      const expectedAfter = {
+        ...current,
+        body: args.expectedNotice,
+        marker: null,
+      }
+      await readExpectedWriterSnapshot(context, expectedAfter, current.body)
+      await verifyRecoveryCandidateTag(context)
+      return deepFreeze({
+        releaseId: current.releaseId,
+        status: "quarantined",
+        bodySha256: sha256(args.expectedNotice),
+      })
+    },
+  })
+}
+
+function snapshotWriterOptions(value) {
+  if (!isPlainObject(value)) throw new TypeError("Recovery writer options schema is invalid")
+  const allowed = new Set(["token", "fetchImpl", "timeoutMs", "maxResponseBytes"])
+  const result = {}
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !allowed.has(key)) {
+      throw new TypeError("Recovery writer options schema is invalid")
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!isEnumerableData(descriptor)) {
+      throw new TypeError("Recovery writer options contain an accessor")
+    }
+    result[key] = descriptor.value
+  }
+  return result
+}
+
+function snapshotRecoveryAssetInput(value, token) {
+  if (!isPlainObject(value)) throw new TypeError("Recovery asset input schema is invalid")
+  const expectedFields = ["expectedSnapshot", "name", "bytes", "sha256"]
+  assertExactDataFields(value, expectedFields, "Recovery asset input")
+  const bytes = Object.getOwnPropertyDescriptor(value, "bytes").value
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.byteLength < 1 ||
+    bytes.byteLength > RECOVERY_ASSET_BYTES
+  ) {
+    throw new TypeError("Recovery evidence bytes are invalid")
+  }
+  const copied = Buffer.from(bytes)
+  if (copied.includes(Buffer.from(token, "utf8"))) {
+    throw new TypeError("Recovery evidence bytes contain configured credentials")
+  }
+  return {
+    expectedSnapshot: snapshotJson(
+      Object.getOwnPropertyDescriptor(value, "expectedSnapshot").value,
+    ),
+    name: Object.getOwnPropertyDescriptor(value, "name").value,
+    bytes: copied,
+    sha256: Object.getOwnPropertyDescriptor(value, "sha256").value,
+  }
+}
+
+function snapshotExactWriterInput(value, fields, label) {
+  if (!isPlainObject(value)) throw new TypeError(`${label} input schema is invalid`)
+  assertExactDataFields(value, fields, `${label} input`)
+  const source = {}
+  for (const field of fields) source[field] = Object.getOwnPropertyDescriptor(value, field).value
+  try {
+    return deepFreeze(snapshotJson(source))
+  } catch {
+    throw new TypeError(`${label} input schema is invalid`)
+  }
+}
+
+function assertExactDataFields(value, fields, label) {
+  const keys = Reflect.ownKeys(value)
+  if (
+    keys.length !== fields.length ||
+    keys.some((key) => typeof key !== "string" || !fields.includes(key)) ||
+    fields.some((field) => !isEnumerableData(Object.getOwnPropertyDescriptor(value, field)))
+  ) {
+    throw new TypeError(`${label} schema is invalid`)
+  }
+}
+
+function isEnumerableData(descriptor) {
+  return (
+    descriptor?.enumerable === true &&
+    "value" in descriptor &&
+    descriptor.get === undefined &&
+    descriptor.set === undefined
+  )
+}
+
+function normalizeExpectedWriterSnapshot(value) {
+  let snapshot
+  try {
+    snapshot = snapshotJson(value)
+  } catch {
+    throw new TypeError("Expected recovery snapshot is invalid")
+  }
+  const fields = ["releaseId", "tagName", "body", "marker", "assets", "evidenceAssets"]
+  if (!hasExactFields(snapshot, fields)) {
+    throw new TypeError("Expected recovery snapshot schema is invalid")
+  }
+  const expectedTag = DUPLICATE_TAG_BY_ID.get(snapshot.releaseId)
+  if (expectedTag === undefined || snapshot.tagName !== expectedTag) {
+    throw new TypeError("Recovery mutation target is not an approved duplicate Release")
+  }
+  if (!isBoundedText(snapshot.body, 512 * 1024, true)) {
+    throw new TypeError("Expected recovery body is invalid")
+  }
+  if (!Array.isArray(snapshot.assets) || !Array.isArray(snapshot.evidenceAssets)) {
+    throw new TypeError("Expected recovery asset inventory is invalid")
+  }
+  const expectedKinds = snapshot.evidenceAssets
+  if (
+    expectedKinds.length > 2 ||
+    expectedKinds.some((kind) => kind !== "body" && kind !== "receipt") ||
+    new Set(expectedKinds).size !== expectedKinds.length ||
+    (expectedKinds.includes("receipt") && !expectedKinds.includes("body"))
+  ) {
+    throw new TypeError("Expected recovery evidence state is invalid")
+  }
+  const names = new Set()
+  const ids = new Set()
+  for (const asset of snapshot.assets) {
+    if (
+      !isObject(asset) ||
+      ![3, 4].includes(Object.keys(asset).length) ||
+      !hasExactFields(
+        asset,
+        Object.hasOwn(asset, "bytes")
+          ? ["id", "name", "sha256", "bytes"]
+          : ["id", "name", "sha256"],
+      ) ||
+      !Number.isSafeInteger(asset.id) ||
+      asset.id < 1 ||
+      typeof asset.name !== "string" ||
+      !ASSET_NAME_PATTERN.test(asset.name) ||
+      !SHA256_PATTERN.test(asset.sha256) ||
+      names.has(asset.name) ||
+      ids.has(asset.id) ||
+      (Object.hasOwn(asset, "bytes") && typeof asset.bytes !== "string")
+    ) {
+      throw new TypeError("Expected recovery asset inventory is invalid")
+    }
+    names.add(asset.name)
+    ids.add(asset.id)
+  }
+  if (snapshot.assets.length !== 45 + expectedKinds.length) {
+    throw new TypeError("Expected recovery asset inventory is incomplete")
+  }
+  return deepFreeze(snapshot)
+}
+
+function validateEvidenceUpload(snapshot, args) {
+  validateEscrowedSnapshot(snapshot)
+  if (typeof args.sha256 !== "string" || !SHA256_PATTERN.test(args.sha256)) {
+    throw new TypeError("Recovery evidence digest is invalid")
+  }
+  if (sha256(args.bytes) !== args.sha256) {
+    throw new TypeError("Recovery evidence input digest is not exact")
+  }
+  const bodySha256 = sha256(snapshot.body)
+  const archiveName = originalBodyAssetName(snapshot.releaseId, bodySha256)
+  const receiptName = recoveryReceiptAssetName(snapshot.releaseId)
+  if (args.name === archiveName) {
+    if (!args.bytes.equals(Buffer.from(snapshot.body, "utf8"))) {
+      throw new TypeError("Original-body archive bytes are not exact")
+    }
+    if (!["", "body"].includes(snapshot.evidenceAssets.join(","))) {
+      throw new TypeError("Original-body archive state is not recognized")
+    }
+    return "body"
+  }
+  if (args.name === receiptName) {
+    if (!["body", "body,receipt"].includes(snapshot.evidenceAssets.join(","))) {
+      throw new TypeError("Recovery receipt state is not recognized")
+    }
+    const receipt = parseCanonicalRecoveryReceipt(args.bytes)
+    if (
+      receipt.duplicateReleaseId !== snapshot.releaseId ||
+      receipt.originalBodySha256 !== bodySha256 ||
+      receipt.baseAssetSetSha256 !== snapshot.marker.baseAssetSetSha256 ||
+      receipt.archiveAsset.name !== archiveName ||
+      receipt.archiveAsset.sha256 !== bodySha256
+    ) {
+      throw new TypeError("Recovery receipt is not derived from the candidate snapshot")
+    }
+    return "receipt"
+  }
+  throw new TypeError("Recovery evidence asset name is not candidate-derived")
+}
+
+function validateEscrowedSnapshot(snapshot) {
+  let parsed
+  try {
+    parsed = parseReleaseMarker(snapshot.body)
+  } catch {
+    throw new TypeError("Expected duplicate Release body is not canonical")
+  }
+  if (
+    !sameJson(parsed, snapshot.marker) ||
+    parsed.phase !== "ESCROWED" ||
+    parsed.version !== DUPLICATE_DRAFT_RECOVERY_POLICY.version ||
+    parsed.commitSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha ||
+    parsed.tag !== CANDIDATE_TAG ||
+    typeof parsed.baseAssetSetSha256 !== "string" ||
+    !SHA256_PATTERN.test(parsed.baseAssetSetSha256)
+  ) {
+    throw new TypeError("Expected duplicate Release marker is not the approved candidate")
+  }
+  const originalAssets = snapshot.assets.slice(0, 45)
+  const baseAssetSetSha256 = sha256(
+    `${JSON.stringify(originalAssets.map(({ name, sha256: digest }) => ({ name, sha256: digest })))}\n`,
+  )
+  if (baseAssetSetSha256 !== parsed.baseAssetSetSha256) {
+    throw new TypeError("Expected duplicate Release asset inventory is not exact")
+  }
+  const bodySha256 = sha256(snapshot.body)
+  const archiveName = originalBodyAssetName(snapshot.releaseId, bodySha256)
+  const receiptName = recoveryReceiptAssetName(snapshot.releaseId)
+  for (const [index, kind] of snapshot.evidenceAssets.entries()) {
+    const asset = snapshot.assets[45 + index]
+    if (kind === "body") {
+      if (
+        asset.name !== archiveName ||
+        asset.sha256 !== bodySha256 ||
+        Object.hasOwn(asset, "bytes")
+      ) {
+        throw new TypeError("Expected original-body archive asset is not exact")
+      }
+      continue
+    }
+    if (
+      asset.name !== receiptName ||
+      typeof asset.bytes !== "string" ||
+      sha256(asset.bytes) !== asset.sha256
+    ) {
+      throw new TypeError("Expected recovery receipt asset is not exact")
+    }
+    const receipt = parseCanonicalRecoveryReceipt(Buffer.from(asset.bytes, "utf8"))
+    if (
+      receipt.duplicateReleaseId !== snapshot.releaseId ||
+      receipt.originalBodySha256 !== bodySha256 ||
+      receipt.baseAssetSetSha256 !== parsed.baseAssetSetSha256 ||
+      receipt.archiveAsset.name !== archiveName ||
+      receipt.archiveAsset.sha256 !== bodySha256
+    ) {
+      throw new TypeError("Expected recovery receipt asset is not candidate-derived")
+    }
+  }
+}
+
+function parseCanonicalRecoveryReceipt(bytes) {
+  let parsed
+  try {
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+  } catch {
+    throw new TypeError("Recovery receipt bytes are malformed")
+  }
+  if (
+    !hasExactFields(parsed, [
+      "schemaVersion",
+      "repository",
+      "version",
+      "candidateSha",
+      "recoveryCommit",
+      "canonicalReleaseId",
+      "duplicateReleaseId",
+      "originalBodySha256",
+      "baseAssetSetSha256",
+      "archiveAsset",
+    ]) ||
+    parsed.schemaVersion !== 1
+  ) {
+    throw new TypeError("Recovery receipt schema is invalid")
+  }
+  const input = { ...parsed }
+  delete input.schemaVersion
+  let canonical
+  try {
+    canonical = canonicalRecoveryReceipt(input)
+  } catch {
+    throw new TypeError("Recovery receipt is not candidate-derived")
+  }
+  if (!canonical.equals(bytes)) throw new TypeError("Recovery receipt bytes are not canonical")
+  return parsed
+}
+
+function validateQuarantineInput(snapshot, args) {
+  validateEscrowedSnapshot(snapshot)
+  if (snapshot.evidenceAssets.join(",") !== "body,receipt") {
+    throw new TypeError("Duplicate Release is not ready for quarantine")
+  }
+  if (
+    typeof args.expectedBodySha256 !== "string" ||
+    !SHA256_PATTERN.test(args.expectedBodySha256) ||
+    sha256(snapshot.body) !== args.expectedBodySha256
+  ) {
+    throw new TypeError("Expected duplicate Release body digest is stale")
+  }
+  if (typeof args.expectedNotice !== "string") {
+    throw new TypeError("Expected recovery notice is invalid")
+  }
+  let notice
+  try {
+    notice = JSON.parse(args.expectedNotice)
+  } catch {
+    throw new TypeError("Expected recovery notice is malformed")
+  }
+  if (
+    !hasExactFields(notice, [
+      "schemaVersion",
+      "type",
+      "repository",
+      "version",
+      "candidateSha",
+      "canonicalReleaseId",
+      "duplicateReleaseId",
+      "originalBodySha256",
+      "archiveAssetName",
+      "receiptAssetName",
+      "receiptSha256",
+    ])
+  ) {
+    throw new TypeError("Expected recovery notice schema is invalid")
+  }
+  const noticeInput = { ...notice }
+  delete noticeInput.schemaVersion
+  delete noticeInput.type
+  delete noticeInput.candidateSha
+  let canonical
+  try {
+    canonical = canonicalRecoveryNotice(noticeInput)
+  } catch {
+    throw new TypeError("Expected recovery notice is not candidate-derived")
+  }
+  const archive = snapshot.assets.at(-2)
+  const receipt = snapshot.assets.at(-1)
+  if (
+    canonical !== args.expectedNotice ||
+    notice.originalBodySha256 !== args.expectedBodySha256 ||
+    archive.name !== notice.archiveAssetName ||
+    archive.sha256 !== notice.originalBodySha256 ||
+    receipt.name !== notice.receiptAssetName ||
+    receipt.sha256 !== notice.receiptSha256 ||
+    receipt.bytes === undefined ||
+    sha256(receipt.bytes) !== receipt.sha256
+  ) {
+    throw new TypeError("Expected recovery notice does not match the complete snapshot")
+  }
+}
+
+async function verifyRecoveryCandidateTag(context) {
+  try {
+    const ref = requirePresent(
+      await context.github.getRef({ ref: `tags/${CANDIDATE_TAG}` }),
+      "CANDIDATE_TAG_UNAVAILABLE",
+      "Candidate tag could not be verified",
+    )
+    if (
+      !isObject(ref) ||
+      ref.ref !== `refs/tags/${CANDIDATE_TAG}` ||
+      !isObject(ref.object) ||
+      ref.object.type !== "tag" ||
+      !isSha(ref.object.sha)
+    ) {
+      writeFail("CANDIDATE_TAG_CONFLICT", "Candidate tag identity is not exact")
+    }
+    const tag = requirePresent(
+      await context.github.getGitTag({ tagSha: ref.object.sha }),
+      "CANDIDATE_TAG_UNAVAILABLE",
+      "Candidate tag could not be verified",
+    )
+    if (
+      !isObject(tag) ||
+      tag.sha !== ref.object.sha ||
+      tag.tag !== CANDIDATE_TAG ||
+      !isObject(tag.object) ||
+      tag.object.type !== "commit" ||
+      tag.object.sha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha
+    ) {
+      writeFail("CANDIDATE_TAG_CONFLICT", "Candidate tag identity is not exact")
+    }
+  } catch (error) {
+    if (error instanceof DuplicateDraftRecoveryWriteError) throw error
+    writeFail("CANDIDATE_TAG_UNAVAILABLE", "Candidate tag could not be verified")
+  }
+}
+
+async function readExpectedWriterSnapshot(context, expected, originalBody) {
+  try {
+    const release = requirePresent(
+      await context.github.getRelease({ releaseId: expected.releaseId }),
+      "RELEASE_UNAVAILABLE",
+      "Release snapshot could not be verified",
+    )
+    const raw = safeRemoteSnapshot(release, context.token, "RELEASE_MALFORMED")
+    if (raw.name !== WRITER_TITLE) {
+      writeFail("RELEASE_TITLE_CONFLICT", "Duplicate Release title is not exact")
+    }
+    const rawAssets = await readStrictPages(context, {
+      path: `/repos/${OWNER}/${REPOSITORY}/releases/${expected.releaseId}/assets?per_page=100`,
+      operation: "RECOVERY_WRITE_ASSETS",
+    })
+    const current = await normalizeReleaseSnapshot({
+      release: raw,
+      rawAssets,
+      releaseId: expected.releaseId,
+      expectedOriginalBody: originalBody,
+      github: context.github,
+      token: context.token,
+    })
+    if (!sameJson(current, expected)) {
+      writeFail("RELEASE_SNAPSHOT_CONFLICT", "Duplicate Release snapshot drifted")
+    }
+    return current
+  } catch (error) {
+    if (error instanceof DuplicateDraftRecoveryWriteError) throw error
+    writeFail("RELEASE_SNAPSHOT_UNAVAILABLE", "Duplicate Release snapshot could not be verified")
+  }
+}
+
+function assertExistingEvidenceAsset(asset, args, kind) {
+  if (asset.sha256 !== args.sha256) {
+    writeFail("EVIDENCE_ASSET_CONFLICT", "Existing recovery evidence asset digest differs")
+  }
+  if (kind === "receipt" && asset.bytes !== args.bytes.toString("utf8")) {
+    writeFail("EVIDENCE_ASSET_CONFLICT", "Existing recovery evidence asset bytes differ")
+  }
+}
+
+function normalizeUploadResponse(value, args) {
+  const response = safeWriteResponse(value, "EVIDENCE_UPLOAD_RESPONSE_MALFORMED")
+  if (
+    !isObject(response) ||
+    !Number.isSafeInteger(response.id) ||
+    response.id < 1 ||
+    response.name !== args.name ||
+    response.digest !== `sha256:${args.sha256}` ||
+    response.size !== args.bytes.byteLength ||
+    response.state !== "uploaded"
+  ) {
+    writeFail("EVIDENCE_UPLOAD_RESPONSE_MALFORMED", "Evidence upload response is malformed")
+  }
+  return { id: response.id }
+}
+
+function normalizePatchResponse(value, current, expectedNotice) {
+  const response = safeWriteResponse(value, "QUARANTINE_RESPONSE_MALFORMED")
+  if (
+    !isObject(response) ||
+    response.id !== current.releaseId ||
+    response.tag_name !== current.tagName ||
+    response.name !== WRITER_TITLE ||
+    response.body !== expectedNotice ||
+    response.draft !== true ||
+    response.prerelease !== false ||
+    response.immutable !== false ||
+    response.target_commitish !== "main"
+  ) {
+    writeFail("QUARANTINE_RESPONSE_MALFORMED", "Quarantine response is malformed")
+  }
+}
+
+function safeWriteResponse(value, code) {
+  try {
+    return snapshotJson(value)
+  } catch {
+    writeFail(code, "GitHub write response is malformed")
+  }
+}
+
+async function requestRecoveryJson(
+  context,
+  { url, method, body, bytes: suppliedBytes, contentType, maximumRequestBytes },
+) {
+  const expectedApiUrl = `${API_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/`
+  const expectedUploadUrl = `${UPLOAD_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/`
+  if (
+    !["POST", "PATCH"].includes(method) ||
+    (method === "POST" ? !url.startsWith(expectedUploadUrl) : !url.startsWith(expectedApiUrl))
+  ) {
+    throw new TypeError("Recovery writer URL or method is not allowed")
+  }
+  const requestBytes =
+    suppliedBytes === undefined
+      ? Buffer.from(JSON.stringify(canonicalize(body)), "utf8")
+      : Buffer.from(suppliedBytes)
+  if (requestBytes.byteLength < 1 || requestBytes.byteLength > maximumRequestBytes) {
+    throw new TypeError("Recovery write request exceeds its byte limit")
+  }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), context.timeoutMs)
+  try {
+    let response
+    try {
+      response = await fetchRecoveryWrite(
+        context.fetchImpl,
+        url,
+        {
+          method,
+          redirect: "manual",
+          headers: {
+            Accept: "application/vnd.github+json",
+            "Content-Type": contentType,
+            "X-GitHub-Api-Version": API_VERSION,
+            Authorization: `Bearer ${context.token}`,
+          },
+          body: requestBytes,
+          signal: controller.signal,
+        },
+        controller.signal,
+      )
+    } catch {
+      writeFail(
+        controller.signal.aborted ? "WRITE_TIMEOUT" : "WRITE_UNAVAILABLE",
+        controller.signal.aborted
+          ? "GitHub recovery write timed out"
+          : "GitHub recovery write failed",
+      )
+    }
+    if (!Number.isInteger(response?.status) || response.status < 100 || response.status > 599) {
+      cancelResponseBody(response?.body)
+      writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery write response is malformed")
+    }
+    if (response.status >= 300 && response.status < 400) {
+      cancelResponseBody(response.body)
+      writeFail("WRITE_REDIRECT_FORBIDDEN", "GitHub recovery write redirects are forbidden")
+    }
+    const responseBytes = await readBoundedWriteResponse(
+      response.body,
+      context.maxResponseBytes,
+      controller.signal,
+    )
+    if (responseBytes.byteLength === 0) {
+      return { httpStatus: response.status, body: null }
+    }
+    const responseContentType = response.headers?.get?.("content-type")
+    if (
+      typeof responseContentType !== "string" ||
+      !/^application\/(?:[A-Za-z0-9!#$&^_.+-]+\+)?json(?:\s*;|\s*$)/iu.test(responseContentType)
+    ) {
+      writeFail("WRITE_CONTENT_TYPE_CONFLICT", "GitHub recovery write response is not JSON")
+    }
+    let parsed
+    try {
+      parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(responseBytes))
+    } catch {
+      writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery write response JSON is malformed")
+    }
+    return {
+      httpStatus: response.status,
+      body: safeRemoteSnapshot(parsed, context.token, "WRITE_RESPONSE_MALFORMED"),
+    }
+  } catch (error) {
+    if (error instanceof DuplicateDraftRecoveryWriteError) throw error
+    writeFail(
+      controller.signal.aborted ? "WRITE_TIMEOUT" : "WRITE_RESPONSE_MALFORMED",
+      controller.signal.aborted
+        ? "GitHub recovery write timed out"
+        : "GitHub recovery write response is malformed",
+    )
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function fetchRecoveryWrite(fetchImpl, url, init, signal) {
+  let rejectAbort
+  const aborted = new Promise((_resolve, reject) => {
+    rejectAbort = () =>
+      reject(
+        new DuplicateDraftRecoveryWriteError("WRITE_TIMEOUT", "GitHub recovery write timed out"),
+      )
+    signal.addEventListener("abort", rejectAbort, { once: true })
+  })
+  try {
+    return await Promise.race([fetchImpl(url, init), aborted])
+  } finally {
+    signal.removeEventListener("abort", rejectAbort)
+  }
+}
+
+async function readBoundedWriteResponse(stream, maximum, signal) {
+  if (stream === null) return Buffer.alloc(0)
+  if (stream === undefined || typeof stream.getReader !== "function") {
+    writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery write response body is malformed")
+  }
+  const reader = stream.getReader()
+  const chunks = []
+  let total = 0
+  try {
+    while (true) {
+      if (signal.aborted) writeFail("WRITE_TIMEOUT", "GitHub recovery write timed out")
+      const { done, value } = await readRecoveryWriteChunk(reader, signal)
+      if (done) break
+      if (!(value instanceof Uint8Array)) {
+        writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery write response body is malformed")
+      }
+      total += value.byteLength
+      if (total > maximum) {
+        writeFail("WRITE_RESPONSE_OVER_LIMIT", "GitHub recovery write response exceeds byte limit")
+      }
+      chunks.push(Buffer.from(value))
+    }
+  } catch (error) {
+    void reader.cancel().catch(() => {})
+    throw error
+  }
+  return Buffer.concat(chunks, total)
+}
+
+async function readRecoveryWriteChunk(reader, signal) {
+  if (signal.aborted) writeFail("WRITE_TIMEOUT", "GitHub recovery write timed out")
+  let rejectAbort
+  const aborted = new Promise((_resolve, reject) => {
+    rejectAbort = () =>
+      reject(
+        new DuplicateDraftRecoveryWriteError("WRITE_TIMEOUT", "GitHub recovery write timed out"),
+      )
+    signal.addEventListener("abort", rejectAbort, { once: true })
+  })
+  try {
+    return await Promise.race([reader.read(), aborted])
+  } finally {
+    signal.removeEventListener("abort", rejectAbort)
+  }
+}
+
+function cancelResponseBody(body) {
+  if (body !== null && body !== undefined && typeof body.cancel === "function") {
+    void body.cancel().catch(() => {})
+  }
+}
+
+function assertBoundedInteger(value, minimum, maximum, label) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new TypeError(`${label} is invalid`)
+  }
+}
+
+function hasUnsafeTokenCharacters(value) {
+  for (const character of value) {
+    const code = character.codePointAt(0)
+    if (code <= 31 || code === 127) return true
+  }
+  return false
+}
+
+function isPlainObject(value) {
+  if (!isObject(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function hasExactFields(value, fields) {
+  if (!isObject(value)) return false
+  const actual = Object.keys(value).sort()
+  const expected = [...fields].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right))
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (!isObject(value)) return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalize(value[key])]),
+  )
+}
+
+export class DuplicateDraftRecoveryWriteError extends Error {
+  constructor(code, message) {
+    super(message)
+    this.name = "DuplicateDraftRecoveryWriteError"
+    this.code = code
+  }
+}
+
+function writeFail(code, message) {
+  throw new DuplicateDraftRecoveryWriteError(code, message)
 }
 
 async function readRepositoryState(context) {
