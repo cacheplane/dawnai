@@ -642,11 +642,11 @@ function captureReader({
     {
       id: 701,
       runAttempt: 1,
-      name: "prepare",
-      status: "completed",
-      conclusion: "success",
-      startedAt: RECOVERY_CAPTURED_AT,
-      completedAt: RECOVERY_CAPTURED_AT,
+      name: "publish-npm",
+      status: "queued",
+      conclusion: null,
+      startedAt: null,
+      completedAt: null,
     },
   ],
   candidateReleases,
@@ -678,9 +678,9 @@ function captureReader({
       calls.push(["readReleaseRuns"])
       return { runs, candidateRuns }
     },
-    async readCandidatePublishJobs(runId) {
-      calls.push(["readCandidatePublishJobs", runId])
-      return jobs
+    async readCandidatePublishJobs(runId, runAttempt) {
+      calls.push(["readCandidatePublishJobs", runId, runAttempt])
+      return typeof jobs === "function" ? jobs(runId, runAttempt) : jobs
     },
     async readNpmAbsence(name) {
       calls.push(["readNpmAbsence", name])
@@ -741,7 +741,7 @@ test("captures canonical frozen evidence through only the read boundary", async 
     )
     assert.deepEqual(
       calls.filter(([name]) => name === "readCandidatePublishJobs"),
-      [["readCandidatePublishJobs", 700]],
+      [["readCandidatePublishJobs", 700, 1]],
     )
     assert.equal(
       calls.some(([name]) => /write|upload|patch|delete/iu.test(name)),
@@ -825,15 +825,15 @@ test("capture checks jobs for every observed candidate run and rejects started p
   ]
   const { reader, calls } = captureReader({
     candidateRuns,
-    jobs: [
+    jobs: (_runId, runAttempt) => [
       {
-        id: 702,
-        runAttempt: 1,
+        id: 700 + runAttempt,
+        runAttempt,
         name: "publish-npm",
-        status: "completed",
-        conclusion: "failure",
-        startedAt: RECOVERY_CAPTURED_AT,
-        completedAt: RECOVERY_CAPTURED_AT,
+        status: runAttempt === 1 ? "queued" : "completed",
+        conclusion: runAttempt === 1 ? null : "failure",
+        startedAt: runAttempt === 1 ? null : RECOVERY_CAPTURED_AT,
+        completedAt: runAttempt === 1 ? null : RECOVERY_CAPTURED_AT,
       },
     ],
   })
@@ -848,8 +848,8 @@ test("capture checks jobs for every observed candidate run and rejects started p
   assert.deepEqual(
     calls.filter(([name]) => name === "readCandidatePublishJobs"),
     [
-      ["readCandidatePublishJobs", 700],
-      ["readCandidatePublishJobs", 800],
+      ["readCandidatePublishJobs", 700, 1],
+      ["readCandidatePublishJobs", 800, 2],
     ],
   )
 })
@@ -875,6 +875,66 @@ test("capture treats completed publish jobs without start timestamps as malforme
       now: () => Date.parse(RECOVERY_CAPTURED_AT),
     }),
     (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
+  )
+})
+
+test("capture requires exactly one coherent publish job for the exact run attempt", async () => {
+  const candidateRuns = [
+    {
+      id: 800,
+      runAttempt: 2,
+      status: "completed",
+      conclusion: "failure",
+      headSha: POLICY.candidateSha,
+      createdAt: RECOVERY_CAPTURED_AT,
+      startedAt: RECOVERY_CAPTURED_AT,
+      updatedAt: RECOVERY_CAPTURED_AT,
+    },
+  ]
+  const queuedPublish = {
+    id: 802,
+    runAttempt: 2,
+    name: "publish-npm",
+    status: "queued",
+    conclusion: null,
+    startedAt: null,
+    completedAt: null,
+  }
+  for (const jobs of [
+    [{ ...queuedPublish, runAttempt: 1 }],
+    [
+      {
+        ...queuedPublish,
+        id: 801,
+        name: "prepare",
+        status: "completed",
+        conclusion: "success",
+        startedAt: RECOVERY_CAPTURED_AT,
+        completedAt: RECOVERY_CAPTURED_AT,
+      },
+    ],
+    [queuedPublish, { ...queuedPublish, id: 803 }],
+  ]) {
+    const { reader } = captureReader({ candidateRuns, jobs })
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
+    )
+  }
+
+  const { reader, calls } = captureReader({ candidateRuns, jobs: [queuedPublish] })
+  await captureDuplicateDraftRecoveryEvidence({
+    reviewedCommit: MERGE_COMMIT_SHA,
+    reader,
+    now: () => Date.parse(RECOVERY_CAPTURED_AT),
+  })
+  assert.deepEqual(
+    calls.filter(([name]) => name === "readCandidatePublishJobs"),
+    [["readCandidatePublishJobs", 800, 2]],
   )
 })
 
@@ -913,7 +973,7 @@ test("capture reconciles the exhaustive and candidate-filtered workflow run sets
   }
 })
 
-test("capture refuses a fourth marker-backed candidate Release", async () => {
+test("capture refuses a fourth marker-backed candidate Release with conflicting identity", async () => {
   const observation = recoveryObservation()
   const releases = [
     releaseSummary(observation.releases.canonical),
@@ -922,6 +982,7 @@ test("capture refuses a fourth marker-backed candidate Release", async () => {
       ...releaseSummary(observation.releases.canonical),
       releaseId: 400000000,
       tagName: "untagged-fourth-candidate",
+      marker: { ...ORIGINAL_MARKER, commitSha: "e".repeat(40) },
     },
   ]
   const { reader } = captureReader({ candidateReleases: releases })

@@ -240,15 +240,16 @@ export function createDuplicateDraftRecoveryReader({
       return deepFreeze({ runs, candidateRuns })
     },
 
-    async readCandidatePublishJobs(runId) {
+    async readCandidatePublishJobs(runId, runAttempt) {
       assertPositiveInteger(runId, "candidate workflow run ID")
+      assertPositiveInteger(runAttempt, "candidate workflow run attempt")
       const jobs = await readStrictPages(context, {
-        path: `/repos/${OWNER}/${REPOSITORY}/actions/runs/${runId}/jobs?filter=all&per_page=100`,
+        path: `/repos/${OWNER}/${REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
         operation: "CANDIDATE_JOBS",
         field: "jobs",
         requireTotalCount: true,
       })
-      return deepFreeze(normalizeCandidateJobs(jobs))
+      return deepFreeze(normalizeCandidateJobs(jobs, runAttempt))
     },
 
     async readNpmAbsence(name) {
@@ -314,8 +315,8 @@ export function createDuplicateDraftRecoveryReader({
           CANDIDATE_RELEASE_IDS.has(release.id) ||
           release.tagName === CANDIDATE_TAG ||
           (marker !== null &&
-            marker.version === DUPLICATE_DRAFT_RECOVERY_POLICY.version &&
-            marker.commitSha === DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha &&
+            release.draft === true &&
+            release.immutable === false &&
             marker.tag === CANDIDATE_TAG)
         if (identifiesCandidate) {
           candidates.push({
@@ -499,12 +500,11 @@ function normalizeReleaseRuns(value) {
   return runs.sort((left, right) => left.id - right.id || left.runAttempt - right.runAttempt)
 }
 
-function normalizeCandidateJobs(value) {
+function normalizeCandidateJobs(value, expectedAttempt) {
   if (!Array.isArray(value) || value.length === 0) {
     fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
   }
   const ids = new Set()
-  const attempts = new Set()
   const jobs = value.map((raw) => {
     const job = safeSnapshot(raw, "CANDIDATE_JOBS_MALFORMED")
     if (
@@ -513,7 +513,7 @@ function normalizeCandidateJobs(value) {
       job.id < 1 ||
       ids.has(job.id) ||
       !Number.isSafeInteger(job.run_attempt) ||
-      job.run_attempt < 1 ||
+      job.run_attempt !== expectedAttempt ||
       !isBoundedText(job.name, 512) ||
       !JOB_STATUSES.has(job.status) ||
       !isNullableTimestamp(job.started_at) ||
@@ -524,7 +524,6 @@ function normalizeCandidateJobs(value) {
       fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
     ids.add(job.id)
-    attempts.add(job.run_attempt)
     return {
       id: job.id,
       runAttempt: job.run_attempt,
@@ -535,9 +534,8 @@ function normalizeCandidateJobs(value) {
       completedAt: job.completed_at,
     }
   })
-  const maximumAttempt = Math.max(...attempts)
-  if (attempts.size !== maximumAttempt) {
-    fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow job attempt coverage is incomplete")
+  if (jobs.filter(({ name }) => name === "publish-npm").length !== 1) {
+    fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow publish job identity is not exact")
   }
   return jobs.sort((left, right) => left.runAttempt - right.runAttempt || left.id - right.id)
 }
@@ -808,8 +806,18 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
       fail(`${operation}_OVER_LIMIT`, `${operation.toLowerCase()} read exceeds the record limit`)
     }
     records.push(...pageRecords)
-    const next = nextLink(result.headers?.link)
+    const links = linkRelations(result.headers?.link)
+    for (const link of links.values()) {
+      if (normalizePaginationPage(link, path) === null) {
+        fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
+      }
+    }
+    const next = links.get("next") ?? null
     if (next === null) {
+      const last = links.get("last")
+      if (last !== undefined && normalizePaginationPage(last, path)?.page !== page + 1) {
+        fail("PAGINATION_DRIFT", "Recovery read pagination is incomplete")
+      }
       if (requireTotalCount && records.length !== totalCount) {
         fail("PAGINATION_DRIFT", "Recovery read pagination is incomplete")
       }
@@ -826,6 +834,11 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
 }
 
 function normalizePaginationUrl(value, initialPath, expectedPage) {
+  const normalized = normalizePaginationPage(value, initialPath)
+  return normalized?.page === expectedPage ? normalized.href : null
+}
+
+function normalizePaginationPage(value, initialPath) {
   try {
     const url = new URL(value)
     const initial = new URL(`${API_ORIGIN}${initialPath}`)
@@ -848,7 +861,9 @@ function normalizePaginationUrl(value, initialPath, expectedPage) {
       if (matches.length !== 1 || matches[0][1] !== expected) return null
     }
     const pageEntries = actualEntries.filter(([name]) => name === "page")
-    return pageEntries.length === 1 && pageEntries[0][1] === String(expectedPage) ? url.href : null
+    if (pageEntries.length !== 1 || !/^[1-9][0-9]*$/u.test(pageEntries[0][1])) return null
+    const page = Number(pageEntries[0][1])
+    return Number.isSafeInteger(page) && page <= MAX_PAGES ? { href: url.href, page } : null
   } catch {
     return null
   }
@@ -861,8 +876,8 @@ function repositoryIdPath(pathname) {
     : pathname
 }
 
-function nextLink(value) {
-  if (value === null || value === undefined) return null
+function linkRelations(value) {
+  if (value === null || value === undefined) return new Map()
   if (typeof value !== "string") fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
   const relations = new Map()
   for (const part of value.split(",")) {
@@ -872,7 +887,7 @@ function nextLink(value) {
     }
     relations.set(match[2], match[1])
   }
-  return relations.get("next") ?? null
+  return relations
 }
 
 function githubHeaders(token, accept) {

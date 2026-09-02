@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import test from "node:test"
 
 import { createDuplicateDraftRecoveryReader } from "../duplicate-draft-recovery-adapters.mjs"
+import { canonicalReleaseBody, isManagedReleaseForTag } from "../metadata.mjs"
 
 const EXPECTED_METHODS = [
   "listCandidateReleases",
@@ -177,8 +178,18 @@ test("production reads bind repository, workflow, immutable setting, annotated t
     if (url === `${BASE}/actions/workflows/260503756/runs?per_page=100`) {
       return jsonResponse({ total_count: 1, workflow_runs: [releaseRun(10)] })
     }
-    if (url === `${BASE}/actions/runs/10/jobs?filter=all&per_page=100`) {
-      return jsonResponse({ total_count: 1, jobs: [job(11, "prepare")] })
+    if (url === `${BASE}/actions/runs/10/attempts/1/jobs?per_page=100`) {
+      return jsonResponse({
+        total_count: 1,
+        jobs: [
+          job(11, "publish-npm", {
+            status: "queued",
+            conclusion: null,
+            started_at: null,
+            completed_at: null,
+          }),
+        ],
+      })
     }
     assert.fail(`unexpected URL ${url}`)
   })
@@ -229,7 +240,7 @@ test("production reads bind repository, workflow, immutable setting, annotated t
       },
     ],
   })
-  assert.equal((await reader.readCandidatePublishJobs(10))[0].name, "prepare")
+  assert.equal((await reader.readCandidatePublishJobs(10, 1))[0].name, "publish-npm")
   assert.equal(
     calls.filter(({ url }) => url.includes("/actions/workflows/260503756/runs?")).length,
     1,
@@ -285,7 +296,7 @@ test("Release and job observations reject malformed rows and incoherent terminal
       }),
   })
   await assert.rejects(
-    malformedJobReader.readCandidatePublishJobs(10),
+    malformedJobReader.readCandidatePublishJobs(10, 1),
     (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
   )
 
@@ -302,6 +313,76 @@ test("Release and job observations reject malformed rows and incoherent terminal
     malformedRunReader.readReleaseRuns(),
     (error) => error.code === "RELEASE_RUNS_MALFORMED",
   )
+})
+
+test("candidate jobs are exhaustive for the exact requested run attempt", async () => {
+  const exactJobs = [
+    job(21, "prepare", { run_attempt: 2 }),
+    job(22, "publish-npm", {
+      run_attempt: 2,
+      status: "queued",
+      conclusion: null,
+      started_at: null,
+      completed_at: null,
+    }),
+  ]
+  const exactReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) => {
+      assert.equal(url, `${BASE}/actions/runs/10/attempts/2/jobs?per_page=100`)
+      return jsonResponse({ total_count: exactJobs.length, jobs: exactJobs })
+    },
+  })
+  assert.deepEqual(
+    (await exactReader.readCandidatePublishJobs(10, 2)).map(({ runAttempt, name }) => ({
+      runAttempt,
+      name,
+    })),
+    [
+      { runAttempt: 2, name: "prepare" },
+      { runAttempt: 2, name: "publish-npm" },
+    ],
+  )
+
+  for (const jobs of [
+    [job(31, "prepare"), job(32, "publish-npm")],
+    [job(41, "prepare", { run_attempt: 2 })],
+    [job(51, "publish-npm", { run_attempt: 2 }), job(52, "publish-npm", { run_attempt: 2 })],
+  ]) {
+    const reader = createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: async () => jsonResponse({ total_count: jobs.length, jobs }),
+    })
+    await assert.rejects(
+      reader.readCandidatePublishJobs(10, 2),
+      (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
+    )
+  }
+})
+
+test("candidate Release discovery matches managed mutable-marker ownership", async () => {
+  const wrongShaBody = attachingBody("e".repeat(40))
+  const rows = [
+    releaseRow(400000001, { tag_name: "v0.8.22", draft: false, immutable: true }),
+    releaseRow(400000002, { body: wrongShaBody }),
+    releaseRow(400000003, { body: wrongShaBody, draft: false, immutable: true }),
+    releaseRow(400000004),
+  ]
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () => jsonResponse(rows),
+  })
+  const expectedIds = rows
+    .filter((release) => isManagedReleaseForTag(release, "v0.8.22"))
+    .map(({ id }) => id)
+  assert.deepEqual(
+    (await reader.listCandidateReleases()).map(({ releaseId }) => releaseId),
+    expectedIds,
+  )
+  assert.deepEqual(expectedIds, [400000001, 400000002])
 })
 
 test("npm absence performs exact-version E404 plus package metadata confirmation", async () => {
@@ -476,11 +557,11 @@ test("recovery pagination rejects same-origin page jumps and total-count drift",
               jobs: Array.from({ length: 100 }, (_, index) => job(index + 1, "prepare")),
             },
             200,
-            { link: `<${BASE}/actions/runs/10/jobs?filter=all&per_page=100&page=2>; rel="next"` },
+            { link: `<${BASE}/actions/runs/10/attempts/1/jobs?per_page=100&page=2>; rel="next"` },
           ),
   })
   await assert.rejects(
-    totalsReader.readCandidatePublishJobs(10),
+    totalsReader.readCandidatePublishJobs(10, 1),
     (error) => error.code === "PAGINATION_DRIFT",
   )
 })
@@ -547,10 +628,48 @@ test("recovery pagination exhausts hidden Release, asset, and job pages", async 
               jobs: Array.from({ length: 100 }, (_, index) => job(index + 1, "prepare")),
             },
             200,
-            { link: `<${BASE}/actions/runs/10/jobs?filter=all&per_page=100&page=2>; rel="next"` },
+            { link: `<${BASE}/actions/runs/10/attempts/1/jobs?per_page=100&page=2>; rel="next"` },
           ),
   })
-  assert.equal((await jobReader.readCandidatePublishJobs(10)).at(-1).name, "publish-npm")
+  assert.equal((await jobReader.readCandidatePublishJobs(10, 1)).at(-1).name, "publish-npm")
+})
+
+test("terminal pagination rejects a later last page and accepts the current last page", async () => {
+  const incompleteReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse(
+        Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+        200,
+        { link: `<${BASE}/releases?per_page=100&page=2>; rel="last"` },
+      ),
+  })
+  await assert.rejects(
+    incompleteReader.listCandidateReleases(),
+    (error) => error.code === "PAGINATION_DRIFT",
+  )
+
+  const completeReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) =>
+      url.endsWith("page=2")
+        ? jsonResponse([releaseRow(101)], 200, {
+            link: `<${BASE}/releases?per_page=100&page=2>; rel="last"`,
+          })
+        : jsonResponse(
+            Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+            200,
+            {
+              link: [
+                `<${BASE}/releases?per_page=100&page=2>; rel="next"`,
+                `<${BASE}/releases?per_page=100&page=2>; rel="last"`,
+              ].join(", "),
+            },
+          ),
+  })
+  assert.deepEqual(await completeReader.listCandidateReleases(), [])
 })
 
 test("recovery pagination enforces one cumulative response-byte budget", async () => {
@@ -696,7 +815,7 @@ function releaseRun(id) {
   }
 }
 
-function job(id, name) {
+function job(id, name, overrides = {}) {
   return {
     id,
     run_attempt: 1,
@@ -705,7 +824,31 @@ function job(id, name) {
     conclusion: "success",
     started_at: "2026-09-01T00:00:00Z",
     completed_at: "2026-09-01T00:01:00Z",
+    ...overrides,
   }
+}
+
+function attachingBody(commitSha) {
+  return canonicalReleaseBody({
+    marker: {
+      schemaVersion: 1,
+      epoch: "fixed-group-v1",
+      revision: 1,
+      phase: "ATTACHING",
+      version: "0.8.22",
+      commitSha,
+      tag: "v0.8.22",
+      manifestSha256: "a".repeat(64),
+      releaseRecordSha256: "b".repeat(64),
+      baseAssetSetSha256: null,
+      attestationSet: null,
+      npmEvidenceSha256: null,
+      smoke: null,
+      audit: null,
+      abandonmentSha256: null,
+    },
+    manifest: null,
+  })
 }
 
 function packageVersion(name) {

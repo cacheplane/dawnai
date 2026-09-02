@@ -164,12 +164,18 @@ export async function captureDuplicateDraftRecoveryEvidence({
   }
   const candidateJobObservations = []
   for (const run of candidateRuns) {
-    candidateJobObservations.push(
-      await captureRead(reader, "readCandidatePublishJobs", [run.id], "CANDIDATE_JOBS_UNAVAILABLE"),
-    )
+    candidateJobObservations.push({
+      runAttempt: run.runAttempt,
+      jobs: await captureRead(
+        reader,
+        "readCandidatePublishJobs",
+        [run.id, run.runAttempt],
+        "CANDIDATE_JOBS_UNAVAILABLE",
+      ),
+    })
   }
-  for (const jobs of candidateJobObservations) {
-    assertNoStartedPublishJob(jobs)
+  for (const { jobs, runAttempt } of candidateJobObservations) {
+    assertNoStartedPublishJob(jobs, runAttempt)
   }
 
   const npmPackages = []
@@ -1017,12 +1023,12 @@ function assertUniqueRunIds(runs, label) {
   }
 }
 
-function assertNoStartedPublishJob(value) {
+function assertNoStartedPublishJob(value, expectedAttempt) {
   if (!Array.isArray(value) || value.length === 0) {
     captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
   }
   const ids = new Set()
-  const attempts = new Set()
+  const publishJobs = []
   for (const raw of value) {
     let job
     try {
@@ -1039,7 +1045,7 @@ function assertNoStartedPublishJob(value) {
       job.id < 1 ||
       ids.has(job.id) ||
       !Number.isSafeInteger(job.runAttempt) ||
-      job.runAttempt < 1 ||
+      job.runAttempt !== expectedAttempt ||
       !isBoundedCaptureText(job.name, 512) ||
       !CAPTURE_JOB_STATUSES.has(job.status) ||
       !isNullableCaptureTimestamp(job.startedAt) ||
@@ -1054,17 +1060,13 @@ function assertNoStartedPublishJob(value) {
       captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
     ids.add(job.id)
-    attempts.add(job.runAttempt)
-    if (job.name === "publish-npm" && job.startedAt !== null) {
-      captureFail(
-        "CANDIDATE_PUBLISH_JOB_STARTED",
-        "A candidate publish-npm job has already started",
-      )
-    }
+    if (job.name === "publish-npm") publishJobs.push(job)
   }
-  const maximumAttempt = Math.max(...attempts)
-  if (attempts.size !== maximumAttempt) {
-    captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow job attempt coverage is incomplete")
+  if (publishJobs.length !== 1) {
+    captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow publish job identity is not exact")
+  }
+  if (publishJobs[0].startedAt !== null) {
+    captureFail("CANDIDATE_PUBLISH_JOB_STARTED", "A candidate publish-npm job has already started")
   }
 }
 
