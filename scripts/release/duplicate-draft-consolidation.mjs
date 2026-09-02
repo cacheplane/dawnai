@@ -15,9 +15,12 @@ import {
 import {
   readPrivateEnvelope,
   writePrivateEnvelope,
+  writeTrackedReceipt,
 } from "./duplicate-draft-consolidation-files.mjs"
 import {
   appendJournalEvent,
+  createConsolidationJournal,
+  createFinalConsolidationReceipt,
   deriveConsolidationState,
   nextResumeAction,
   parseConsolidationJournal,
@@ -44,6 +47,8 @@ const CANDIDATE = Object.freeze({
 const SURVIVOR = "379991871"
 const DUPLICATES = Object.freeze(["379982100", "379986168"])
 const OUTPUT = ".dawn/release/duplicate-draft-consolidation.proposed.json"
+const JOURNAL_OUTPUT = ".dawn/release/duplicate-draft-consolidation.journal.json"
+const RECEIPT_OUTPUT = "scripts/release/duplicate-draft-consolidation.json"
 const OBSERVATION_GAP_MS = 60_000
 const MAXIMUM_RETRY_NPM_AGE_MS = 120_000
 const CONVERGENCE_CEILING_MS = 90_000
@@ -73,6 +78,288 @@ const WORKFLOW_QUERY = deepFreeze({
   perPage: 100,
   maximumPages: 100,
 })
+
+export async function performDuplicateDraftConsolidation(input, dependencies) {
+  try {
+    const context = await normalizePerformInvocation(input, dependencies)
+    let current = await loadOrCreatePerformJournal(context)
+    assertPerformJournalBinding(context, current.journal)
+    let state = deriveConsolidationState(current.journal)
+
+    if (state.phase === "operation-started") {
+      const inventory = await context.capturePerformInitial(context)
+      current = await appendDurableEvent(
+        context,
+        current.journal,
+        "npm-observed",
+        {
+          targetReleaseId: DUPLICATES[0],
+          attemptNumber: 1,
+          inventory,
+        },
+        inventory.completedAt,
+        "npm",
+      )
+      state = deriveConsolidationState(current.journal)
+    }
+    if (state.phase === "npm-observed") {
+      if (state.lastRetryNpmInventory === null) {
+        throw new Error("Perform initial npm evidence is unavailable")
+      }
+      await context.verifyPerformInitial(context, state.lastRetryNpmInventory)
+    }
+
+    for (const targetReleaseId of DUPLICATES) {
+      state = deriveConsolidationState(current.journal)
+      if (state.completedTargets.includes(targetReleaseId)) continue
+      if (state.currentTargetReleaseId !== targetReleaseId) {
+        throw new Error("Perform journal target order is invalid")
+      }
+      await context.performOneDeletion(
+        {
+          proposedEnvelope: context.proposal,
+          confirmation: context.confirmation,
+          targetReleaseId,
+          journalPath: context.journalPath,
+        },
+        {
+          createAdapters: context.createAdapters,
+          wait: context.wait,
+        },
+      )
+      current = await loadCurrentJournal(context.journalPath)
+      state = deriveConsolidationState(current.journal)
+      if (!state.completedTargets.includes(targetReleaseId)) {
+        throw new Error("Perform target did not durably converge")
+      }
+    }
+
+    state = deriveConsolidationState(current.journal)
+    if (state.phase === "target-converged") {
+      const finalAuthority = await context.captureFinalAuthority(context)
+      current = await appendDurableEvent(
+        context,
+        current.journal,
+        "final-authority-observed",
+        { authority: finalAuthority },
+        finalAuthority.observedAt,
+        "final-authority",
+      )
+      state = deriveConsolidationState(current.journal)
+    }
+    if (state.phase !== "final-authority-observed" || state.lastAuthority === null) {
+      throw new Error("Perform journal is not ready for its final receipt")
+    }
+    const receipt = createFinalConsolidationReceipt({
+      proposedEnvelope: context.proposal,
+      journalEnvelope: current.journal,
+      finalAuthority: state.lastAuthority,
+      completedAt: state.lastAuthority.observedAt,
+    })
+    const receiptBytes = canonicalConsolidationEnvelopeBytes("final", receipt)
+    await context.publishReceipt(context.receiptPath, receiptBytes)
+    return deepFreeze({
+      status: "complete",
+      survivor: SURVIVOR,
+      deleted: [...DUPLICATES],
+      receipt: RECEIPT_OUTPUT,
+      receiptSha256: receipt.recordSha256,
+    })
+  } catch {
+    throw new Error("Duplicate-draft perform failed.")
+  }
+}
+
+async function normalizePerformInvocation(input, dependencies) {
+  const value = exactPlain(
+    input,
+    ["proposal", "proposalSha256", "journal", "receipt", "confirmation"],
+    "perform input",
+  )
+  if (
+    value.proposal !== OUTPUT ||
+    value.journal !== JOURNAL_OUTPUT ||
+    value.receipt !== RECEIPT_OUTPUT ||
+    !/^[0-9a-f]{64}$/u.test(value.proposalSha256) ||
+    typeof value.confirmation !== "string"
+  ) {
+    throw new TypeError("Perform input does not identify the approved operation")
+  }
+  const runtime = exactOptionalFields(
+    dependencies,
+    ["repositoryRoot", "createAdapters", "now", "wait"],
+    [
+      "capturePerformInitial",
+      "verifyPerformInitial",
+      "performOneDeletion",
+      "captureFinalAuthority",
+      "publishReceipt",
+    ],
+    "perform dependencies",
+  )
+  if (
+    typeof runtime.repositoryRoot !== "string" ||
+    !path.isAbsolute(runtime.repositoryRoot) ||
+    path.normalize(runtime.repositoryRoot) !== runtime.repositoryRoot ||
+    (await realpath(runtime.repositoryRoot)) !== runtime.repositoryRoot
+  ) {
+    throw new TypeError("Perform repository root is invalid")
+  }
+  const proposalPath = approvedPerformPath(runtime.repositoryRoot, value.proposal, OUTPUT)
+  const journalPath = approvedPerformPath(runtime.repositoryRoot, value.journal, JOURNAL_OUTPUT)
+  const receiptPath = approvedPerformPath(runtime.repositoryRoot, value.receipt, RECEIPT_OUTPUT)
+  const proposal = parseConsolidationEnvelope(
+    "proposed",
+    await readPrivateEnvelope(proposalPath, DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes),
+  )
+  const confirmation = exactConfirmation(proposal)
+  if (proposal.recordSha256 !== value.proposalSha256 || value.confirmation !== confirmation) {
+    throw new Error("Perform confirmation does not bind the reviewed proposal")
+  }
+  const createAdapters = safeFunction(runtime.createAdapters, "perform adapter factory")
+  const now = trustedClock(safeFunction(runtime.now, "perform clock"))
+  const wait = safeFunction(runtime.wait, "perform waiter")
+  const context = {
+    repositoryRoot: runtime.repositoryRoot,
+    proposal,
+    confirmation,
+    proposalPath,
+    journalPath,
+    receiptPath,
+    createAdapters,
+    now,
+    wait,
+    faultAt: null,
+  }
+  context.capturePerformInitial =
+    runtime.capturePerformInitial === undefined
+      ? defaultCapturePerformInitial
+      : safeFunction(runtime.capturePerformInitial, "perform initial capture")
+  context.verifyPerformInitial =
+    runtime.verifyPerformInitial === undefined
+      ? defaultVerifyPerformInitial
+      : safeFunction(runtime.verifyPerformInitial, "perform initial verifier")
+  context.performOneDeletion =
+    runtime.performOneDeletion === undefined
+      ? performOneDuplicateDeletion
+      : safeFunction(runtime.performOneDeletion, "perform target deletion")
+  context.captureFinalAuthority =
+    runtime.captureFinalAuthority === undefined
+      ? defaultCaptureFinalAuthority
+      : safeFunction(runtime.captureFinalAuthority, "perform final authority")
+  context.publishReceipt =
+    runtime.publishReceipt === undefined
+      ? writeTrackedReceipt
+      : safeFunction(runtime.publishReceipt, "perform receipt publisher")
+  return Object.freeze(context)
+}
+
+function approvedPerformPath(repositoryRoot, relativePath, expected) {
+  if (relativePath !== expected) throw new TypeError("Perform path is not approved")
+  const absolute = path.join(repositoryRoot, ...relativePath.split("/"))
+  if (path.relative(repositoryRoot, absolute) !== relativePath.split("/").join(path.sep)) {
+    throw new TypeError("Perform path escapes the repository")
+  }
+  return absolute
+}
+
+function exactConfirmation(proposal) {
+  return `CONSOLIDATE ${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
+}
+
+async function loadOrCreatePerformJournal(context) {
+  try {
+    return await loadCurrentJournal(context.journalPath)
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error
+  }
+  const headPath = context.journalPath.replace(/journal\.json$/u, "journal.head.json")
+  try {
+    await readPrivateEnvelope(headPath, 16 * 1024)
+    throw new Error("An orphan consolidation journal head blocks genesis")
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error
+  }
+  const recordedAt = timestamp(context.now, "operation start clock")
+  const journal = createConsolidationJournal({
+    proposedEnvelope: context.proposal,
+    confirmationSha256: createHash("sha256").update(context.confirmation, "utf8").digest("hex"),
+    recordedAt,
+  })
+  await writePrivateEnvelope(
+    context.journalPath,
+    canonicalConsolidationEnvelopeBytes("journal", journal),
+  )
+  await writePrivateEnvelope(headPath, canonicalJournalHeadBytes(context.journalPath, journal))
+  return loadCurrentJournal(context.journalPath)
+}
+
+function assertPerformJournalBinding(context, journal) {
+  const state = deriveConsolidationState(journal)
+  const confirmationSha256 = createHash("sha256").update(context.confirmation, "utf8").digest("hex")
+  if (
+    journal.record.proposedRecordSha256 !== context.proposal.recordSha256 ||
+    journal.record.confirmationSha256 !== confirmationSha256 ||
+    state.controllerSha !== context.proposal.record.controller.headSha ||
+    !safeArrayEquals(journal.record.deletionOrder, DUPLICATES)
+  ) {
+    throw new Error("Journal does not bind the exact approved perform operation")
+  }
+}
+
+async function defaultCapturePerformInitial(context) {
+  const adapters = bindAdapters(await context.createAdapters())
+  return captureNpmInventory({
+    stage: "perform-initial",
+    candidate: CANDIDATE,
+    npm: adapters.npm,
+    now: context.now,
+  })
+}
+
+async function defaultVerifyPerformInitial(context, inventory) {
+  const adapters = bindAdapters(await context.createAdapters())
+  const releases = await readReleaseEnumeration({ adapters })
+  const inspected = await inspectEquivalentDrafts({
+    candidate: CANDIDATE,
+    survivorId: SURVIVOR,
+    duplicateIds: DUPLICATES,
+    releases,
+    github: adapters.github,
+    attestations: adapters.attestations,
+  })
+  for (let index = 0; index < inspected.releases.length; index += 1) {
+    assertEvidenceEqualsProposal(inspected.releases[index], context.proposal.record.releases[index])
+  }
+  if (!isDeepStrictEqual(inspected.payloadProof, context.proposal.record.payloadProof)) {
+    throw new Error("Perform payload proof differs from the proposal")
+  }
+  const elapsed =
+    Date.parse(timestamp(context.now, "perform payload clock")) - Date.parse(inventory.completedAt)
+  if (elapsed < 0) throw new Error("Perform observation clock reversed")
+  const remaining = Math.max(0, OBSERVATION_GAP_MS - elapsed)
+  if (remaining > 0) {
+    const signal = AbortSignal.timeout(remaining + 5_000)
+    await context.wait(remaining, { signal })
+  }
+  if (
+    Date.parse(timestamp(context.now, "perform ready clock")) - Date.parse(inventory.completedAt) <
+    OBSERVATION_GAP_MS
+  ) {
+    throw new Error("Perform observation gap did not reach sixty seconds")
+  }
+}
+
+async function defaultCaptureFinalAuthority(context) {
+  const sourceAdapters = await context.createAdapters()
+  const captured = await captureConsolidationAuthority({
+    stage: "final",
+    proposal: context.proposal.record,
+    targetReleaseId: null,
+    adapters: sourceAdapters,
+  })
+  return captured.authority
+}
 
 export async function performOneDuplicateDeletion(input, dependencies) {
   try {

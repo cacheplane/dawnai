@@ -20,6 +20,90 @@ const COMMAND = [
   "--output",
   ".dawn/release/duplicate-draft-consolidation.proposed.json",
 ]
+const PROPOSAL_SHA256 = "a".repeat(64)
+const CONFIRMATION = `CONSOLIDATE v0.8.22 2a80deece2ff958fe7fde8fddeb4f99bed70a1c8 SURVIVOR 379991871 DELETE 379982100,379986168 PROPOSAL ${PROPOSAL_SHA256}`
+const PERFORM_COMMAND = [
+  "perform",
+  "--proposal",
+  ".dawn/release/duplicate-draft-consolidation.proposed.json",
+  "--journal",
+  ".dawn/release/duplicate-draft-consolidation.journal.json",
+  "--receipt",
+  "scripts/release/duplicate-draft-consolidation.json",
+  "--confirmation",
+  CONFIRMATION,
+]
+
+test("CLI accepts only the exact perform shape and prints a bounded completion summary", async () => {
+  const stdout = sink()
+  const stderr = sink()
+  let received
+  const code = await runDuplicateDraftConsolidationCli({
+    argv: PERFORM_COMMAND,
+    cwd: process.cwd(),
+    environment: {},
+    stdout,
+    stderr,
+    dependencies: {
+      async createAdapters() {
+        return Object.freeze({})
+      },
+      async perform(input, dependencies) {
+        received = { input, dependencies }
+        return Object.freeze({
+          status: "complete",
+          survivor: "379991871",
+          deleted: Object.freeze(["379982100", "379986168"]),
+          receipt: "scripts/release/duplicate-draft-consolidation.json",
+          receiptSha256: "b".repeat(64),
+        })
+      },
+      now: () => "2026-09-01T12:00:00.000Z",
+      async wait() {},
+    },
+  })
+  assert.equal(code, 0)
+  assert.equal(stderr.value, "")
+  assert.deepEqual(JSON.parse(stdout.value), {
+    status: "complete",
+    survivor: "379991871",
+    deleted: ["379982100", "379986168"],
+    receipt: "scripts/release/duplicate-draft-consolidation.json",
+    receiptSha256: "b".repeat(64),
+  })
+  assert.deepEqual(received.input, {
+    proposal: ".dawn/release/duplicate-draft-consolidation.proposed.json",
+    proposalSha256: PROPOSAL_SHA256,
+    journal: ".dawn/release/duplicate-draft-consolidation.journal.json",
+    receipt: "scripts/release/duplicate-draft-consolidation.json",
+    confirmation: CONFIRMATION,
+  })
+  assert.equal(received.dependencies.repositoryRoot, process.cwd())
+})
+
+test("CLI perform rejects digest, confirmation, path, force, survivor, and reordered-ID variants", async () => {
+  for (const argv of [
+    PERFORM_COMMAND.with(8, CONFIRMATION.replace(PROPOSAL_SHA256, "A".repeat(64))),
+    PERFORM_COMMAND.with(8, `${CONFIRMATION} `),
+    PERFORM_COMMAND.with(2, "/tmp/proposal.json"),
+    [...PERFORM_COMMAND, "--force"],
+    [...PERFORM_COMMAND, "--survivor", "379982100"],
+    PERFORM_COMMAND.with(8, CONFIRMATION.replace("379982100,379986168", "379986168,379982100")),
+  ]) {
+    const stderr = sink()
+    assert.equal(
+      await runDuplicateDraftConsolidationCli({
+        argv,
+        cwd: process.cwd(),
+        environment: {},
+        stdout: sink(),
+        stderr,
+      }),
+      2,
+    )
+    assert.equal(stderr.value, "Invalid duplicate-draft consolidation invocation.\n")
+  }
+})
 
 test("CLI accepts only the exact ordered invocation and prints a bounded safe summary", async () => {
   const stdout = sink()

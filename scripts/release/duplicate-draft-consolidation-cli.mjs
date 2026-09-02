@@ -9,10 +9,13 @@ import {
 import { setTimeout as waitFor } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { types as utilTypes } from "node:util"
-import { inspectDuplicateDrafts } from "./duplicate-draft-consolidation.mjs"
+import {
+  inspectDuplicateDrafts,
+  performDuplicateDraftConsolidation,
+} from "./duplicate-draft-consolidation.mjs"
 import { createDuplicateDraftConsolidationAdapters } from "./duplicate-draft-consolidation-adapters.mjs"
 
-const EXPECTED = Object.freeze([
+const INSPECT_EXPECTED = Object.freeze([
   "inspect",
   "--version",
   "0.8.22",
@@ -25,6 +28,18 @@ const EXPECTED = Object.freeze([
   "--output",
   ".dawn/release/duplicate-draft-consolidation.proposed.json",
 ])
+const PERFORM_PREFIX = Object.freeze([
+  "perform",
+  "--proposal",
+  ".dawn/release/duplicate-draft-consolidation.proposed.json",
+  "--journal",
+  ".dawn/release/duplicate-draft-consolidation.journal.json",
+  "--receipt",
+  "scripts/release/duplicate-draft-consolidation.json",
+  "--confirmation",
+])
+const CONFIRMATION_PATTERN =
+  /^CONSOLIDATE v0\.8\.22 2a80deece2ff958fe7fde8fddeb4f99bed70a1c8 SURVIVOR 379991871 DELETE 379982100,379986168 PROPOSAL ([0-9a-f]{64})$/u
 
 export async function runDuplicateDraftConsolidationCli(options = {}) {
   let invocation
@@ -38,26 +53,40 @@ export async function runDuplicateDraftConsolidationCli(options = {}) {
     const createAdapters =
       invocation.dependencies.createAdapters ?? createDuplicateDraftConsolidationAdapters
     const inspect = invocation.dependencies.inspect ?? inspectDuplicateDrafts
-    for (const operation of [now, wait, createAdapters, inspect]) {
+    const perform = invocation.dependencies.perform ?? performDuplicateDraftConsolidation
+    for (const operation of [now, wait, createAdapters, inspect, perform]) {
       if (typeof operation !== "function" || utilTypes.isProxy(operation))
         throw new InvocationError()
     }
     const repositoryRootIdentity = await inspectionRootCapture()(invocation.cwd)
-    const adapters = await createAdapters({
-      cwd: invocation.cwd,
-      environment: invocation.environment,
-      dependencies: { now },
-    })
-    const result = await inspect(input, {
-      repositoryRoot: invocation.cwd,
-      adapters,
-      now,
-      wait,
-      repositoryRootIdentity,
-    })
-    const summary = safeSummary(result, input)
+    const result =
+      input.mode === "inspect"
+        ? await inspect(input.value, {
+            repositoryRoot: invocation.cwd,
+            adapters: await createAdapters({
+              cwd: invocation.cwd,
+              environment: invocation.environment,
+              dependencies: { now },
+            }),
+            now,
+            wait,
+            repositoryRootIdentity,
+          })
+        : await perform(input.value, {
+            repositoryRoot: invocation.cwd,
+            createAdapters: () =>
+              createAdapters({
+                cwd: invocation.cwd,
+                environment: invocation.environment,
+                dependencies: { now },
+              }),
+            now,
+            wait,
+          })
+    const summary =
+      input.mode === "inspect" ? safeSummary(result, input.value) : safePerformSummary(result)
     if (!(await writeSink(invocation.stdout, `${JSON.stringify(summary)}\n`))) {
-      await writeSink(invocation.stderr, "Duplicate-draft inspection failed.\n")
+      await writeSink(invocation.stderr, `Duplicate-draft ${operationLabel(input.mode)} failed.\n`)
       return 1
     }
     return 0
@@ -67,7 +96,7 @@ export async function runDuplicateDraftConsolidationCli(options = {}) {
       target,
       error instanceof InvocationError
         ? "Invalid duplicate-draft consolidation invocation.\n"
-        : "Duplicate-draft inspection failed.\n",
+        : `Duplicate-draft ${operationLabel(invocation?.mode)} failed.\n`,
     )
     return error instanceof InvocationError ? 2 : 1
   }
@@ -112,27 +141,64 @@ function safeInvocationStderr(options) {
 }
 
 function parseArguments(argv) {
+  const snapshot = snapshotArguments(argv)
+  if (snapshot.length === INSPECT_EXPECTED.length) {
+    for (const [index, expected] of INSPECT_EXPECTED.entries()) {
+      if (snapshot[index] !== expected) throw new InvocationError()
+    }
+    return {
+      mode: "inspect",
+      value: {
+        version: INSPECT_EXPECTED[2],
+        commitSha: INSPECT_EXPECTED[4],
+        survivor: INSPECT_EXPECTED[6],
+        duplicates: INSPECT_EXPECTED[8].split(","),
+        output: INSPECT_EXPECTED[10],
+      },
+    }
+  }
+  if (snapshot.length === PERFORM_PREFIX.length + 1) {
+    for (const [index, expected] of PERFORM_PREFIX.entries()) {
+      if (snapshot[index] !== expected) throw new InvocationError()
+    }
+    const confirmation = snapshot.at(-1)
+    const match = CONFIRMATION_PATTERN.exec(confirmation)
+    if (match === null) throw new InvocationError()
+    return {
+      mode: "perform",
+      value: {
+        proposal: PERFORM_PREFIX[2],
+        proposalSha256: match[1],
+        journal: PERFORM_PREFIX[4],
+        receipt: PERFORM_PREFIX[6],
+        confirmation,
+      },
+    }
+  }
+  throw new InvocationError()
+}
+
+function operationLabel(mode) {
+  return mode === "perform" ? "perform" : "inspection"
+}
+
+function snapshotArguments(argv) {
   if (
     !Array.isArray(argv) ||
     utilTypes.isProxy(argv) ||
-    argv.length !== EXPECTED.length ||
     Object.getOwnPropertySymbols(argv).length !== 0 ||
-    Object.getOwnPropertyNames(argv).length !== EXPECTED.length + 1
+    Object.getOwnPropertyNames(argv).length !== argv.length + 1
   )
     throw new InvocationError()
-  for (const [index, expected] of EXPECTED.entries()) {
+  const output = []
+  for (let index = 0; index < argv.length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(argv, String(index))
     if (descriptor?.enumerable !== true || !("value" in descriptor)) throw new InvocationError()
     const value = descriptor.value
-    if (typeof value !== "string" || value !== expected) throw new InvocationError()
+    if (typeof value !== "string") throw new InvocationError()
+    output.push(value)
   }
-  return {
-    version: EXPECTED[2],
-    commitSha: EXPECTED[4],
-    survivor: EXPECTED[6],
-    duplicates: EXPECTED[8].split(","),
-    output: EXPECTED[10],
-  }
+  return output
 }
 
 function normalizeOptions(options) {
@@ -150,12 +216,13 @@ function normalizeOptions(options) {
   const dependencies = snapshotDataOptions(values.dependencies ?? {}, [
     "createAdapters",
     "inspect",
+    "perform",
     "now",
     "wait",
   ])
   const stdout = bindSink(values.stdout ?? process.stdout)
   const stderr = bindSink(values.stderr ?? process.stderr)
-  return {
+  const result = {
     argv: values.argv ?? process.argv.slice(2),
     cwd,
     environment: values.environment ?? process.env,
@@ -163,6 +230,13 @@ function normalizeOptions(options) {
     stderr,
     dependencies,
   }
+  try {
+    const parsed = parseArguments(result.argv)
+    result.mode = parsed.mode
+  } catch {
+    result.mode = null
+  }
+  return result
 }
 
 function bindSink(value) {
@@ -284,6 +358,30 @@ function safeSummary(value, input) {
     survivor: input.survivor,
     duplicates: [...input.duplicates],
     output: input.output,
+  }
+}
+
+function safePerformSummary(value) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    value.status !== "complete" ||
+    value.survivor !== "379991871" ||
+    value.receipt !== "scripts/release/duplicate-draft-consolidation.json" ||
+    !/^[0-9a-f]{64}$/u.test(value.receiptSha256) ||
+    !Array.isArray(value.deleted) ||
+    value.deleted.length !== 2 ||
+    value.deleted[0] !== "379982100" ||
+    value.deleted[1] !== "379986168"
+  ) {
+    throw new Error("Perform summary is invalid")
+  }
+  return {
+    status: value.status,
+    survivor: value.survivor,
+    deleted: [...value.deleted],
+    receipt: value.receipt,
+    receiptSha256: value.receiptSha256,
   }
 }
 
