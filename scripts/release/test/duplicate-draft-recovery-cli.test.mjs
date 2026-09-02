@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
 import { execFile as execFileCallback } from "node:child_process"
+import { EventEmitter } from "node:events"
+import * as fileSystem from "node:fs/promises"
 import {
   chmod,
   link,
@@ -18,6 +20,7 @@ import { promisify } from "node:util"
 
 import {
   parseDuplicateDraftRecoveryCliArguments,
+  readCandidateControllerMarker,
   runDuplicateDraftRecoveryCli,
 } from "../recover-v0.8.22-duplicate-drafts.mjs"
 
@@ -128,7 +131,7 @@ test("capture constructs production dependencies only after validation and durab
   const evidence = Object.freeze({ schemaVersion: 1, capturedAt: "now" })
   const canonicalBytes = Buffer.from('{"capturedAt":"now","schemaVersion":1}\n', "utf8")
   const result = await runDuplicateDraftRecoveryCli({
-    argv: ["capture", "--reviewed-commit", REVIEWED_COMMIT, "--output", CAPTURE_PATH],
+    argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
     cwd: root,
     environment: { GITHUB_TOKEN: "capture-token" },
     stdout,
@@ -155,7 +158,7 @@ test("capture constructs production dependencies only after validation and durab
   assert.equal(stderr.text, "")
   assert.deepEqual(calls, [
     ["reader", root, "capture-token"],
-    ["capture", REVIEWED_COMMIT, "reader"],
+    ["capture", reviewedCommit(root), "reader"],
     ["canonical", evidence],
   ])
   const output = path.join(root, CAPTURE_PATH)
@@ -168,7 +171,10 @@ test("apply parses canonical evidence before constructing dependencies and passe
   const root = await createPrivateRepository(t)
   const evidenceBytes = Buffer.from('{"schemaVersion":1}\n', "utf8")
   await writePrivateEvidence(root, evidenceBytes)
-  const parsedEvidence = Object.freeze({ schemaVersion: 1 })
+  const parsedEvidence = Object.freeze({
+    schemaVersion: 1,
+    reviewedAuthority: Object.freeze({ mergeCommitSha: reviewedCommit(root) }),
+  })
   const receipt = finalReceipt()
   const events = []
   const stdout = sink()
@@ -281,7 +287,7 @@ test("rejects a recovery boundary or target that is not gitignored", async (t) =
   let constructions = 0
   const stderr = sink()
   const result = await runDuplicateDraftRecoveryCli({
-    argv: ["capture", "--reviewed-commit", REVIEWED_COMMIT, "--output", CAPTURE_PATH],
+    argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
     cwd: root,
     environment: { GITHUB_TOKEN: "secret" },
     stdout: sink(),
@@ -403,7 +409,10 @@ test("refuses to serialize a malformed core receipt or invent missing fence hist
     stderr,
     dependencies: {
       randomUUID: () => UUID,
-      parseDuplicateDraftEvidence: () => Object.freeze({}),
+      parseDuplicateDraftEvidence: () =>
+        Object.freeze({
+          reviewedAuthority: Object.freeze({ mergeCommitSha: reviewedCommit(root) }),
+        }),
       createDuplicateDraftRecoveryReader: () => Object.freeze({}),
       createProductionRecoveryObserver: () => async () => ({}),
       createDuplicateDraftRecoveryWriter: () => Object.freeze({}),
@@ -430,8 +439,251 @@ test("refuses to serialize a malformed core receipt or invent missing fence hist
   assert.deepEqual(await temporaryFiles(root), [])
 })
 
-async function successfulApply(root) {
-  const stdout = sink()
+test("scrubs credentials and inherited Git controls from every Git child", async (t) => {
+  const root = await createPrivateRepository(t)
+  const environments = []
+  const runGit = async (command, args, options) => {
+    environments.push(structuredClone(options.env))
+    const result = await execFile(command, args, options)
+    return result.stdout
+  }
+  const result = await runDuplicateDraftRecoveryCli({
+    argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
+    cwd: root,
+    environment: {
+      GITHUB_TOKEN: "never-in-git",
+      GIT_DIR: "/tmp/hostile",
+      GIT_WORK_TREE: "/tmp/hostile-tree",
+      GIT_CONFIG_GLOBAL: "/tmp/hostile-config",
+      GIT_OBJECT_DIRECTORY: "/tmp/hostile-objects",
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/hostile-alternates",
+    },
+    stdout: sink(),
+    stderr: sink(),
+    dependencies: {
+      randomUUID: () => UUID,
+      runGit,
+      createDuplicateDraftRecoveryReader({ root: readerRoot, token, run }) {
+        assert.equal(readerRoot, root)
+        assert.equal(token, "never-in-git")
+        return Object.freeze({ run })
+      },
+      async captureDuplicateDraftRecoveryEvidence({ reader }) {
+        await reader.run("git", ["rev-parse", "--show-toplevel"], { cwd: root })
+        return Object.freeze({})
+      },
+      canonicalDuplicateDraftEvidence: () => Buffer.from("{}\n"),
+    },
+  })
+  assert.equal(result, 0)
+  assert.ok(environments.length >= 4)
+  for (const environment of environments) {
+    assert.equal(environment.GITHUB_TOKEN, undefined)
+    assert.deepEqual(
+      Object.keys(environment).filter((name) => name.startsWith("GIT_")),
+      [],
+    )
+    assert.equal(typeof environment.PATH, "string")
+    assert.equal(environment.LC_ALL, "C")
+  }
+})
+
+test("global or info excludes cannot substitute for the reviewed repository gitignore rule", async (t) => {
+  const root = await createPrivateRepository(t, { ignored: false })
+  const globalIgnore = path.join(root, "global-ignore")
+  await writeFile(globalIgnore, ".dawn/\n")
+  await execFile("git", ["-C", root, "config", "core.excludesFile", globalIgnore])
+  await writeFile(path.join(root, ".git/info/exclude"), ".dawn/\n")
+  let constructed = false
+  const result = await runDuplicateDraftRecoveryCli({
+    argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
+    cwd: root,
+    environment: { GITHUB_TOKEN: "secret" },
+    stdout: sink(),
+    stderr: sink(),
+    dependencies: {
+      createDuplicateDraftRecoveryReader() {
+        constructed = true
+      },
+    },
+  })
+  assert.equal(result, 1)
+  assert.equal(constructed, false)
+})
+
+test("preflights directory fsync before apply mutation and rolls back a published target on later failure", async (t) => {
+  for (const { fault, expectedMutations } of [
+    { fault: { failSyncAt: 1 }, expectedMutations: 0 },
+    { fault: { failSyncAt: 2 }, expectedMutations: 1 },
+    { fault: { failLink: true }, expectedMutations: 1 },
+    { fault: { failLinkAfterPublication: true }, expectedMutations: 1 },
+    { fault: { failSyncAt: 3 }, expectedMutations: 1 },
+    { fault: { failTempUnlinkOnce: true }, expectedMutations: 1 },
+    { fault: { failSyncAt: 4 }, expectedMutations: 1 },
+  ]) {
+    const root = await createPrivateRepository(t)
+    await writePrivateEvidence(root, Buffer.from("{}\n"))
+    let mutations = 0
+    const result = await successfulApply(root, {
+      fileSystem: faultingFileSystem(fault),
+      onApply: () => {
+        mutations += 1
+      },
+    })
+    assert.equal(result.code, 1)
+    assert.equal(mutations, expectedMutations)
+    await assert.rejects(lstat(path.join(root, APPLY_PATH)), { code: "ENOENT" })
+    assert.deepEqual(await temporaryFiles(root), [])
+  }
+})
+
+test("preflights directory fsync before capture credential or reader construction", async (t) => {
+  const root = await createPrivateRepository(t)
+  let credentialRead = false
+  let readerConstructed = false
+  const environment = new Proxy(
+    { GITHUB_TOKEN: "secret" },
+    {
+      getOwnPropertyDescriptor(target, property) {
+        if (property === "GITHUB_TOKEN") credentialRead = true
+        return Reflect.getOwnPropertyDescriptor(target, property)
+      },
+    },
+  )
+  const result = await runDuplicateDraftRecoveryCli({
+    argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
+    cwd: root,
+    environment,
+    stdout: sink(),
+    stderr: sink(),
+    dependencies: {
+      fileSystem: faultingFileSystem({ failSyncAt: 1 }),
+      randomUUID: () => UUID,
+      createDuplicateDraftRecoveryReader() {
+        readerConstructed = true
+      },
+    },
+  })
+  assert.equal(result, 1)
+  assert.equal(credentialRead, false)
+  assert.equal(readerConstructed, false)
+})
+
+test("reports a distinct terminal state if output rollback cannot restore a clean directory", async (t) => {
+  const root = await createPrivateRepository(t)
+  await writePrivateEvidence(root, Buffer.from("{}\n"))
+  const result = await successfulApply(root, {
+    fileSystem: faultingFileSystem({
+      failSyncAt: 3,
+      failTargetUnlink: path.join(root, APPLY_PATH),
+    }),
+  })
+  assert.equal(result.code, 3)
+  assert.equal(result.stderr, "Duplicate draft recovery output cleanup uncertain.\n")
+  assert.equal((await lstat(path.join(root, APPLY_PATH))).isFile(), true)
+})
+
+test("a broken stdout never changes durable success into failure", async (t) => {
+  for (const stdout of [
+    {
+      write: () => {
+        throw Object.assign(new Error("broken pipe"), { code: "EPIPE" })
+      },
+    },
+    Object.assign(new EventEmitter(), {
+      write() {
+        queueMicrotask(() =>
+          this.emit("error", Object.assign(new Error("broken pipe"), { code: "EPIPE" })),
+        )
+        return false
+      },
+    }),
+  ]) {
+    const root = await createPrivateRepository(t)
+    await writePrivateEvidence(root, Buffer.from("{}\n"))
+    const result = await successfulApply(root, { stdout })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(result.code, 0)
+    assert.equal((await lstat(path.join(root, APPLY_PATH))).isFile(), true)
+  }
+})
+
+test("rechecks the reviewed gitignore immediately before publication and rolls back on race", async (t) => {
+  const root = await createPrivateRepository(t)
+  await writePrivateEvidence(root, Buffer.from("{}\n"))
+  let shows = 0
+  let mutations = 0
+  const runGit = async (command, args, options) => {
+    const result = await execFile(command, args, options)
+    if (args.includes("show")) {
+      shows += 1
+      if (shows === 3) await writeFile(path.join(root, ".gitignore"), "elsewhere/\n")
+    }
+    return result.stdout
+  }
+  const result = await successfulApply(root, {
+    runGit,
+    onApply: () => {
+      mutations += 1
+    },
+  })
+  assert.equal(result.code, 1)
+  assert.equal(mutations, 1)
+  await assert.rejects(lstat(path.join(root, APPLY_PATH)), { code: "ENOENT" })
+  assert.deepEqual(await temporaryFiles(root), [])
+})
+
+test("reads the controller schema only from the immutable candidate commit", async () => {
+  const candidate = { commitSha: "d".repeat(40) }
+  const source = await readFile("scripts/release/controller-schema.json", "utf8")
+  const calls = []
+  const marker = await readCandidateControllerMarker({
+    candidate,
+    git: {
+      async showFile(input) {
+        calls.push(input)
+        return source
+      },
+    },
+  })
+  assert.deepEqual(calls, [
+    {
+      ref: candidate.commitSha,
+      path: "scripts/release/controller-schema.json",
+    },
+  ])
+  assert.deepEqual(marker, JSON.parse(source))
+})
+
+test("requires owned non-writable directory parents and exact recovery mode 0700", async (t) => {
+  for (const [target, mode] of [
+    [".dawn", 0o777],
+    [".dawn/release-recovery", 0o755],
+  ]) {
+    const root = await createPrivateRepository(t)
+    await chmod(path.join(root, target), mode)
+    let constructed = false
+    const result = await runDuplicateDraftRecoveryCli({
+      argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
+      cwd: root,
+      environment: { GITHUB_TOKEN: "secret" },
+      stdout: sink(),
+      stderr: sink(),
+      dependencies: {
+        createDuplicateDraftRecoveryReader() {
+          constructed = true
+        },
+      },
+    })
+    assert.equal(result, 1)
+    assert.equal(constructed, false)
+  }
+})
+
+async function successfulApply(
+  root,
+  { fileSystem: injectedFileSystem, onApply, runGit, stdout = sink() } = {},
+) {
   const stderr = sink()
   const code = await runDuplicateDraftRecoveryCli({
     argv: ["apply", "--evidence", CAPTURE_PATH, ACKNOWLEDGEMENT_FLAG, "--output", APPLY_PATH],
@@ -441,11 +693,19 @@ async function successfulApply(root) {
     stderr,
     dependencies: {
       randomUUID: () => UUID,
-      parseDuplicateDraftEvidence: () => Object.freeze({}),
+      ...(injectedFileSystem === undefined ? {} : { fileSystem: injectedFileSystem }),
+      ...(runGit === undefined ? {} : { runGit }),
+      parseDuplicateDraftEvidence: () =>
+        Object.freeze({
+          reviewedAuthority: Object.freeze({ mergeCommitSha: reviewedCommit(root) }),
+        }),
       createDuplicateDraftRecoveryReader: () => Object.freeze({}),
       createProductionRecoveryObserver: () => async () => ({}),
       createDuplicateDraftRecoveryWriter: () => Object.freeze({}),
-      applyDuplicateDraftRecovery: async () => finalReceipt(),
+      applyDuplicateDraftRecovery: async () => {
+        onApply?.()
+        return finalReceipt()
+      },
     },
   })
   return { code, stdout: stdout.text, stderr: stderr.text }
@@ -464,6 +724,21 @@ async function createPrivateRepository(t, { ignored = true } = {}) {
     recursive: true,
     mode: 0o700,
   })
+  await execFile("git", ["-C", root, "add", ".gitignore"])
+  await execFile("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Recovery Test",
+    "-c",
+    "user.email=recovery@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "fixture",
+  ])
+  const { stdout } = await execFile("git", ["-C", root, "rev-parse", "HEAD"])
+  REVIEWED_COMMITS.set(root, stdout.trim())
   return root
 }
 
@@ -488,6 +763,62 @@ function sink() {
       return true
     },
   }
+}
+
+const REVIEWED_COMMITS = new Map()
+
+function reviewedCommit(root) {
+  const commit = REVIEWED_COMMITS.get(root)
+  assert.match(commit, /^[0-9a-f]{40}$/u)
+  return commit
+}
+
+function faultingFileSystem({
+  failLink,
+  failLinkAfterPublication,
+  failSyncAt,
+  failTargetUnlink,
+  failTempUnlinkOnce,
+} = {}) {
+  let syncCount = 0
+  let tempUnlinkFailed = false
+  return Object.freeze({
+    link: async (...args) => {
+      if (failLink) throw Object.assign(new Error("link fault"), { code: "EIO" })
+      const result = await fileSystem.link(...args)
+      if (failLinkAfterPublication) {
+        throw Object.assign(new Error("ambiguous link fault"), { code: "EIO" })
+      }
+      return result
+    },
+    lstat: fileSystem.lstat.bind(fileSystem),
+    unlink: async (target) => {
+      if (target === failTargetUnlink) {
+        throw Object.assign(new Error("unlink fault"), { code: "EIO" })
+      }
+      if (failTempUnlinkOnce && target.endsWith(".tmp") && !tempUnlinkFailed) {
+        tempUnlinkFailed = true
+        throw Object.assign(new Error("temp unlink fault"), { code: "EIO" })
+      }
+      return fileSystem.unlink(target)
+    },
+    open: async (...args) => {
+      const handle = await fileSystem.open(...args)
+      return Object.freeze({
+        read: handle.read.bind(handle),
+        writeFile: handle.writeFile.bind(handle),
+        stat: handle.stat.bind(handle),
+        close: handle.close.bind(handle),
+        async sync() {
+          syncCount += 1
+          if (syncCount === failSyncAt) {
+            throw Object.assign(new Error("sync fault"), { code: "EIO" })
+          }
+          return handle.sync()
+        },
+      })
+    },
+  })
 }
 
 function finalReceipt() {

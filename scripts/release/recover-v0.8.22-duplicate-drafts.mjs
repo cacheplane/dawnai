@@ -25,7 +25,6 @@ import {
   createDuplicateDraftRecoveryReader as defaultCreateDuplicateDraftRecoveryReader,
   createDuplicateDraftRecoveryWriter as defaultCreateDuplicateDraftRecoveryWriter,
 } from "./duplicate-draft-recovery-adapters.mjs"
-import { readBoundedFixture } from "./fixture-io.mjs"
 import { createProductionInventoryReader, observeProductionCandidate } from "./observe.mjs"
 import { planRelease } from "./planner.mjs"
 
@@ -39,6 +38,14 @@ const MAX_PATH_BYTES = 4_096
 const MAX_EVIDENCE_BYTES = 512 * 1024
 const MAX_RECEIPT_BYTES = 512 * 1024
 const MAX_GIT_OUTPUT_BYTES = 8 * 1024
+const TRUSTED_GIT_EXECUTABLE = process.platform === "win32" ? "git.exe" : "/usr/bin/git"
+const GIT_CONFIG_PREFIX = Object.freeze([
+  "-c",
+  "core.excludesFile=/dev/null",
+  "-c",
+  "credential.helper=",
+  "--no-pager",
+])
 const DEPENDENCY_FIELDS = Object.freeze([
   "applyDuplicateDraftRecovery",
   "canonicalDuplicateDraftEvidence",
@@ -50,6 +57,7 @@ const DEPENDENCY_FIELDS = Object.freeze([
   "parseDuplicateDraftEvidence",
   "randomUUID",
   "resolveRepositoryRoot",
+  "runGit",
 ])
 
 export function parseDuplicateDraftRecoveryCliArguments(argv) {
@@ -100,17 +108,25 @@ export async function runDuplicateDraftRecoveryCli({
       stderr,
       dependencies,
     })
-    const root = await runtime.resolveRepositoryRoot(runtime.cwd)
+    const root = await runtime.resolveRepositoryRoot(runtime.cwd, runtime.runGit)
     const paths = resolveInvocationPaths(root, options)
     await assertPrivatePathBoundary(runtime.fileSystem, root, paths.output)
 
     if (options.command === "capture") {
-      await assertGitIgnored(root, paths.output.relative)
+      await assertReviewedIgnorePolicy({
+        fileSystem: runtime.fileSystem,
+        root,
+        reviewedCommit: options.reviewedCommit,
+        relativePaths: [paths.output.relative],
+        runGit: runtime.runGit,
+      })
       await assertUnusedOutput(runtime.fileSystem, paths.output.absolute)
+      outputReservation = await reserveExclusiveOutput(runtime, paths.output.absolute)
       const token = environmentToken(runtime.environment)
       const reader = runtime.createDuplicateDraftRecoveryReader({
         root,
         token,
+        run: runtime.runGit,
       })
       const evidence = await runtime.captureDuplicateDraftRecoveryEvidence({
         reviewedCommit: options.reviewedCommit,
@@ -118,17 +134,27 @@ export async function runDuplicateDraftRecoveryCli({
       })
       const bytes = runtime.canonicalDuplicateDraftEvidence(evidence)
       await assertPrivatePathBoundary(runtime.fileSystem, root, paths.output)
-      await assertGitIgnored(root, paths.output.relative)
-      outputReservation = await reserveExclusiveOutput(runtime, paths.output.absolute)
+      await assertReviewedIgnorePolicy({
+        fileSystem: runtime.fileSystem,
+        root,
+        reviewedCommit: options.reviewedCommit,
+        relativePaths: [paths.output.relative],
+        runGit: runtime.runGit,
+      })
       await outputReservation.commit(bytes, MAX_EVIDENCE_BYTES)
       outputReservation = null
-      runtime.stdout.write("Duplicate draft recovery evidence captured.\n")
+      writeSuccessBestEffort(runtime.stdout, "Duplicate draft recovery evidence captured.\n")
       return 0
     }
 
     await assertPrivatePathBoundary(runtime.fileSystem, root, paths.evidence)
-    await assertGitIgnored(root, paths.evidence.relative)
-    await assertGitIgnored(root, paths.output.relative)
+    await assertReviewedIgnorePolicy({
+      fileSystem: runtime.fileSystem,
+      root,
+      reviewedCommit: "HEAD",
+      relativePaths: [paths.evidence.relative, paths.output.relative],
+      runGit: runtime.runGit,
+    })
     const evidenceBytes = await readBoundedPrivateFile(
       runtime.fileSystem,
       paths.evidence.absolute,
@@ -139,19 +165,34 @@ export async function runDuplicateDraftRecoveryCli({
     new TextDecoder("utf-8", { fatal: true }).decode(evidenceBytes)
     const evidence = runtime.parseDuplicateDraftEvidence(evidenceBytes)
     const acknowledgement = concurrencyAcknowledgement()
+    const reviewedCommit = evidence?.reviewedAuthority?.mergeCommitSha
+    if (typeof reviewedCommit !== "string" || !SHA_PATTERN.test(reviewedCommit)) {
+      throw new Error("Recovery reviewed authority is invalid")
+    }
 
     await assertPrivatePathBoundary(runtime.fileSystem, root, paths.output)
-    await assertGitIgnored(root, paths.output.relative)
+    await assertReviewedIgnorePolicy({
+      fileSystem: runtime.fileSystem,
+      root,
+      reviewedCommit,
+      relativePaths: [paths.evidence.relative, paths.output.relative],
+      runGit: runtime.runGit,
+    })
     outputReservation = await reserveExclusiveOutput(runtime, paths.output.absolute)
 
     const token = environmentToken(runtime.environment)
-    const reader = runtime.createDuplicateDraftRecoveryReader({ root, token })
+    const reader = runtime.createDuplicateDraftRecoveryReader({
+      root,
+      token,
+      run: runtime.runGit,
+    })
     const observer = runtime.createProductionRecoveryObserver({
       root,
       token,
       reader,
       environment: runtime.environment,
       fileSystem: runtime.fileSystem,
+      runGit: runtime.runGit,
     })
     const receipt = await runtime.applyDuplicateDraftRecovery({
       evidence,
@@ -162,20 +203,37 @@ export async function runDuplicateDraftRecoveryCli({
     })
     const receiptBytes = canonicalFinalAuthorizationReceiptBytes(receipt, token)
     await assertPrivatePathBoundary(runtime.fileSystem, root, paths.output)
-    await assertGitIgnored(root, paths.output.relative)
+    await assertReviewedIgnorePolicy({
+      fileSystem: runtime.fileSystem,
+      root,
+      reviewedCommit,
+      relativePaths: [paths.evidence.relative, paths.output.relative],
+      runGit: runtime.runGit,
+    })
     await outputReservation.commit(receiptBytes, MAX_RECEIPT_BYTES)
     outputReservation = null
-    runtime.stdout.write("Duplicate draft recovery authorization recorded.\n")
+    writeSuccessBestEffort(runtime.stdout, "Duplicate draft recovery authorization recorded.\n")
     return 0
   } catch (error) {
-    await outputReservation?.abort().catch(() => {})
+    let cleanupUncertain = false
+    if (outputReservation !== null) {
+      try {
+        await outputReservation.abort()
+      } catch {
+        cleanupUncertain = true
+      }
+    }
     const input = error instanceof RecoveryInputError
     try {
       stderr.write(
-        input ? "Invalid duplicate draft recovery input.\n" : "Duplicate draft recovery failed.\n",
+        cleanupUncertain
+          ? "Duplicate draft recovery output cleanup uncertain.\n"
+          : input
+            ? "Invalid duplicate draft recovery input.\n"
+            : "Duplicate draft recovery failed.\n",
       )
     } catch {}
-    return input ? 2 : 1
+    return cleanupUncertain ? 3 : input ? 2 : 1
   }
 }
 
@@ -195,6 +253,7 @@ function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {
   }
   validateDependencies(dependencies)
   const dependency = (name, fallback) => dataProperty(dependencies, name) ?? fallback
+  const runGit = createScrubbedGitRunner(dependency("runGit", defaultGitExecutor))
   return Object.freeze({
     cwd,
     environment,
@@ -202,6 +261,7 @@ function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {
     stderr,
     fileSystem: dependency("fileSystem", defaultFileSystem),
     randomUUID: dependency("randomUUID", defaultRandomUUID),
+    runGit,
     resolveRepositoryRoot: dependency("resolveRepositoryRoot", resolveRepositoryRoot),
     applyDuplicateDraftRecovery: dependency(
       "applyDuplicateDraftRecovery",
@@ -319,10 +379,10 @@ function resolvePrivatePath(root, relative) {
   return Object.freeze({ absolute, relative })
 }
 
-async function resolveRepositoryRoot(cwd) {
-  let result
+async function resolveRepositoryRoot(cwd, runGit) {
+  let output
   try {
-    result = await execFile("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+    output = await runGit("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       timeout: 10_000,
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
@@ -331,7 +391,7 @@ async function resolveRepositoryRoot(cwd) {
   } catch {
     throw new Error("Recovery repository root is unavailable")
   }
-  const root = result.stdout.trim()
+  const root = output.trim()
   if (
     root.length === 0 ||
     Buffer.byteLength(root, "utf8") > MAX_PATH_BYTES ||
@@ -344,16 +404,105 @@ async function resolveRepositoryRoot(cwd) {
   return root
 }
 
-async function assertGitIgnored(root, relative) {
+async function assertReviewedIgnorePolicy({
+  fileSystem,
+  root,
+  reviewedCommit,
+  relativePaths,
+  runGit,
+}) {
+  if (
+    !(reviewedCommit === "HEAD" || SHA_PATTERN.test(reviewedCommit)) ||
+    !Array.isArray(relativePaths) ||
+    relativePaths.length < 1
+  ) {
+    throw new Error("Recovery ignore authority is invalid")
+  }
+  let reviewedText
   try {
-    await execFile("git", ["-C", root, "check-ignore", "--quiet", "--no-index", "--", relative], {
+    reviewedText = await runGit("git", ["-C", root, "show", `${reviewedCommit}:.gitignore`], {
+      encoding: "utf8",
       timeout: 10_000,
-      maxBuffer: MAX_GIT_OUTPUT_BYTES,
+      maxBuffer: 64 * 1024,
       windowsHide: true,
     })
   } catch {
-    throw new Error("Recovery private path is not ignored")
+    throw new Error("Recovery reviewed gitignore is unavailable")
   }
+  const currentBytes = await readBoundedPrivateFile(
+    fileSystem,
+    path.join(root, ".gitignore"),
+    64 * 1024,
+    { requirePrivateMode: false },
+  )
+  const currentText = new TextDecoder("utf-8", { fatal: true }).decode(currentBytes)
+  if (currentText !== reviewedText || !hasReviewedRecoveryIgnoreRule(reviewedText)) {
+    throw new Error("Recovery reviewed gitignore rule is absent or changed")
+  }
+  for (const relative of relativePaths) {
+    try {
+      await runGit("git", ["-C", root, "check-ignore", "--quiet", "--no-index", "--", relative], {
+        encoding: "utf8",
+        timeout: 10_000,
+        maxBuffer: MAX_GIT_OUTPUT_BYTES,
+        windowsHide: true,
+      })
+    } catch {
+      throw new Error("Recovery private path is not ignored by reviewed policy")
+    }
+  }
+}
+
+function hasReviewedRecoveryIgnoreRule(source) {
+  if (typeof source !== "string" || Buffer.byteLength(source, "utf8") > 64 * 1024) return false
+  const accepted = new Set([
+    ".dawn/",
+    "/.dawn/",
+    ".dawn/release-recovery/",
+    "/.dawn/release-recovery/",
+  ])
+  return source.split(/\r?\n/u).some((line) => accepted.has(line))
+}
+
+function createScrubbedGitRunner(executor) {
+  if (typeof executor !== "function") throw new RecoveryInputError()
+  const safeEnvironment = safeGitEnvironment()
+  return (command, args, options = {}) => {
+    if (command !== "git" || !Array.isArray(args)) {
+      throw new Error("Recovery Git invocation is invalid")
+    }
+    return executor(TRUSTED_GIT_EXECUTABLE, [...GIT_CONFIG_PREFIX, ...args], {
+      ...options,
+      shell: false,
+      env: { ...safeEnvironment },
+      windowsHide: true,
+    })
+  }
+}
+
+function safeGitEnvironment() {
+  const descriptor = Object.getOwnPropertyDescriptor(process.env, "PATH")
+  const executablePath = descriptor?.value
+  if (
+    typeof executablePath !== "string" ||
+    executablePath.length === 0 ||
+    hasControlCharacters(executablePath)
+  ) {
+    throw new Error("Recovery executable path is invalid")
+  }
+  return Object.freeze({
+    PATH: executablePath,
+    HOME: process.platform === "win32" ? "C:\\Windows\\Temp\\dawn-no-home" : "/nonexistent",
+    XDG_CONFIG_HOME:
+      process.platform === "win32" ? "C:\\Windows\\Temp\\dawn-no-xdg" : "/nonexistent",
+    LANG: "C",
+    LC_ALL: "C",
+    GCM_INTERACTIVE: "never",
+  })
+}
+
+function defaultGitExecutor(command, args, options) {
+  return execFile(command, args, options).then(({ stdout }) => stdout)
 }
 
 async function assertPrivatePathBoundary(fileSystem, root, target) {
@@ -370,12 +519,19 @@ async function assertPrivatePathBoundary(fileSystem, root, target) {
   }
   const parent = path.dirname(target.absolute)
   const relativeParent = path.relative(root, parent)
+  const currentUid = typeof process.getuid === "function" ? BigInt(process.getuid()) : null
   let current = root
-  for (const part of relativeParent.split(path.sep)) {
-    if (part.length === 0) continue
-    current = path.join(current, part)
+  for (const part of ["", ...relativeParent.split(path.sep)]) {
+    if (part.length > 0) current = path.join(current, part)
     const state = await operations.lstat(current, { bigint: true })
-    if (!state.isDirectory() || state.isSymbolicLink()) {
+    const mode = state.mode & 0o777n
+    if (
+      !state.isDirectory() ||
+      state.isSymbolicLink() ||
+      (currentUid !== null && state.uid !== currentUid) ||
+      (mode & 0o022n) !== 0n ||
+      (current === boundary && mode !== 0o700n)
+    ) {
       throw new Error("Recovery private path parent is unsafe")
     }
   }
@@ -392,7 +548,12 @@ async function assertUnusedOutput(fileSystem, target) {
   throw new Error("Recovery output already exists")
 }
 
-async function readBoundedPrivateFile(fileSystem, target, maximumBytes) {
+async function readBoundedPrivateFile(
+  fileSystem,
+  target,
+  maximumBytes,
+  { requirePrivateMode = true } = {},
+) {
   const operations = fileSystemOperations(fileSystem, ["lstat", "open"])
   if (!Number.isInteger(fsConstants.O_NOFOLLOW)) {
     throw new Error("Recovery no-follow reads are unavailable")
@@ -408,7 +569,7 @@ async function readBoundedPrivateFile(fileSystem, target, maximumBytes) {
     if (
       !before.isFile() ||
       before.nlink !== 1n ||
-      (before.mode & 0o077n) !== 0n ||
+      (requirePrivateMode && (before.mode & 0o077n) !== 0n) ||
       before.size < 1n ||
       before.size > BigInt(maximumBytes) ||
       before.size > BigInt(Number.MAX_SAFE_INTEGER)
@@ -455,6 +616,8 @@ async function reserveExclusiveOutput(runtime, target) {
     const directoryIdentity = await directoryHandle.stat({ bigint: true })
     if (!directoryIdentity.isDirectory()) throw new Error("Recovery output directory is invalid")
     await assertDirectoryIdentity(operations, directory, directoryIdentity)
+    // Prove directory fsync works before any production mutation is possible.
+    await directoryHandle.sync()
     const identifier = runtime.randomUUID()
     if (typeof identifier !== "string" || !UUID_PATTERN.test(identifier)) {
       throw new Error("Recovery temporary output identity is invalid")
@@ -467,81 +630,126 @@ async function reserveExclusiveOutput(runtime, target) {
     )
 
     let settled = false
+    let publicationAttempted = false
+    let targetPublished = false
+    let publishedIdentity = null
     return Object.freeze({
       async commit(value, maximumBytes) {
         if (settled) throw new Error("Recovery output reservation is already settled")
         const bytes = normalizeOutputBytes(value, maximumBytes)
-        let primaryError = null
-        try {
-          await assertDirectoryIdentity(operations, directory, directoryIdentity)
-          await temporaryHandle.writeFile(bytes)
-          await temporaryHandle.sync()
-          const identity = await temporaryHandle.stat({ bigint: true })
-          if (
-            !identity.isFile() ||
-            identity.nlink !== 1n ||
-            identity.size !== BigInt(bytes.byteLength) ||
-            (identity.mode & 0o777n) !== 0o600n
-          ) {
-            throw new Error("Recovery temporary output was not durably written")
-          }
-          await temporaryHandle.close()
-          temporaryHandle = null
-          await assertDirectoryIdentity(operations, directory, directoryIdentity)
-          await operations.link(temporary, target)
-          const linked = await operations.lstat(target, { bigint: true })
-          if (
-            linked.isSymbolicLink() ||
-            linked.dev !== identity.dev ||
-            linked.ino !== identity.ino ||
-            linked.size !== identity.size ||
-            linked.nlink < 2n
-          ) {
-            throw new Error("Recovery output link identity is invalid")
-          }
-          await directoryHandle.sync()
-          await operations.unlink(temporary)
-          temporary = null
-          await directoryHandle.sync()
-          const final = await operations.lstat(target, { bigint: true })
-          if (
-            final.isSymbolicLink() ||
-            final.dev !== identity.dev ||
-            final.ino !== identity.ino ||
-            final.size !== identity.size ||
-            final.nlink !== 1n ||
-            (final.mode & 0o777n) !== 0o600n
-          ) {
-            throw new Error("Recovery output final identity is invalid")
-          }
-          settled = true
-          await directoryHandle.close()
-        } catch (error) {
-          primaryError = error
+        await assertDirectoryIdentity(operations, directory, directoryIdentity)
+        await temporaryHandle.writeFile(bytes)
+        await temporaryHandle.sync()
+        const identity = await temporaryHandle.stat({ bigint: true })
+        if (
+          !identity.isFile() ||
+          identity.nlink !== 1n ||
+          identity.size !== BigInt(bytes.byteLength) ||
+          (identity.mode & 0o777n) !== 0o600n
+        ) {
+          throw new Error("Recovery temporary output was not durably written")
         }
-        if (primaryError !== null) {
-          await cleanupReservation().catch(() => {})
-          throw primaryError
+        await temporaryHandle.close()
+        temporaryHandle = null
+        await assertDirectoryIdentity(operations, directory, directoryIdentity)
+        publicationAttempted = true
+        publishedIdentity = identity
+        await operations.link(temporary, target)
+        targetPublished = true
+        const linked = await operations.lstat(target, { bigint: true })
+        if (
+          linked.isSymbolicLink() ||
+          linked.dev !== identity.dev ||
+          linked.ino !== identity.ino ||
+          linked.size !== identity.size ||
+          linked.nlink < 2n
+        ) {
+          throw new Error("Recovery output link identity is invalid")
         }
+        await directoryHandle.sync()
+        await operations.unlink(temporary)
+        temporary = null
+        await directoryHandle.sync()
+        const final = await operations.lstat(target, { bigint: true })
+        if (
+          final.isSymbolicLink() ||
+          final.dev !== identity.dev ||
+          final.ino !== identity.ino ||
+          final.size !== identity.size ||
+          final.nlink !== 1n ||
+          (final.mode & 0o777n) !== 0o600n
+        ) {
+          throw new Error("Recovery output final identity is invalid")
+        }
+        await directoryHandle.close()
+        settled = true
       },
       async abort() {
         if (settled) return
-        await cleanupReservation()
+        const failures = []
+        let cleanupComplete = false
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            await cleanupReservationFiles()
+            cleanupComplete = true
+            failures.length = 0
+            break
+          } catch (error) {
+            failures.push(error)
+          }
+        }
+        try {
+          await directoryHandle.close()
+        } catch (error) {
+          failures.push(error)
+        }
+        if (!cleanupComplete || publicationAttempted || targetPublished || temporary !== null) {
+          throw new AggregateError(failures, "Recovery output cleanup is uncertain")
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Recovery output handle cleanup is uncertain")
+        }
+        settled = true
       },
     })
 
-    async function cleanupReservation() {
-      settled = true
-      await temporaryHandle?.close().catch(() => {})
+    async function cleanupReservationFiles() {
+      if (settled) return
+      await temporaryHandle?.close()
       temporaryHandle = null
-      if (temporary !== null) {
-        await operations.unlink(temporary).catch((error) => {
+      if (publicationAttempted) {
+        let targetState = null
+        try {
+          targetState = await operations.lstat(target, { bigint: true })
+        } catch (error) {
           if (error?.code !== "ENOENT") throw error
-        })
-        temporary = null
+        }
+        if (targetState !== null) {
+          if (
+            publishedIdentity === null ||
+            targetState.isSymbolicLink() ||
+            targetState.dev !== publishedIdentity.dev ||
+            targetState.ino !== publishedIdentity.ino
+          ) {
+            throw new Error("Recovery published output identity is uncertain")
+          }
+          await operations.unlink(target)
+        }
         await directoryHandle.sync()
+        publicationAttempted = false
+        targetPublished = false
+        publishedIdentity = null
       }
-      await directoryHandle.close()
+      if (temporary !== null) {
+        const temporaryPath = temporary
+        try {
+          await operations.unlink(temporaryPath)
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error
+        }
+        await directoryHandle.sync()
+        temporary = null
+      }
     }
   } catch (error) {
     await temporaryHandle?.close().catch(() => {})
@@ -798,8 +1006,15 @@ function concurrencyAcknowledgement() {
   })
 }
 
-function createProductionRecoveryObserver({ root, token, reader, environment, fileSystem }) {
-  const git = createGitReader({ root })
+function createProductionRecoveryObserver({
+  root,
+  token,
+  reader,
+  environment,
+  fileSystem,
+  runGit,
+}) {
+  const git = createGitReader({ root, run: runGit })
   const github = createGitHubReader({
     owner: "cacheplane",
     repo: "dawnai",
@@ -823,19 +1038,10 @@ function createProductionRecoveryObserver({ root, token, reader, environment, fi
     throw new TypeError("Recovery production repository is invalid")
   }
   return async ({ candidate }) => {
-    const [managedInventory, markerBytes] = await Promise.all([
+    const [managedInventory, marker] = await Promise.all([
       inventory.read({ ref: candidate.commitSha }),
-      readBoundedFixture(path.join(root, "scripts/release/controller-schema.json"), {
-        root,
-        maxBytes: 64 * 1024,
-      }),
+      readCandidateControllerMarker({ git, candidate }),
     ])
-    let marker
-    try {
-      marker = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(markerBytes))
-    } catch {
-      throw new TypeError("Recovery production controller marker is invalid")
-    }
     const observed = await observeProductionCandidate({
       candidate,
       inventory: managedInventory,
@@ -858,6 +1064,34 @@ function createProductionRecoveryObserver({ root, token, reader, environment, fi
       diagnostics: observed.diagnostics,
       releaseId: DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId,
     })
+  }
+}
+
+export async function readCandidateControllerMarker({ git, candidate }) {
+  if (
+    git === null ||
+    typeof git?.showFile !== "function" ||
+    candidate === null ||
+    typeof candidate !== "object" ||
+    !SHA_PATTERN.test(candidate.commitSha)
+  ) {
+    throw new TypeError("Recovery production controller marker authority is invalid")
+  }
+  const source = await git.showFile({
+    ref: candidate.commitSha,
+    path: "scripts/release/controller-schema.json",
+  })
+  if (typeof source !== "string") {
+    throw new TypeError("Recovery production controller marker is invalid")
+  }
+  const bytes = Buffer.from(source, "utf8")
+  if (bytes.byteLength < 1 || bytes.byteLength > 64 * 1024) {
+    throw new TypeError("Recovery production controller marker is outside bounds")
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+  } catch {
+    throw new TypeError("Recovery production controller marker is invalid")
   }
 }
 
@@ -951,6 +1185,17 @@ function hasControlCharacters(value) {
     const codePoint = character.codePointAt(0)
     return codePoint <= 31 || codePoint === 127
   })
+}
+
+function writeSuccessBestEffort(stream, message) {
+  const ignore = () => {}
+  try {
+    if (typeof stream.on === "function") stream.on("error", ignore)
+    const result = stream.write(message)
+    if (result !== null && typeof result === "object" && typeof result.then === "function") {
+      void result.catch(ignore)
+    }
+  } catch {}
 }
 
 class RecoveryInputError extends Error {
