@@ -429,14 +429,13 @@ export function createExactDuplicateDeleteEffect(options) {
 			}
 			await permitBinding.verifyPreSend();
 			permitBinding.assertActiveLease();
-			const deadline = deleteDeadline(timeoutMs, callerSignal);
 			const observedAt = canonicalTimestamp(callClock(now));
 			if (observedAt > permitBinding.authorityExpiresAt) {
-				deadline.dispose();
 				throw new Error(
 					"Delete permit expired at the writer's final pre-send clock",
 				);
 			}
+			const deadline = deleteDeadline(timeoutMs, callerSignal);
 			let response;
 			try {
 				const pendingResponse = fetchImpl(

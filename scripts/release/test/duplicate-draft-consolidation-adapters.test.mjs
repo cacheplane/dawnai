@@ -1769,6 +1769,93 @@ test("delete rechecks authority and prevalidates outcome time immediately before
 	assert.equal(clockCalls, 4);
 });
 
+test("final clock failure creates no deadline or later unhandled failure", async (t) => {
+	for (const failure of ["throws", "invalid"]) {
+		await t.test(failure, async () => {
+			let clockCalls = 0;
+			let fetchCalls = 0;
+			const harness = await createAuthorizedDeleteHarness({
+				deleteNow: () => {
+					clockCalls += 1;
+					if (clockCalls !== 4) return NOW;
+					if (failure === "throws") {
+						throw new Error(`${TOKEN} final clock failed`);
+					}
+					return "invalid";
+				},
+				fetchImpl: () => {
+					fetchCalls += 1;
+					return new Response(null, { status: 204 });
+				},
+			});
+			TEMPORARY_ROOTS.push(harness.root);
+			const timers = interceptDeleteDeadline();
+			const unhandled = [];
+			const uncaught = [];
+			const onUnhandled = (error) => unhandled.push(error);
+			const onUncaught = (error) => uncaught.push(error);
+			process.on("unhandledRejection", onUnhandled);
+			process.on("uncaughtException", onUncaught);
+			try {
+				await assert.rejects(
+					harness.adapters.writer.deleteDuplicate({
+						releaseId: DUPLICATES[0],
+						permit: harness.permit,
+					}),
+					(error) => !String(error).includes(TOKEN),
+				);
+				timers.expire();
+				await new Promise((resolve) => setImmediate(resolve));
+				assert.equal(fetchCalls, 0);
+				assert.equal(clockCalls, 4);
+				assert.equal(timers.scheduled(), 0);
+				assert.equal(timers.cleared(), 0);
+				assert.deepEqual(unhandled, []);
+				assert.deepEqual(uncaught, []);
+			} finally {
+				process.off("unhandledRejection", onUnhandled);
+				process.off("uncaughtException", onUncaught);
+				timers.restore();
+			}
+		});
+	}
+});
+
+test("a synchronous fetch failure disposes its delete deadline", async () => {
+	const harness = await createAuthorizedDeleteHarness({
+		deleteNow: () => NOW,
+		fetchImpl: () => {
+			throw new Error(`${TOKEN} synchronous transport failure`);
+		},
+	});
+	TEMPORARY_ROOTS.push(harness.root);
+	const timers = interceptDeleteDeadline();
+	const unhandled = [];
+	const onUnhandled = (error) => unhandled.push(error);
+	process.on("unhandledRejection", onUnhandled);
+	try {
+		assert.deepEqual(
+			await harness.adapters.writer.deleteDuplicate({
+				releaseId: DUPLICATES[0],
+				permit: harness.permit,
+			}),
+			{
+				classification: "transport-ambiguous",
+				httpStatus: null,
+				observedAt: NOW,
+			},
+		);
+		timers.expire();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(timers.scheduled(), 1);
+		assert.equal(timers.cleared(), 1);
+		assert.deepEqual(unhandled, []);
+	} finally {
+		process.off("unhandledRejection", onUnhandled);
+		timers.restore();
+	}
+});
+
 test("composition and delete writer are deeply frozen owned capability sets", async () => {
 	const adapters = await createAdapters({
 		fetchImpl: assert.fail,
@@ -1851,6 +1938,33 @@ async function createGuardedWriter(overrides = {}) {
 			});
 		},
 	});
+}
+
+function interceptDeleteDeadline() {
+	const originalSetTimeout = globalThis.setTimeout;
+	const originalClearTimeout = globalThis.clearTimeout;
+	const timer = Object.freeze({});
+	let callback = null;
+	let scheduled = 0;
+	let cleared = 0;
+	globalThis.setTimeout = (operation, _delay, ...args) => {
+		scheduled += 1;
+		callback = () => operation(...args);
+		return timer;
+	};
+	globalThis.clearTimeout = (candidate) => {
+		assert.equal(candidate, timer);
+		cleared += 1;
+	};
+	return {
+		cleared: () => cleared,
+		expire: () => callback?.(),
+		restore() {
+			globalThis.setTimeout = originalSetTimeout;
+			globalThis.clearTimeout = originalClearTimeout;
+		},
+		scheduled: () => scheduled,
+	};
 }
 
 function workflowQuery() {
