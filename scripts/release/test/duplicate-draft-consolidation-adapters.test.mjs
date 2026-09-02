@@ -10,6 +10,8 @@ import { createAuthorizedDeleteHarness } from "./support/duplicate-draft-consoli
 
 const REPOSITORY = "cacheplane/dawnai"
 const API_ORIGIN = "https://api.github.com"
+const REPOSITORY_ID = "1210070282"
+const NUMERIC_WORKFLOW_BASE = `${API_ORIGIN}/repositories/${REPOSITORY_ID}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs`
 const BASE = `${API_ORIGIN}/repos/${REPOSITORY}`
 const SURVIVOR = "379991871"
 const DUPLICATES = Object.freeze(["379982100", "379986168"])
@@ -1096,6 +1098,23 @@ test("GitHub reader preserves fail-closed pagination and transport classificatio
   }
 })
 
+test("release pagination rejects numeric workflow Link targets outside workflow transport", async () => {
+  const adapters = await createAdapters({
+    fetchImpl: async () =>
+      jsonResponse([], 200, {
+        Link: `<${NUMERIC_WORKFLOW_BASE}?per_page=100&page=2>; rel="last"`,
+      }),
+    run: commandRunner([]),
+  })
+
+  assert.deepEqual(await adapters.github.listReleases(), {
+    status: "ERROR",
+    operation: "releases",
+    httpStatus: 200,
+    code: "MALFORMED_LINK_HEADER",
+  })
+})
+
 test("workflow-run enumeration rejects unstable totals, duplicate IDs, and bounds", async () => {
   const page = Array.from({ length: 100 }, (_unused, index) => workflowRun(index + 1))
   const next = `${BASE}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=2`
@@ -1134,6 +1153,7 @@ test("workflow-run enumeration requires one exact trusted Link next relation", a
     `<https://evil.example/repos/cacheplane/dawnai/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=2>; rel="next"`,
     `<${BASE}/issues?per_page=100&page=2>; rel="next"`,
     `<${endpoint}&extra=true>; rel="next"`,
+    `<${API_ORIGIN}/repositories/1210070283/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=2>; rel="next"`,
     `<${endpoint}>; rel="next prev"`,
     `<${endpoint}>; rel="next", <${endpoint}>; rel="prev"`,
     `<${endpoint}>; rel="next", <${endpoint}>; rel="first"`,
@@ -1181,6 +1201,33 @@ test("workflow-run pagination accepts compatible next-last and prev-first aliase
   assert.equal(result.runs.length, 101)
   assert.deepEqual(result.runs[0], normalizedWorkflowRun("1"))
   assert.deepEqual(result.runs.at(-1), normalizedWorkflowRun("101"))
+  assert.deepEqual(
+    recording.calls.map(({ url }) => url),
+    [firstPageUrl, secondPageUrl],
+  )
+})
+
+test("workflow-run pagination canonicalizes GitHub numeric repository links", async () => {
+  const firstPageUrl = `${BASE}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=1`
+  const secondPageUrl = `${BASE}/actions/workflows/.github%2Fworkflows%2Frelease.yml/runs?per_page=100&page=2`
+  const numericFirstPageUrl = `${NUMERIC_WORKFLOW_BASE}?per_page=100&page=1`
+  const numericSecondPageUrl = `${NUMERIC_WORKFLOW_BASE}?per_page=100&page=2`
+  const page = Array.from({ length: 100 }, (_unused, index) => workflowRun(index + 1))
+  const recording = recordingFetch([
+    jsonResponse({ total_count: 101, workflow_runs: page }, 200, {
+      Link: `<${numericSecondPageUrl}>; rel="next", <${numericSecondPageUrl}>; rel="last"`,
+    }),
+    jsonResponse({ total_count: 101, workflow_runs: [workflowRun(101)] }, 200, {
+      Link: `<${numericFirstPageUrl}>; rel="prev", <${numericFirstPageUrl}>; rel="first"`,
+    }),
+  ])
+  const adapters = await createAdapters({
+    fetchImpl: recording.fetchImpl,
+    run: commandRunner([]),
+  })
+
+  const result = await adapters.github.listNonterminalWorkflowRuns(workflowQuery())
+  assert.equal(result.runs.length, 101)
   assert.deepEqual(
     recording.calls.map(({ url }) => url),
     [firstPageUrl, secondPageUrl],

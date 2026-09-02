@@ -38,6 +38,7 @@ import { createOwnerPreflightAdapters as defaultCreateOwnerPreflightAdapters } f
 import { createReleasePreparationRunner as defaultCreateReleasePreparationRunner } from "./process-runner.mjs"
 
 const REPOSITORY = "cacheplane/dawnai"
+const REPOSITORY_ID = "1210070282"
 const OWNER = "cacheplane"
 const REPO = "dawnai"
 const API_ORIGIN = "https://api.github.com"
@@ -2314,6 +2315,7 @@ function exactWorkflowPageUrl(value) {
     throw new TypeError("GitHub workflow-run Link URL is malformed")
   }
   const expectedPath = new URL(workflowRunsUrl(1)).pathname
+  const numericRepositoryPath = `/repositories/${REPOSITORY_ID}/actions/workflows/${encodeURIComponent(RELEASE_WORKFLOW)}/runs`
   const entries = [...url.searchParams]
   if (
     url.origin !== API_ORIGIN ||
@@ -2321,7 +2323,7 @@ function exactWorkflowPageUrl(value) {
     url.username !== "" ||
     url.password !== "" ||
     url.hash !== "" ||
-    url.pathname !== expectedPath ||
+    (url.pathname !== expectedPath && url.pathname !== numericRepositoryPath) ||
     entries.length !== 2 ||
     url.searchParams.getAll("per_page").length !== 1 ||
     url.searchParams.get("per_page") !== "100" ||
@@ -2330,7 +2332,15 @@ function exactWorkflowPageUrl(value) {
   ) {
     throw new TypeError("GitHub workflow-run Link URL is not trusted")
   }
-  return url.href
+  return workflowRunsUrl(url.searchParams.get("page"), url.searchParams.get("per_page"))
+}
+
+function canonicalWorkflowPageUrl(value) {
+  try {
+    return exactWorkflowPageUrl(value)
+  } catch {
+    return null
+  }
 }
 
 function normalizeAttestationResult(value) {
@@ -2485,7 +2495,20 @@ function validPaginationLinkGraph(value, requestUrl) {
   if (graph === null) return false
   const relations = new Set()
   const targetRelations = new Map()
+  const expectedWorkflowPath = new URL(workflowRunsUrl(1)).pathname
+  const canonicalRequestUrl = canonicalWorkflowPageUrl(requestUrl)
+  const workflowAliasesEnabled =
+    requestUrl.pathname === expectedWorkflowPath &&
+    canonicalRequestUrl !== null &&
+    requestUrl.href === canonicalRequestUrl
   for (const entry of graph) {
+    if (workflowAliasesEnabled) {
+      const url = canonicalWorkflowPageUrl(entry.url)
+      if (url === null || relations.has(entry.relation)) return false
+      relations.add(entry.relation)
+      addTargetRelation(targetRelations, url, entry.relation)
+      continue
+    }
     const url = normalizedAbsoluteUrl(entry.url)
     if (
       url === null ||
