@@ -287,6 +287,67 @@ repos/\${{ github.repository }}/releases/379982100`,
         `curl --request "\${{ matrix.method }}" "\${{ matrix.endpoint }}"`,
       ),
     ],
+    [
+      "generic matrix axes",
+      matrixWorkflow(
+        {
+          a: ["GET", "DELETE"],
+          b: ["/repos/cacheplane/dawnai/releases/379982100"],
+        },
+        `gh api --method "\${{ matrix.a }}" "\${{ matrix.b }}"`,
+      ),
+    ],
+    [
+      "generic matrix include object",
+      matrixWorkflow(
+        {
+          include: [
+            {
+              x: "DELETE",
+              y: "/repos/{owner}/{repo}/releases/{release_id}",
+            },
+          ],
+        },
+        `github.request("\${{ matrix.x }} \${{ matrix.y }}")`,
+      ),
+    ],
+    [
+      "generic matrix bracket notation",
+      matrixWorkflow(
+        {
+          v: ["DELETE"],
+          r: ["/repos/cacheplane/dawnai/releases/379982100"],
+        },
+        `curl --request "\${{ matrix['v'] }}" "\${{ matrix["r"] }}"`,
+      ),
+    ],
+    [
+      "mixed matrix interpolation",
+      matrixWorkflow(
+        {
+          prefix: ["DEL"],
+          suffix: ["ETE"],
+          owner: ["cacheplane"],
+          repository: ["dawnai"],
+          release: ["379982100"],
+        },
+        `gh api --method "\${{ matrix.prefix }}\${{ matrix.suffix }}" "repos/\${{ matrix.owner }}/\${{ matrix.repository }}/releases/\${{ matrix.release }}"`,
+      ),
+    ],
+    [
+      "dynamic matrix references in method and endpoint positions",
+      dynamicMatrixWorkflow(`gh api --method "\${{ matrix.a }}" "\${{ matrix.b }}"`),
+    ],
+    [
+      "matrix keys with unresolved generated values",
+      matrixWorkflow(
+        {
+          a: [`\${{ fromJSON(needs.scope.outputs.methods) }}`],
+          b: [`\${{ fromJSON(needs.scope.outputs.endpoints) }}`],
+        },
+        `gh api --method "\${{ matrix.a }}" "\${{ matrix.b }}"`,
+      ),
+    ],
   ]
 
   for (const [name, source] of unsafe) {
@@ -327,6 +388,19 @@ jobs:
     assertNoDuplicateDraftWorkflowMutation({ "unrelated-matrix.yml": unrelatedMatrix }),
   )
 
+  const unusedDangerousMatrix = matrixWorkflow(
+    {
+      a: ["DELETE"],
+      b: ["/repos/cacheplane/dawnai/releases/379982100"],
+      safeMethod: ["GET"],
+      safeEndpoint: ["/repos/cacheplane/dawnai/releases/379982100"],
+    },
+    `gh api --method "\${{ matrix.safeMethod }}" "\${{ matrix.safeEndpoint }}"`,
+  )
+  assert.doesNotThrow(() =>
+    assertNoDuplicateDraftWorkflowMutation({ "unused-matrix.yml": unusedDangerousMatrix }),
+  )
+
   const separateJobs = `name: separate jobs
 on:
   workflow_dispatch: {}
@@ -345,6 +419,27 @@ jobs:
 `
   assert.doesNotThrow(() =>
     assertNoDuplicateDraftWorkflowMutation({ "separate-jobs.yml": separateJobs }),
+  )
+
+  const separateMatrixSteps = matrixWorkflow(
+    {
+      a: ["DELETE"],
+      b: ["/repos/cacheplane/dawnai/releases/379982100"],
+    },
+    [`echo "\${{ matrix.a }}"`, `echo "\${{ matrix.b }}"`],
+  )
+  assert.doesNotThrow(() =>
+    assertNoDuplicateDraftWorkflowMutation({ "separate-matrix-steps.yml": separateMatrixSteps }),
+  )
+
+  const coherentUnknownMatrix = dynamicMatrixWorkflow([
+    `echo "\${{ matrix.a }}"`,
+    `gh api --method "\${{ matrix.b }}" "\${{ matrix.b }}"`,
+  ])
+  assert.doesNotThrow(() =>
+    assertNoDuplicateDraftWorkflowMutation({
+      "coherent-unknown-matrix.yml": coherentUnknownMatrix,
+    }),
   )
 })
 
@@ -2013,12 +2108,13 @@ function assertNoDuplicateDraftWorkflowMutation(sources) {
     assert.doesNotMatch(source, /duplicate-draft-consolidation|release:consolidate-drafts/u, file)
     const workflow = parseWorkflowSource(source, file)
     for (const context of workflowExecutionContexts(workflow)) {
-      const normalized = normalizeExecutionContext(context)
-      if (
-        containsDeleteReleaseOperation(normalized) ||
-        (containsDeleteMethod(normalized) && containsReleaseEndpoint(normalized))
-      ) {
-        throw new Error(`${file} contains a Release DELETE endpoint in ${context.label}`)
+      for (const normalized of normalizeExecutionContexts(context)) {
+        if (
+          containsDeleteReleaseOperation(normalized) ||
+          (containsDeleteMethod(normalized) && containsReleaseEndpoint(normalized))
+        ) {
+          throw new Error(`${file} contains a Release DELETE endpoint in ${context.label}`)
+        }
       }
     }
   }
@@ -2033,14 +2129,14 @@ function workflowExecutionContexts(workflow) {
       ...executionObjectScalars(job.env, `jobs.${jobId}.env`),
       ...executionObjectScalars(job.container?.env, `jobs.${jobId}.container.env`),
     ]
-    const jobMatrix = executionObjectScalars(job.strategy?.matrix, `jobs.${jobId}.strategy.matrix`)
+    const matrixOptions = collectMatrixScalarOptions(job.strategy?.matrix)
     if (typeof job.uses === "string") {
       contexts.push({
         label: `job ${jobId}`,
+        matrixOptions,
         values: [
           ...workflowEnv,
           ...jobEnv,
-          ...jobMatrix,
           `jobs.${jobId}.uses=${job.uses}`,
           ...executionObjectScalars(job.with, `jobs.${jobId}.with`),
           ...executionObjectScalars(job.secrets, `jobs.${jobId}.secrets`),
@@ -2053,7 +2149,6 @@ function workflowExecutionContexts(workflow) {
       const values = [
         ...workflowEnv,
         ...jobEnv,
-        ...jobMatrix,
         ...executionObjectScalars(step.env, `jobs.${jobId}.steps.${stepIndex}.env`),
         ...executionObjectScalars(step.with, `jobs.${jobId}.steps.${stepIndex}.with`),
       ]
@@ -2063,10 +2158,44 @@ function workflowExecutionContexts(workflow) {
       if (typeof step.uses === "string") {
         values.push(`jobs.${jobId}.steps.${stepIndex}.uses=${step.uses}`)
       }
-      contexts.push({ label: `job ${jobId} step ${stepIndex}`, values })
+      contexts.push({ label: `job ${jobId} step ${stepIndex}`, matrixOptions, values })
     }
   }
   return contexts
+}
+
+function collectMatrixScalarOptions(matrix) {
+  const options = new Map()
+  if (!isRecord(matrix)) return options
+  const add = (key, value) => {
+    const normalizedKey = key.toLowerCase()
+    if (!options.has(normalizedKey)) options.set(normalizedKey, [])
+    if (
+      (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") ||
+      (typeof value === "string" && /\$\{\{/u.test(value))
+    ) {
+      return
+    }
+    const scalar = String(value)
+    const values = options.get(normalizedKey)
+    if (!values.includes(scalar)) values.push(scalar)
+  }
+  const addObject = (value) => {
+    if (!isRecord(value)) return
+    for (const [key, entry] of Object.entries(value)) add(key, entry)
+  }
+  for (const [key, value] of Object.entries(matrix)) {
+    if (key === "include" || key === "exclude") {
+      if (Array.isArray(value)) for (const entry of value) addObject(entry)
+      continue
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) add(key, entry)
+    } else {
+      add(key, value)
+    }
+  }
+  return options
 }
 
 function executionObjectScalars(value, prefix) {
@@ -2092,16 +2221,64 @@ function executionObjectScalars(value, prefix) {
   return found
 }
 
-function normalizeExecutionContext(context) {
-  return context.values
-    .join("\n")
-    .replace(/\$\{\{[\s\S]*?\}\}/gu, "__expression__")
-    .replace(/\\\r?\n/gu, "")
-    .toLowerCase()
+function normalizeExecutionContexts(context) {
+  return expandMatrixReferences(context.values.join("\n"), context.matrixOptions).map((value) =>
+    value
+      .replace(/\$\{\{[\s\S]*?\}\}/gu, "__expression__")
+      .replace(/\\\r?\n/gu, "")
+      .toLowerCase(),
+  )
+}
+
+function expandMatrixReferences(value, matrixOptions) {
+  const expansions = []
+  const visit = (current, assignments) => {
+    if (expansions.length >= 1024) {
+      throw new Error("Workflow matrix expansion exceeds the isolation bound")
+    }
+    const reference = findMatrixReference(current)
+    if (reference === null) {
+      expansions.push(current)
+      return
+    }
+    const assignmentKey = reference.key ?? `dynamic:${reference.expression.toLowerCase()}`
+    const assigned = assignments.get(assignmentKey)
+    const configured = reference.key === null ? undefined : matrixOptions.get(reference.key)
+    const choices =
+      assigned === undefined
+        ? configured?.length
+          ? configured
+          : ["DELETE", "/repos/{owner}/{repo}/releases/{release_id}"]
+        : [assigned]
+    for (const choice of choices) {
+      const nextAssignments =
+        assigned === undefined ? new Map(assignments).set(assignmentKey, choice) : assignments
+      visit(
+        `${current.slice(0, reference.index)}${choice}${current.slice(reference.index + reference.expression.length)}`,
+        nextAssignments,
+      )
+    }
+  }
+  visit(value, new Map())
+  return expansions
+}
+
+function findMatrixReference(value) {
+  const match = /\$\{\{\s*matrix\b[\s\S]*?\}\}/iu.exec(value)
+  if (match === null) return null
+  const parsed =
+    /^\$\{\{\s*matrix\s*(?:\.\s*([a-z_][a-z0-9_-]*)|\[\s*(["'])([^"']+)\2\s*\])\s*\}\}$/iu.exec(
+      match[0],
+    )
+  return {
+    expression: match[0],
+    index: match.index,
+    key: parsed === null ? null : (parsed[1] ?? parsed[3]).toLowerCase(),
+  }
 }
 
 function containsDeleteMethod(value) {
-  return /(?:^|[\s"'`(])delete\s+(?=\/?repos\/)|(?:^|\s)(?:-x\s*delete\b|--(?:method|request)(?:\s+|\s*=\s*)delete\b|[^\s=:]*(?:method|request|verb)[^\s=:]*\s*[:=]\s*["'`]?delete\b)/iu.test(
+  return /(?:^|[\s"'`(])delete\s+(?=\/?repos\/)|(?:^|\s)(?:-x\s*["'`]?\s*delete\b|--(?:method|request)(?:\s+|\s*=\s*)["'`]?\s*delete\b|[^\s=:]*(?:method|request|verb)[^\s=:]*\s*[:=]\s*["'`]?delete\b)/iu.test(
     value,
   )
 }
@@ -2180,6 +2357,9 @@ function matrixWorkflow(matrix, run) {
     .split("\n")
     .map((line) => `        ${line}`)
     .join("\n")
+  const steps = (Array.isArray(run) ? run : [run])
+    .map((value) => `      - run: ${JSON.stringify(value)}`)
+    .join("\n")
   return `name: fixture
 on:
   workflow_dispatch: {}
@@ -2190,7 +2370,24 @@ jobs:
 ${matrixYaml}
     runs-on: ubuntu-latest
     steps:
-      - run: ${JSON.stringify(run)}
+${steps}
+`
+}
+
+function dynamicMatrixWorkflow(run) {
+  const steps = (Array.isArray(run) ? run : [run])
+    .map((value) => `      - run: ${JSON.stringify(value)}`)
+    .join("\n")
+  return `name: fixture
+on:
+  workflow_dispatch: {}
+jobs:
+  mutation:
+    strategy:
+      matrix: \${{ fromJSON(needs.scope.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+${steps}
 `
 }
 
