@@ -40,6 +40,9 @@ const EXECUTABLE_ALLOWLIST = JSON.parse(
 )
 const SCRIPT_PIN_FIXTURE = "scripts/release/test/fixtures/release-script-hashes.json"
 const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
+// Exact fixture bytes at Task 11's starting HEAD e5cf1986c0f2cb2f55b891a7c92fa7291289dfdb.
+const STARTING_SCRIPT_PIN_SHA256 =
+  "b6d939f6ad17ffa011f600fda31792716c73baf5a7cd4e3540dfbe30c75d727c"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
@@ -118,6 +121,22 @@ test("final release ownership is switched atomically and legacy owners are absen
   assert.ok(ci.jobs["vercel-native"], "the real Vercel deployment lane is required")
   assert.ok(ci.jobs["copilotkit-examples-e2e"], "the CopilotKit example e2e lane is required")
   assert.equal(typeof sources["publish-chart.yml"], "string", "chart publication remains owned")
+})
+
+test("duplicate-draft consolidation stays isolated from every workflow and preserves release pins", async () => {
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
+  assert.ok(Object.keys(sources).length > FINAL_WORKFLOW_FILES.length)
+  for (const [file, source] of Object.entries(sources)) {
+    assert.doesNotMatch(source, /duplicate-draft-consolidation|release:consolidate-drafts/u, file)
+    assert.doesNotMatch(
+      source,
+      /deleteRelease|(?:\bDELETE\b[\s\S]*(?:api\.github\.com\/)?repos\/[^/\s]+\/[^/\s]+\/releases\/|(?:api\.github\.com\/)?repos\/[^/\s]+\/[^/\s]+\/releases\/[^\s"']+[\s\S]*\bDELETE\b)/iu,
+      file,
+    )
+  }
+
+  const pinBytes = await readFile(SCRIPT_PIN_PATH)
+  assert.equal(createHash("sha256").update(pinBytes).digest("hex"), STARTING_SCRIPT_PIN_SHA256)
 })
 
 test("version-pr.yml is version-only and uses only RELEASE_GITHUB_TOKEN", async () => {
