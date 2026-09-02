@@ -55,6 +55,7 @@ test("reviewed authority reads exact routes and proves local, remote, PR, trees,
     }
     if (url === `${BASE}/commits/${REVIEWED_HEAD}/check-runs?per_page=100`) {
       return jsonResponse({
+        total_count: 1,
         check_runs: [
           {
             id: 98,
@@ -69,6 +70,7 @@ test("reviewed authority reads exact routes and proves local, remote, PR, trees,
     }
     if (url === `${BASE}/actions/workflows/ci.yml/runs?head_sha=${REVIEWED_HEAD}&per_page=100`) {
       return jsonResponse({
+        total_count: 1,
         workflow_runs: [
           {
             id: 987654321,
@@ -175,11 +177,8 @@ test("production reads bind repository, workflow, immutable setting, annotated t
     if (url === `${BASE}/actions/workflows/260503756/runs?per_page=100`) {
       return jsonResponse({ total_count: 1, workflow_runs: [releaseRun(10)] })
     }
-    if (url === `${BASE}/actions/workflows/260503756/runs?head_sha=${CANDIDATE_SHA}&per_page=100`) {
-      return jsonResponse({ total_count: 1, workflow_runs: [releaseRun(10)] })
-    }
     if (url === `${BASE}/actions/runs/10/jobs?filter=all&per_page=100`) {
-      return jsonResponse({ jobs: [job(11, "prepare")] })
+      return jsonResponse({ total_count: 1, jobs: [job(11, "prepare")] })
     }
     assert.fail(`unexpected URL ${url}`)
   })
@@ -205,7 +204,18 @@ test("production reads bind repository, workflow, immutable setting, annotated t
     tagObjectSha: TAG_OBJECT,
   })
   assert.deepEqual(await reader.readReleaseRuns(), {
-    nonterminalRuns: [],
+    runs: [
+      {
+        id: 10,
+        runAttempt: 1,
+        status: "completed",
+        conclusion: "success",
+        headSha: CANDIDATE_SHA,
+        createdAt: "2026-09-01T00:00:00Z",
+        startedAt: "2026-09-01T00:00:01Z",
+        updatedAt: "2026-09-01T00:01:00Z",
+      },
+    ],
     candidateRuns: [
       {
         id: 10,
@@ -213,10 +223,85 @@ test("production reads bind repository, workflow, immutable setting, annotated t
         status: "completed",
         conclusion: "success",
         headSha: CANDIDATE_SHA,
+        createdAt: "2026-09-01T00:00:00Z",
+        startedAt: "2026-09-01T00:00:01Z",
+        updatedAt: "2026-09-01T00:01:00Z",
       },
     ],
   })
   assert.equal((await reader.readCandidatePublishJobs(10))[0].name, "prepare")
+  assert.equal(
+    calls.filter(({ url }) => url.includes("/actions/workflows/260503756/runs?")).length,
+    1,
+  )
+})
+
+test("repository reads reject string or drifted numeric IDs", async () => {
+  for (const id of ["1210070282", 1210070281]) {
+    const reader = createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: async (url) => {
+        if (url === BASE) {
+          return jsonResponse({
+            id,
+            name: "dawnai",
+            full_name: "cacheplane/dawnai",
+            default_branch: "main",
+            owner: { login: "cacheplane" },
+          })
+        }
+        if (url === `${BASE}/git/ref/heads%2Fmain`) {
+          return jsonResponse(mainRef(REVIEWED_COMMIT))
+        }
+        assert.fail(`unexpected URL ${url}`)
+      },
+    })
+    await assert.rejects(
+      reader.readRepositoryState(),
+      (error) => error.code === "REPOSITORY_IDENTITY_CONFLICT",
+    )
+  }
+})
+
+test("Release and job observations reject malformed rows and incoherent terminal state", async () => {
+  const malformedReleaseReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () => jsonResponse([{ id: 99 }]),
+  })
+  await assert.rejects(
+    malformedReleaseReader.listCandidateReleases(),
+    (error) => error.code === "RELEASE_LIST_MALFORMED",
+  )
+
+  const malformedJobReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse({
+        total_count: 1,
+        jobs: [{ ...job(11, "publish-npm"), started_at: null }],
+      }),
+  })
+  await assert.rejects(
+    malformedJobReader.readCandidatePublishJobs(10),
+    (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
+  )
+
+  const malformedRunReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse({
+        total_count: 1,
+        workflow_runs: [{ ...releaseRun(10), run_started_at: null }],
+      }),
+  })
+  await assert.rejects(
+    malformedRunReader.readReleaseRuns(),
+    (error) => error.code === "RELEASE_RUNS_MALFORMED",
+  )
 })
 
 test("npm absence performs exact-version E404 plus package metadata confirmation", async () => {
@@ -291,6 +376,31 @@ test("release snapshots read complete assets and required recovery bytes through
   assert.equal(Object.hasOwn(snapshot.assets[1], "bytes"), false)
 })
 
+test("release snapshots reject duplicate asset IDs and name collisions", async () => {
+  for (const field of ["id", "name"]) {
+    const first = asset(1, "first.tgz", Buffer.from("first"))
+    const second = asset(2, "second.tgz", Buffer.from("second"))
+    second[field] = first[field]
+    const reader = createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: async (url) => {
+        if (url === `${BASE}/releases/379982100`) {
+          return jsonResponse(releaseFixture({ releaseId: 379982100, body: "canonical body\n" }))
+        }
+        if (url === `${BASE}/releases/379982100/assets?per_page=100`) {
+          return jsonResponse([first, second])
+        }
+        assert.fail(`unexpected URL ${url}`)
+      },
+    })
+    await assert.rejects(
+      reader.readReleaseSnapshot(379982100, { expectedOriginalBody: "canonical body\n" }),
+      (error) => error.code === "RELEASE_ASSETS_MALFORMED",
+    )
+  }
+})
+
 test("candidate Release listing rejects unsafe pagination and does not expose remote bodies in errors", async () => {
   const reader = createDuplicateDraftRecoveryReader({
     root: "/workspace",
@@ -336,6 +446,153 @@ test("Release workflow runs reject unsafe or incomplete pagination", async () =>
   )
 })
 
+test("recovery pagination rejects same-origin page jumps and total-count drift", async () => {
+  const jumpReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) =>
+      url.endsWith("page=3")
+        ? jsonResponse([])
+        : jsonResponse(
+            Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+            200,
+            { link: `<${BASE}/releases?per_page=100&page=3>; rel="next"` },
+          ),
+  })
+  await assert.rejects(
+    jumpReader.listCandidateReleases(),
+    (error) => error.code === "PAGINATION_DRIFT",
+  )
+
+  const totalsReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) =>
+      url.endsWith("page=2")
+        ? jsonResponse({ total_count: 102, jobs: [job(101, "publish-npm")] })
+        : jsonResponse(
+            {
+              total_count: 101,
+              jobs: Array.from({ length: 100 }, (_, index) => job(index + 1, "prepare")),
+            },
+            200,
+            { link: `<${BASE}/actions/runs/10/jobs?filter=all&per_page=100&page=2>; rel="next"` },
+          ),
+  })
+  await assert.rejects(
+    totalsReader.readCandidatePublishJobs(10),
+    (error) => error.code === "PAGINATION_DRIFT",
+  )
+})
+
+test("recovery pagination exhausts hidden Release, asset, and job pages", async () => {
+  const releaseReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) =>
+      url.endsWith("page=2")
+        ? jsonResponse([
+            releaseRow(400000000, {
+              tag_name: "v0.8.22",
+              draft: false,
+              immutable: true,
+            }),
+          ])
+        : jsonResponse(
+            Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+            200,
+            { link: `<${BASE}/releases?per_page=100&page=2>; rel="next"` },
+          ),
+  })
+  assert.deepEqual(
+    (await releaseReader.listCandidateReleases()).map(({ releaseId }) => releaseId),
+    [400000000],
+  )
+
+  const releaseId = 379982100
+  const assetReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) => {
+      if (url === `${BASE}/releases/${releaseId}`) {
+        return jsonResponse(releaseFixture({ releaseId, body: "canonical body\n" }))
+      }
+      if (url.endsWith("page=2")) {
+        return jsonResponse([asset(101, "hidden.tgz", Buffer.from("hidden"))])
+      }
+      return jsonResponse(
+        Array.from({ length: 100 }, (_, index) =>
+          asset(index + 1, `base-${index + 1}.tgz`, Buffer.from(`base-${index + 1}`)),
+        ),
+        200,
+        { link: `<${BASE}/releases/${releaseId}/assets?per_page=100&page=2>; rel="next"` },
+      )
+    },
+  })
+  assert.equal(
+    (await assetReader.readReleaseSnapshot(releaseId, { expectedOriginalBody: "canonical body\n" }))
+      .assets.length,
+    101,
+  )
+
+  const jobReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) =>
+      url.endsWith("page=2")
+        ? jsonResponse({ total_count: 101, jobs: [job(101, "publish-npm")] })
+        : jsonResponse(
+            {
+              total_count: 101,
+              jobs: Array.from({ length: 100 }, (_, index) => job(index + 1, "prepare")),
+            },
+            200,
+            { link: `<${BASE}/actions/runs/10/jobs?filter=all&per_page=100&page=2>; rel="next"` },
+          ),
+  })
+  assert.equal((await jobReader.readCandidatePublishJobs(10)).at(-1).name, "publish-npm")
+})
+
+test("recovery pagination enforces one cumulative response-byte budget", async () => {
+  const pages = [
+    Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+    Array.from({ length: 100 }, (_, index) => releaseRow(index + 101)),
+  ]
+  const pageBytes = Buffer.byteLength(JSON.stringify(pages[0]))
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    maxResponseBytes: pageBytes + 100,
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) =>
+      url.endsWith("page=2")
+        ? jsonResponse(pages[1])
+        : jsonResponse(pages[0], 200, {
+            link: `<${BASE}/releases?per_page=100&page=2>; rel="next"`,
+          }),
+  })
+  await assert.rejects(reader.listCandidateReleases(), (error) => /LIMIT|LARGE/u.test(error.code))
+})
+
+test("recovery pagination enforces one cumulative operation deadline", async () => {
+  const clock = [0, 0, 10]
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    timeoutMs: 10,
+    now: () => clock.shift() ?? 10,
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse(
+        Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+        200,
+        { link: `<${BASE}/releases?per_page=100&page=2>; rel="next"` },
+      ),
+  })
+  await assert.rejects(
+    reader.listCandidateReleases(),
+    (error) => error.code === "RELEASE_LIST_UNAVAILABLE",
+  )
+})
+
 function reviewedReader({
   pulls = [reviewedPull()],
   mainSha = REVIEWED_COMMIT,
@@ -360,6 +617,7 @@ function reviewedReader({
       }
       if (url === `${BASE}/commits/${REVIEWED_HEAD}/check-runs?per_page=100`) {
         return jsonResponse({
+          total_count: 1,
           check_runs: [
             {
               id: 1,
@@ -374,6 +632,7 @@ function reviewedReader({
       }
       if (url === `${BASE}/actions/workflows/ci.yml/runs?head_sha=${REVIEWED_HEAD}&per_page=100`) {
         return jsonResponse({
+          total_count: 1,
           workflow_runs: [
             {
               id: 2,
@@ -431,6 +690,9 @@ function releaseRun(id) {
     conclusion: "success",
     head_sha: CANDIDATE_SHA,
     path: ".github/workflows/release.yml",
+    created_at: "2026-09-01T00:00:00Z",
+    run_started_at: "2026-09-01T00:00:01Z",
+    updated_at: "2026-09-01T00:01:00Z",
   }
 }
 
@@ -459,6 +721,19 @@ function releaseFixture({ releaseId, body }) {
     prerelease: false,
     immutable: false,
     target_commitish: "main",
+  }
+}
+
+function releaseRow(id, overrides = {}) {
+  return {
+    id,
+    tag_name: `untagged-unrelated-${id}`,
+    body: null,
+    draft: true,
+    prerelease: false,
+    immutable: false,
+    target_commitish: "main",
+    ...overrides,
   }
 }
 

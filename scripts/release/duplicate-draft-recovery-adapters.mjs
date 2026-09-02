@@ -3,7 +3,11 @@ import { createHash } from "node:crypto"
 import { snapshotJson } from "./adapter-normalize.mjs"
 import { createGitReader } from "./adapters/git.mjs"
 import { createGitHubReader } from "./adapters/github.mjs"
-import { createHttpGet } from "./adapters/http.mjs"
+import {
+  createHttpGet,
+  DEFAULT_HTTP_MAX_RESPONSE_BYTES,
+  DEFAULT_HTTP_TIMEOUT_MS,
+} from "./adapters/http.mjs"
 import { createNpmReader } from "./adapters/npm.mjs"
 import { DUPLICATE_DRAFT_RECOVERY_POLICY } from "./duplicate-draft-recovery.mjs"
 import { parseReleaseMarker } from "./metadata.mjs"
@@ -23,9 +27,23 @@ const CANDIDATE_RELEASE_IDS = new Set([
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const MAX_PAGES = 100
 const MAX_RECORDS = 10_000
-const MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 const RECOVERY_ASSET_BYTES = 64 * 1024
 const NONTERMINAL_STATUSES = new Set(["requested", "waiting", "pending", "queued", "in_progress"])
+const RUN_STATUSES = new Set([...NONTERMINAL_STATUSES, "completed"])
+const JOB_STATUSES = new Set(["waiting", "pending", "queued", "in_progress", "completed"])
+const TERMINAL_CONCLUSIONS = new Set([
+  "success",
+  "failure",
+  "neutral",
+  "cancelled",
+  "skipped",
+  "timed_out",
+  "action_required",
+  "stale",
+  "startup_failure",
+])
+const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
+const ASSET_NAME_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$/u
 
 export class DuplicateDraftRecoveryReadError extends Error {
   constructor(code, message) {
@@ -42,7 +60,7 @@ export function createDuplicateDraftRecoveryReader({
   fetchImpl = fetch,
   run,
   timeoutMs,
-  maxResponseBytes = MAX_RESPONSE_BYTES,
+  maxResponseBytes = DEFAULT_HTTP_MAX_RESPONSE_BYTES,
   now = Date.now,
 } = {}) {
   const git = createGitReader({
@@ -72,7 +90,16 @@ export function createDuplicateDraftRecoveryReader({
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     maxResponseBytes,
   })
-  const context = { git, github, npm, http, token: token ?? null }
+  const context = {
+    git,
+    github,
+    npm,
+    http,
+    token: token ?? null,
+    timeoutMs: timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+    maxResponseBytes,
+    now,
+  }
 
   return Object.freeze({
     async readReviewedMergeAuthority(reviewedCommit) {
@@ -110,7 +137,7 @@ export function createDuplicateDraftRecoveryReader({
           path: `/repos/${OWNER}/${REPOSITORY}/git/commits/${pullRequest.reviewedHeadSha}`,
           operation: "reviewed-head-commit",
         }),
-        readRequiredCi(github, pullRequest.reviewedHeadSha),
+        readRequiredCi(context, pullRequest.reviewedHeadSha),
       ])
       const mergeTreeSha = commitTreeSha(mergeCommit, reviewedCommit, "merge")
       const reviewedTreeSha = commitTreeSha(
@@ -200,52 +227,28 @@ export function createDuplicateDraftRecoveryReader({
     },
 
     async readReleaseRuns() {
-      const [allRuns, candidateRuns] = await Promise.all([
-        readPaginatedArray(context, {
-          path: `/repos/${OWNER}/${REPOSITORY}/actions/workflows/${RELEASE_WORKFLOW_ID}/runs?per_page=100`,
-          operation: "release-workflow-runs",
-          field: "workflow_runs",
-        }),
-        readPaginatedArray(context, {
-          path: `/repos/${OWNER}/${REPOSITORY}/actions/workflows/${RELEASE_WORKFLOW_ID}/runs?head_sha=${DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha}&per_page=100`,
-          operation: "candidate-release-workflow-runs",
-          field: "workflow_runs",
-        }),
-      ])
-      const normalizedAll = normalizeReleaseRuns(allRuns)
-      const normalizedCandidate = normalizeReleaseRuns(candidateRuns)
-      if (
-        normalizedCandidate.some(
-          (run) => run.headSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha,
-        )
-      ) {
-        fail("CANDIDATE_RUNS_CONFLICT", "Candidate workflow run identity is not exact")
-      }
-      const nonterminalRuns = normalizedAll.filter((run) => NONTERMINAL_STATUSES.has(run.status))
-      return deepFreeze({ nonterminalRuns, candidateRuns: normalizedCandidate })
+      const rawRuns = await readStrictPages(context, {
+        path: `/repos/${OWNER}/${REPOSITORY}/actions/workflows/${RELEASE_WORKFLOW_ID}/runs?per_page=100`,
+        operation: "RELEASE_RUNS",
+        field: "workflow_runs",
+        requireTotalCount: true,
+      })
+      const runs = normalizeReleaseRuns(rawRuns)
+      const candidateRuns = runs.filter(
+        (run) => run.headSha === DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha,
+      )
+      return deepFreeze({ runs, candidateRuns })
     },
 
     async readCandidatePublishJobs(runId) {
       assertPositiveInteger(runId, "candidate workflow run ID")
-      const jobs = requirePresent(
-        await github.listActionsRunJobs({ runId }),
-        "CANDIDATE_JOBS_UNAVAILABLE",
-        "Candidate workflow jobs could not be verified",
-      )
-      if (!Array.isArray(jobs)) {
-        fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
-      }
-      return deepFreeze(
-        jobs.map((job) => ({
-          id: job.id,
-          runAttempt: job.runAttempt,
-          name: job.name,
-          status: job.status,
-          conclusion: job.conclusion,
-          startedAt: job.startedAt,
-          completedAt: job.completedAt,
-        })),
-      )
+      const jobs = await readStrictPages(context, {
+        path: `/repos/${OWNER}/${REPOSITORY}/actions/runs/${runId}/jobs?filter=all&per_page=100`,
+        operation: "CANDIDATE_JOBS",
+        field: "jobs",
+        requireTotalCount: true,
+      })
+      return deepFreeze(normalizeCandidateJobs(jobs))
     },
 
     async readNpmAbsence(name) {
@@ -278,11 +281,10 @@ export function createDuplicateDraftRecoveryReader({
         "RELEASE_UNAVAILABLE",
         "Release snapshot could not be verified",
       )
-      const rawAssets = requirePresent(
-        await github.listReleaseAssets({ releaseId }),
-        "RELEASE_ASSETS_UNAVAILABLE",
-        "Release asset inventory could not be verified",
-      )
+      const rawAssets = await readStrictPages(context, {
+        path: `/repos/${OWNER}/${REPOSITORY}/releases/${releaseId}/assets?per_page=100`,
+        operation: "RELEASE_ASSETS",
+      })
       return normalizeReleaseSnapshot({
         release,
         rawAssets,
@@ -293,42 +295,36 @@ export function createDuplicateDraftRecoveryReader({
     },
 
     async listCandidateReleases() {
-      const releases = requirePresent(
-        await github.listReleases(),
-        "RELEASE_LIST_UNAVAILABLE",
-        "Release inventory could not be verified",
-      )
-      if (!Array.isArray(releases)) {
-        fail("RELEASE_LIST_MALFORMED", "Release inventory is malformed")
-      }
+      const releases = await readStrictPages(context, {
+        path: `/repos/${OWNER}/${REPOSITORY}/releases?per_page=100`,
+        operation: "RELEASE_LIST",
+      })
       const candidates = []
       for (const raw of releases) {
-        if (!isObject(raw) || !Number.isSafeInteger(raw.id) || raw.id < 1) {
-          fail("RELEASE_LIST_MALFORMED", "Release inventory is malformed")
-        }
-        const marker = releaseMarker(raw.body)
+        const release = normalizeReleaseRow(raw)
+        const marker = releaseMarker(release.body)
         if (
           marker === null &&
-          typeof raw.body === "string" &&
-          raw.body.includes("DAWN_RELEASE_CONTROLLER_MARKER")
+          typeof release.body === "string" &&
+          release.body.includes("DAWN_RELEASE_CONTROLLER_MARKER")
         ) {
           fail("RELEASE_LIST_MALFORMED", "Release inventory contains a malformed Dawn marker")
         }
         const identifiesCandidate =
-          CANDIDATE_RELEASE_IDS.has(raw.id) ||
-          raw.tag_name === CANDIDATE_TAG ||
+          CANDIDATE_RELEASE_IDS.has(release.id) ||
+          release.tagName === CANDIDATE_TAG ||
           (marker !== null &&
             marker.version === DUPLICATE_DRAFT_RECOVERY_POLICY.version &&
             marker.commitSha === DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha &&
             marker.tag === CANDIDATE_TAG)
         if (identifiesCandidate) {
           candidates.push({
-            releaseId: raw.id,
-            tagName: raw.tag_name,
-            draft: raw.draft,
-            prerelease: raw.prerelease,
-            immutable: raw.immutable,
-            targetCommitish: raw.target_commitish,
+            releaseId: release.id,
+            tagName: release.tagName,
+            draft: release.draft,
+            prerelease: release.prerelease,
+            immutable: release.immutable,
+            targetCommitish: release.targetCommitish,
             marker,
           })
         }
@@ -348,7 +344,7 @@ async function readRepositoryState(context) {
   ])
   if (
     !isObject(repository) ||
-    String(repository.id) !== REPOSITORY_ID ||
+    repository.id !== Number(REPOSITORY_ID) ||
     repository.full_name !== DUPLICATE_DRAFT_RECOVERY_POLICY.repository ||
     repository.name !== REPOSITORY ||
     repository.default_branch !== "main" ||
@@ -378,27 +374,24 @@ async function readRepositoryState(context) {
   })
 }
 
-async function readRequiredCi(github, reviewedHeadSha) {
+async function readRequiredCi(context, reviewedHeadSha) {
   const [checks, workflows] = await Promise.all([
-    readBoundary("REVIEWED_VALIDATE_UNAVAILABLE", async () =>
-      requirePresent(
-        await github.getCommitCheckRuns({ commitSha: reviewedHeadSha }),
-        "REVIEWED_VALIDATE_UNAVAILABLE",
-        "Reviewed validate check could not be verified",
-      ),
-    ),
-    readBoundary("REVIEWED_VALIDATE_UNAVAILABLE", async () =>
-      requirePresent(
-        await github.listWorkflowRuns({ workflow: "ci.yml", commitSha: reviewedHeadSha }),
-        "REVIEWED_VALIDATE_UNAVAILABLE",
-        "Reviewed CI workflow run could not be verified",
-      ),
-    ),
+    readStrictPages(context, {
+      path: `/repos/${OWNER}/${REPOSITORY}/commits/${reviewedHeadSha}/check-runs?per_page=100`,
+      operation: "REVIEWED_VALIDATE_CHECKS",
+      field: "check_runs",
+      requireTotalCount: true,
+    }),
+    readStrictPages(context, {
+      path: `/repos/${OWNER}/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${reviewedHeadSha}&per_page=100`,
+      operation: "REVIEWED_CI_RUNS",
+      field: "workflow_runs",
+      requireTotalCount: true,
+    }),
   ])
-  if (!Array.isArray(checks) || !Array.isArray(workflows)) {
-    fail("REVIEWED_VALIDATE_MALFORMED", "Reviewed CI validate evidence is malformed")
-  }
-  const matchingWorkflows = workflows.filter(
+  const normalizedChecks = checks.map((check) => normalizeCheckRun(check, reviewedHeadSha))
+  const normalizedWorkflows = workflows.map((run) => normalizeReviewedCiRun(run, reviewedHeadSha))
+  const matchingWorkflows = normalizedWorkflows.filter(
     (run) =>
       run?.name === "CI" &&
       run?.path === ".github/workflows/ci.yml" &&
@@ -409,7 +402,7 @@ async function readRequiredCi(github, reviewedHeadSha) {
     fail("REVIEWED_VALIDATE_NOT_SUCCESSFUL", "Reviewed CI validate check did not succeed")
   }
   const workflow = matchingWorkflows[0]
-  const matchingChecks = checks.filter(
+  const matchingChecks = normalizedChecks.filter(
     (check) =>
       check?.name === "validate" &&
       check?.head_sha === reviewedHeadSha &&
@@ -440,13 +433,12 @@ function normalizeReviewedPullRequest(value, reviewedCommit) {
     !Number.isSafeInteger(pull.number) ||
     pull.number < 1 ||
     pull.state !== "closed" ||
-    typeof pull.merged_at !== "string" ||
-    Number.isNaN(Date.parse(pull.merged_at)) ||
+    !isTimestamp(pull.merged_at) ||
     pull.merge_commit_sha !== reviewedCommit ||
     !isObject(pull.base) ||
     pull.base.ref !== "main" ||
     !isObject(pull.base.repo) ||
-    String(pull.base.repo.id) !== REPOSITORY_ID ||
+    pull.base.repo.id !== Number(REPOSITORY_ID) ||
     pull.base.repo.full_name !== DUPLICATE_DRAFT_RECOVERY_POLICY.repository ||
     !isObject(pull.head) ||
     !isSha(pull.head.sha)
@@ -472,7 +464,7 @@ function commitTreeSha(value, expectedCommitSha, label) {
 function normalizeReleaseRuns(value) {
   if (!Array.isArray(value)) fail("RELEASE_RUNS_MALFORMED", "Release workflow runs are malformed")
   const seen = new Set()
-  return value.map((raw) => {
+  const runs = value.map((raw) => {
     const run = safeSnapshot(raw, "RELEASE_RUNS_MALFORMED")
     if (
       !isObject(run) ||
@@ -481,9 +473,14 @@ function normalizeReleaseRuns(value) {
       seen.has(run.id) ||
       !Number.isSafeInteger(run.run_attempt) ||
       run.run_attempt < 1 ||
-      ![...NONTERMINAL_STATUSES, "completed"].includes(run.status) ||
+      !RUN_STATUSES.has(run.status) ||
       !isSha(run.head_sha) ||
-      run.path !== RELEASE_WORKFLOW_PATH
+      run.path !== RELEASE_WORKFLOW_PATH ||
+      !isTimestamp(run.created_at) ||
+      !isNullableTimestamp(run.run_started_at) ||
+      !isTimestamp(run.updated_at) ||
+      !coherentRunState(run) ||
+      !orderedTimestamps(run.created_at, run.run_started_at, run.updated_at)
     ) {
       fail("RELEASE_RUNS_MALFORMED", "Release workflow runs are malformed")
     }
@@ -492,10 +489,124 @@ function normalizeReleaseRuns(value) {
       id: run.id,
       runAttempt: run.run_attempt,
       status: run.status,
-      conclusion: run.conclusion ?? null,
+      conclusion: run.conclusion,
       headSha: run.head_sha,
+      createdAt: run.created_at,
+      startedAt: run.run_started_at,
+      updatedAt: run.updated_at,
     }
   })
+  return runs.sort((left, right) => left.id - right.id || left.runAttempt - right.runAttempt)
+}
+
+function normalizeCandidateJobs(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
+  }
+  const ids = new Set()
+  const attempts = new Set()
+  const jobs = value.map((raw) => {
+    const job = safeSnapshot(raw, "CANDIDATE_JOBS_MALFORMED")
+    if (
+      !isObject(job) ||
+      !Number.isSafeInteger(job.id) ||
+      job.id < 1 ||
+      ids.has(job.id) ||
+      !Number.isSafeInteger(job.run_attempt) ||
+      job.run_attempt < 1 ||
+      !isBoundedText(job.name, 512) ||
+      !JOB_STATUSES.has(job.status) ||
+      !isNullableTimestamp(job.started_at) ||
+      !isNullableTimestamp(job.completed_at) ||
+      !coherentJobState(job) ||
+      !orderedTimestamps(job.started_at, job.started_at, job.completed_at)
+    ) {
+      fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
+    }
+    ids.add(job.id)
+    attempts.add(job.run_attempt)
+    return {
+      id: job.id,
+      runAttempt: job.run_attempt,
+      name: job.name,
+      status: job.status,
+      conclusion: job.conclusion,
+      startedAt: job.started_at,
+      completedAt: job.completed_at,
+    }
+  })
+  const maximumAttempt = Math.max(...attempts)
+  if (attempts.size !== maximumAttempt) {
+    fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow job attempt coverage is incomplete")
+  }
+  return jobs.sort((left, right) => left.runAttempt - right.runAttempt || left.id - right.id)
+}
+
+function normalizeReleaseRow(value) {
+  const release = safeSnapshot(value, "RELEASE_LIST_MALFORMED")
+  if (
+    !isObject(release) ||
+    !Number.isSafeInteger(release.id) ||
+    release.id < 1 ||
+    !isBoundedText(release.tag_name, 1024) ||
+    !(release.body === null || isBoundedText(release.body, 512 * 1024, true)) ||
+    typeof release.draft !== "boolean" ||
+    typeof release.prerelease !== "boolean" ||
+    typeof release.immutable !== "boolean" ||
+    !isBoundedText(release.target_commitish, 1024)
+  ) {
+    fail("RELEASE_LIST_MALFORMED", "Release inventory is malformed")
+  }
+  return {
+    id: release.id,
+    tagName: release.tag_name,
+    body: release.body,
+    draft: release.draft,
+    prerelease: release.prerelease,
+    immutable: release.immutable,
+    targetCommitish: release.target_commitish,
+  }
+}
+
+function normalizeCheckRun(value, reviewedHeadSha) {
+  const check = safeSnapshot(value, "REVIEWED_VALIDATE_MALFORMED")
+  if (
+    !isObject(check) ||
+    !Number.isSafeInteger(check.id) ||
+    check.id < 1 ||
+    !isBoundedText(check.name, 256) ||
+    check.head_sha !== reviewedHeadSha ||
+    !isObject(check.check_suite) ||
+    !Number.isSafeInteger(check.check_suite.id) ||
+    check.check_suite.id < 1 ||
+    !["queued", "in_progress", "completed"].includes(check.status) ||
+    !coherentTerminalState(check.status, check.conclusion)
+  ) {
+    fail("REVIEWED_VALIDATE_MALFORMED", "Reviewed validate check evidence is malformed")
+  }
+  return check
+}
+
+function normalizeReviewedCiRun(value, reviewedHeadSha) {
+  const run = safeSnapshot(value, "REVIEWED_VALIDATE_MALFORMED")
+  if (
+    !isObject(run) ||
+    !Number.isSafeInteger(run.id) ||
+    run.id < 1 ||
+    !Number.isSafeInteger(run.run_attempt) ||
+    run.run_attempt < 1 ||
+    !Number.isSafeInteger(run.check_suite_id) ||
+    run.check_suite_id < 1 ||
+    run.head_sha !== reviewedHeadSha ||
+    !isBoundedText(run.name, 256) ||
+    !isBoundedText(run.path, 1024) ||
+    !isBoundedText(run.event, 256) ||
+    !RUN_STATUSES.has(run.status) ||
+    !coherentTerminalState(run.status, run.conclusion)
+  ) {
+    fail("REVIEWED_VALIDATE_MALFORMED", "Reviewed CI workflow evidence is malformed")
+  }
+  return run
 }
 
 async function normalizeReleaseSnapshot({
@@ -509,8 +620,8 @@ async function normalizeReleaseSnapshot({
   if (
     !isObject(raw) ||
     raw.id !== releaseId ||
-    typeof raw.tag_name !== "string" ||
-    typeof raw.body !== "string" ||
+    !isBoundedText(raw.tag_name, 1024) ||
+    !isBoundedText(raw.body, 512 * 1024, true) ||
     raw.draft !== true ||
     raw.prerelease !== false ||
     raw.immutable !== false ||
@@ -522,19 +633,25 @@ async function normalizeReleaseSnapshot({
   const marker = releaseMarker(raw.body)
   const assets = []
   const evidenceAssets = []
+  const assetIds = new Set()
+  const assetNames = new Set()
   for (const rawAsset of rawAssets) {
     const asset = safeSnapshot(rawAsset, "RELEASE_ASSETS_MALFORMED")
     if (
       !isObject(asset) ||
       !Number.isSafeInteger(asset.id) ||
       asset.id < 1 ||
-      typeof asset.name !== "string" ||
+      assetIds.has(asset.id) ||
+      !ASSET_NAME_PATTERN.test(asset.name) ||
+      assetNames.has(asset.name) ||
       !/^sha256:[0-9a-f]{64}$/u.test(asset.digest) ||
       !Number.isSafeInteger(asset.size) ||
       asset.size < 1
     ) {
       fail("RELEASE_ASSETS_MALFORMED", "Release asset inventory is malformed")
     }
+    assetIds.add(asset.id)
+    assetNames.add(asset.name)
     const normalized = { id: asset.id, name: asset.name, sha256: asset.digest.slice(7) }
     const kind = recoveryEvidenceKind(asset.name, releaseId)
     if (kind !== null) {
@@ -616,58 +733,96 @@ async function readExactJson(context, { path, operation, accept = "application/v
   return safeSnapshot(result.body, `${operation.toUpperCase().replaceAll("-", "_")}_MALFORMED`)
 }
 
-async function readPaginatedArray(context, { path, operation, field }) {
+async function readStrictPages(context, { path, operation, field, requireTotalCount = false }) {
   const records = []
   const seenUrls = new Set()
   let totalCount = null
   let url = `${API_ORIGIN}${path}`
+  let remainingBytes = context.maxResponseBytes
+  const startedAt = context.now()
+  if (!Number.isSafeInteger(startedAt)) {
+    fail(`${operation}_UNAVAILABLE`, `${operation.toLowerCase()} read failed`)
+  }
+  const deadline = startedAt + context.timeoutMs
   for (let page = 0; page < MAX_PAGES; page += 1) {
     if (seenUrls.has(url)) fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
     seenUrls.add(url)
-    const result = await context.http.getJson({
-      url,
-      headers: githubHeaders(context.token, "application/vnd.github+json"),
-    })
+    const currentTime = context.now()
+    const remainingTime = deadline - currentTime
+    if (!Number.isSafeInteger(currentTime) || remainingTime < 1) {
+      fail(`${operation}_UNAVAILABLE`, `${operation.toLowerCase()} read failed`)
+    }
+    if (remainingBytes < 1) {
+      fail(`${operation}_OVER_LIMIT`, `${operation.toLowerCase()} read exceeds the byte limit`)
+    }
+    const result = await readBoundary(`${operation}_UNAVAILABLE`, () =>
+      context.http.getJson({
+        url,
+        headers: githubHeaders(context.token, "application/vnd.github+json"),
+        timeoutMs: Math.min(context.timeoutMs, remainingTime),
+        maxResponseBytes: remainingBytes,
+      }),
+    )
     if (result.status !== "OK" || result.httpStatus !== 200 || result.code !== null) {
-      fail(
-        `${operation.toUpperCase().replaceAll("-", "_")}_UNAVAILABLE`,
-        `${operation} read failed`,
-      )
+      const code =
+        result.code === "RESPONSE_TOO_LARGE"
+          ? `${operation}_OVER_LIMIT`
+          : `${operation}_UNAVAILABLE`
+      fail(code, `${operation.toLowerCase()} read failed`)
     }
-    const body = safeSnapshot(result.body, "RELEASE_RUNS_MALFORMED")
-    if (
-      !isObject(body) ||
-      !Number.isSafeInteger(body.total_count) ||
-      body.total_count < 0 ||
-      body.total_count > MAX_RECORDS ||
-      !Array.isArray(body[field]) ||
-      body[field].length > 100
-    ) {
-      fail("RELEASE_RUNS_MALFORMED", "Release workflow runs are malformed")
+    if (!Number.isSafeInteger(result.bodyBytes) || result.bodyBytes < 0) {
+      fail(`${operation}_MALFORMED`, `${operation.toLowerCase()} response is malformed`)
     }
-    if (totalCount === null) totalCount = body.total_count
-    if (body.total_count !== totalCount) {
-      fail("PAGINATION_DRIFT", "Recovery read pagination total changed")
+    remainingBytes -= result.bodyBytes
+    const body = safeSnapshot(result.body, `${operation}_MALFORMED`)
+    let pageRecords
+    if (field === undefined) {
+      if (!Array.isArray(body)) {
+        fail(`${operation}_MALFORMED`, `${operation.toLowerCase()} response is malformed`)
+      }
+      pageRecords = body
+    } else {
+      if (!isObject(body) || !Array.isArray(body[field])) {
+        fail(`${operation}_MALFORMED`, `${operation.toLowerCase()} response is malformed`)
+      }
+      pageRecords = body[field]
     }
-    if (records.length + body[field].length > MAX_RECORDS) {
-      fail("RELEASE_RUNS_OVER_LIMIT", "Release workflow runs exceed the record limit")
+    if (requireTotalCount) {
+      if (
+        !isObject(body) ||
+        !Number.isSafeInteger(body.total_count) ||
+        body.total_count < 0 ||
+        body.total_count > MAX_RECORDS
+      ) {
+        fail(`${operation}_MALFORMED`, `${operation.toLowerCase()} response is malformed`)
+      }
+      if (totalCount === null) totalCount = body.total_count
+      if (body.total_count !== totalCount) {
+        fail("PAGINATION_DRIFT", "Recovery read pagination total changed")
+      }
     }
-    records.push(...body[field])
+    if (pageRecords.length > 100) {
+      fail(`${operation}_OVER_LIMIT`, `${operation.toLowerCase()} read exceeds the page size`)
+    }
+    if (records.length + pageRecords.length > MAX_RECORDS) {
+      fail(`${operation}_OVER_LIMIT`, `${operation.toLowerCase()} read exceeds the record limit`)
+    }
+    records.push(...pageRecords)
     const next = nextLink(result.headers?.link)
     if (next === null) {
-      if (records.length !== totalCount) {
+      if (requireTotalCount && records.length !== totalCount) {
         fail("PAGINATION_DRIFT", "Recovery read pagination is incomplete")
       }
       return records
     }
-    if (body[field].length !== 100 || records.length >= totalCount) {
+    if (pageRecords.length !== 100 || (requireTotalCount && records.length >= totalCount)) {
       fail("PAGINATION_DRIFT", "Recovery read pagination is inconsistent")
     }
     const normalized = normalizePaginationUrl(next, path, page + 2)
     if (normalized === null) fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
     url = normalized
   }
-  fail("RELEASE_RUNS_OVER_LIMIT", "Release workflow runs exceed the page limit")
+  fail(`${operation}_OVER_LIMIT`, `${operation.toLowerCase()} read exceeds the page limit`)
 }
 
 function normalizePaginationUrl(value, initialPath, expectedPage) {
@@ -679,7 +834,7 @@ function normalizePaginationUrl(value, initialPath, expectedPage) {
       url.username !== "" ||
       url.password !== "" ||
       url.hash !== "" ||
-      url.pathname !== initial.pathname
+      ![initial.pathname, repositoryIdPath(initial.pathname)].includes(url.pathname)
     ) {
       return null
     }
@@ -699,16 +854,25 @@ function normalizePaginationUrl(value, initialPath, expectedPage) {
   }
 }
 
+function repositoryIdPath(pathname) {
+  const prefix = `/repos/${OWNER}/${REPOSITORY}`
+  return pathname.startsWith(prefix)
+    ? `/repositories/${REPOSITORY_ID}${pathname.slice(prefix.length)}`
+    : pathname
+}
+
 function nextLink(value) {
   if (value === null || value === undefined) return null
   if (typeof value !== "string") fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
-  const parts = value.split(",")
-  const next = parts.filter((part) => /;\s*rel="next"\s*$/u.test(part.trim()))
-  if (next.length === 0) return null
-  if (next.length !== 1) fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
-  const match = /^\s*<([^>]+)>;\s*rel="next"\s*$/u.exec(next[0])
-  if (match === null) fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
-  return match[1]
+  const relations = new Map()
+  for (const part of value.split(",")) {
+    const match = /^\s*<([^>]+)>;\s*rel="([a-z]+)"\s*$/u.exec(part)
+    if (match === null || relations.has(match[2])) {
+      fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
+    }
+    relations.set(match[2], match[1])
+  }
+  return relations.get("next") ?? null
 }
 
 function githubHeaders(token, accept) {
@@ -755,6 +919,53 @@ function isSha(value) {
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function isTimestamp(value) {
+  return (
+    typeof value === "string" && TIMESTAMP_PATTERN.test(value) && Number.isFinite(Date.parse(value))
+  )
+}
+
+function isNullableTimestamp(value) {
+  return value === null || isTimestamp(value)
+}
+
+function isBoundedText(value, maximumBytes, allowEmpty = false) {
+  return (
+    typeof value === "string" &&
+    (allowEmpty || value.length > 0) &&
+    Buffer.byteLength(value) <= maximumBytes &&
+    !/[\0\r]/u.test(value)
+  )
+}
+
+function coherentTerminalState(status, conclusion) {
+  return status === "completed" ? TERMINAL_CONCLUSIONS.has(conclusion) : conclusion === null
+}
+
+function coherentRunState(run) {
+  return (
+    coherentTerminalState(run.status, run.conclusion) &&
+    (run.status === "completed" || run.status === "in_progress"
+      ? run.run_started_at !== null
+      : run.run_started_at === null)
+  )
+}
+
+function coherentJobState(job) {
+  return (
+    coherentTerminalState(job.status, job.conclusion) &&
+    (job.status === "completed"
+      ? job.started_at !== null && job.completed_at !== null
+      : job.completed_at === null &&
+        (job.status === "in_progress" ? job.started_at !== null : job.started_at === null))
+  )
+}
+
+function orderedTimestamps(...values) {
+  const timestamps = values.filter((value) => value !== null).map((value) => Date.parse(value))
+  return timestamps.every((value, index) => index === 0 || timestamps[index - 1] <= value)
 }
 
 function sha256(value) {

@@ -159,13 +159,21 @@ function expectedFor(releaseId = POLICY.duplicates[0].releaseId) {
 
 function snapshot(overrides = {}, releaseId = POLICY.duplicates[0].releaseId) {
   const expected = expectedFor(releaseId)
+  const duplicateIndex = POLICY.duplicates.findIndex(
+    (duplicate) => duplicate.releaseId === releaseId,
+  )
+  const idOffset = (duplicateIndex + 1) * 1_000
+  const duplicateOriginalAssets = expected.originalAssets.map((asset) => ({
+    ...asset,
+    id: asset.id + idOffset,
+  }))
   const evidenceAssets = overrides.evidenceAssets ?? []
   const canonicalReceiptBytes = canonicalRecoveryReceipt(expected.recoveryReceipt)
   const receiptBytes = overrides.receiptBytes ?? canonicalReceiptBytes.toString("utf8")
   const receiptSha256 =
     overrides.receiptSha256 ?? createHash("sha256").update(canonicalReceiptBytes).digest("hex")
   const evidence = evidenceAssets.map((kind) => ({
-    id: kind === "body" ? 201 : 202,
+    id: idOffset + (kind === "body" ? 901 : 902),
     name:
       kind === "body"
         ? originalBodyAssetName(expected.releaseId, expected.originalBodySha256)
@@ -178,7 +186,7 @@ function snapshot(overrides = {}, releaseId = POLICY.duplicates[0].releaseId) {
     tagName: expected.tagName,
     body: overrides.quarantined ? expected.recoveryNotice : expected.canonicalBody,
     marker: overrides.quarantined ? null : expected.canonicalMarker,
-    assets: [...expected.originalAssets, ...evidence],
+    assets: [...duplicateOriginalAssets, ...evidence],
     evidenceAssets,
     ...Object.fromEntries(
       Object.entries(overrides).filter(
@@ -223,6 +231,39 @@ test("classifies each exact resumable duplicate state", () => {
       ),
       "quarantined",
     )
+  }
+})
+
+test("compares original asset namespaces without conflating cross-Release asset IDs", () => {
+  const expected = expectedFor()
+  const duplicate = snapshot()
+
+  assert.notEqual(duplicate.assets[0].id, expected.originalAssets[0].id)
+  assert.equal(classifyDuplicateDraft(duplicate, expected), "untouched")
+
+  const observation = recoveryObservation()
+  const evidence = parseDuplicateDraftEvidence(canonicalDuplicateDraftEvidence(observation))
+  assert.equal(
+    evidence.releases.duplicates[0].assets[0].id,
+    observation.releases.duplicates[0].assets[0].id,
+  )
+  assert.notEqual(
+    evidence.releases.duplicates[0].assets[0].id,
+    evidence.releases.canonical.assets[0].id,
+  )
+})
+
+test("rejects duplicate asset IDs and name collisions within each observed Release", () => {
+  const expected = expectedFor()
+  for (const field of ["id", "name"]) {
+    const conflicting = snapshot()
+    conflicting.assets[1][field] = conflicting.assets[0][field]
+    assert.throws(() => classifyDuplicateDraft(conflicting, expected), /asset|unique/iu)
+
+    const observation = recoveryObservation()
+    observation.releases.duplicates[0].assets[1][field] =
+      observation.releases.duplicates[0].assets[0][field]
+    assert.throws(() => canonicalDuplicateDraftEvidence(observation), /asset|unique/iu)
   }
 })
 
@@ -551,7 +592,7 @@ function recoveryObservation({
       reviewedTreeSha: REVIEWED_TREE_SHA,
       validateRunId: 987654321,
     },
-    repository: { id: 424242, nameWithOwner: POLICY.repository, mainSha: MERGE_COMMIT_SHA },
+    repository: { id: 1210070282, nameWithOwner: POLICY.repository, mainSha: MERGE_COMMIT_SHA },
     workflow: { id: 260503756, state: "disabled_manually" },
     immutableReleases: { enabled: true },
     candidate: {
@@ -591,9 +632,23 @@ function captureReader({
       status: "completed",
       conclusion: "failure",
       headSha: POLICY.candidateSha,
+      createdAt: RECOVERY_CAPTURED_AT,
+      startedAt: RECOVERY_CAPTURED_AT,
+      updatedAt: RECOVERY_CAPTURED_AT,
     },
   ],
-  jobs = [{ id: 701, name: "prepare", status: "completed", startedAt: RECOVERY_CAPTURED_AT }],
+  runs = candidateRuns,
+  jobs = [
+    {
+      id: 701,
+      runAttempt: 1,
+      name: "prepare",
+      status: "completed",
+      conclusion: "success",
+      startedAt: RECOVERY_CAPTURED_AT,
+      completedAt: RECOVERY_CAPTURED_AT,
+    },
+  ],
   candidateReleases,
 } = {}) {
   const observation = recoveryObservation({ states })
@@ -621,7 +676,7 @@ function captureReader({
     },
     async readReleaseRuns() {
       calls.push(["readReleaseRuns"])
-      return { nonterminalRuns: [], candidateRuns }
+      return { runs, candidateRuns }
     },
     async readCandidatePublishJobs(runId) {
       calls.push(["readCandidatePublishJobs", runId])
@@ -646,7 +701,7 @@ function captureReader({
       )
     },
   }
-  return { reader, calls }
+  return { reader: Object.freeze(reader), calls }
 }
 
 function releaseSummary(release) {
@@ -696,8 +751,8 @@ test("captures canonical frozen evidence through only the read boundary", async 
 })
 
 test("capture rejects a writer-bearing dependency before any read", async () => {
-  const { reader, calls } = captureReader()
-  reader.writer = Object.freeze({})
+  const { reader: exactReader, calls } = captureReader()
+  const reader = Object.freeze({ ...exactReader, writer: Object.freeze({}) })
   await assert.rejects(
     captureDuplicateDraftRecoveryEvidence({
       reviewedCommit: MERGE_COMMIT_SHA,
@@ -709,6 +764,42 @@ test("capture rejects a writer-bearing dependency before any read", async () => 
   assert.deepEqual(calls, [])
 })
 
+test("capture rejects hidden, symbolic, accessor, inherited, and unfrozen capabilities", async () => {
+  const { reader: exactReader } = captureReader()
+  const cases = []
+
+  const hidden = { ...exactReader }
+  Object.defineProperty(hidden, "writer", { value: () => {}, enumerable: false })
+  cases.push(Object.freeze(hidden))
+
+  const symbolic = { ...exactReader, [Symbol("writer")]: () => {} }
+  cases.push(Object.freeze(symbolic))
+
+  const accessor = { ...exactReader }
+  Object.defineProperty(accessor, "readRepositoryState", {
+    enumerable: true,
+    get: () => exactReader.readRepositoryState,
+  })
+  cases.push(Object.freeze(accessor))
+
+  cases.push(Object.freeze(Object.assign(Object.create({ writer: () => {} }), exactReader)))
+  cases.push({ ...exactReader })
+  const revoked = Proxy.revocable(exactReader, {})
+  revoked.revoke()
+  cases.push(revoked.proxy)
+
+  for (const reader of cases) {
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => error.code === "CAPTURE_READER_SURFACE_INVALID",
+    )
+  }
+})
+
 test("capture checks jobs for every observed candidate run and rejects started publish-npm", async () => {
   const candidateRuns = [
     {
@@ -717,6 +808,9 @@ test("capture checks jobs for every observed candidate run and rejects started p
       status: "completed",
       conclusion: "failure",
       headSha: POLICY.candidateSha,
+      createdAt: RECOVERY_CAPTURED_AT,
+      startedAt: RECOVERY_CAPTURED_AT,
+      updatedAt: RECOVERY_CAPTURED_AT,
     },
     {
       id: 800,
@@ -724,6 +818,9 @@ test("capture checks jobs for every observed candidate run and rejects started p
       status: "completed",
       conclusion: "success",
       headSha: POLICY.candidateSha,
+      createdAt: RECOVERY_CAPTURED_AT,
+      startedAt: RECOVERY_CAPTURED_AT,
+      updatedAt: RECOVERY_CAPTURED_AT,
     },
   ]
   const { reader, calls } = captureReader({
@@ -731,10 +828,12 @@ test("capture checks jobs for every observed candidate run and rejects started p
     jobs: [
       {
         id: 702,
+        runAttempt: 1,
         name: "publish-npm",
         status: "completed",
         conclusion: "failure",
         startedAt: RECOVERY_CAPTURED_AT,
+        completedAt: RECOVERY_CAPTURED_AT,
       },
     ],
   })
@@ -753,6 +852,65 @@ test("capture checks jobs for every observed candidate run and rejects started p
       ["readCandidatePublishJobs", 800],
     ],
   )
+})
+
+test("capture treats completed publish jobs without start timestamps as malformed", async () => {
+  const { reader } = captureReader({
+    jobs: [
+      {
+        id: 702,
+        runAttempt: 1,
+        name: "publish-npm",
+        status: "completed",
+        conclusion: "success",
+        startedAt: null,
+        completedAt: RECOVERY_CAPTURED_AT,
+      },
+    ],
+  })
+  await assert.rejects(
+    captureDuplicateDraftRecoveryEvidence({
+      reviewedCommit: MERGE_COMMIT_SHA,
+      reader,
+      now: () => Date.parse(RECOVERY_CAPTURED_AT),
+    }),
+    (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
+  )
+})
+
+test("capture reconciles the exhaustive and candidate-filtered workflow run sets", async () => {
+  const candidateRun = {
+    id: 700,
+    runAttempt: 1,
+    status: "completed",
+    conclusion: "failure",
+    headSha: POLICY.candidateSha,
+    createdAt: RECOVERY_CAPTURED_AT,
+    startedAt: RECOVERY_CAPTURED_AT,
+    updatedAt: RECOVERY_CAPTURED_AT,
+  }
+  for (const overrides of [
+    { runs: [candidateRun], candidateRuns: [] },
+    { runs: [], candidateRuns: [candidateRun] },
+    {
+      runs: [candidateRun],
+      candidateRuns: [{ ...candidateRun, conclusion: "success" }],
+    },
+  ]) {
+    const { reader, calls } = captureReader(overrides)
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => error.code === "RELEASE_RUNS_MALFORMED",
+    )
+    assert.deepEqual(
+      calls.filter(([name]) => name === "readCandidatePublishJobs"),
+      [],
+    )
+  }
 })
 
 test("capture refuses a fourth marker-backed candidate Release", async () => {
@@ -783,16 +941,19 @@ test("capture and evidence reject exact-tag or arbitrary canonical raw tag names
     observation.releases.canonical.tagName = tagName
     assert.throws(() => canonicalDuplicateDraftEvidence(observation), /canonical Release/iu)
 
-    const { reader } = captureReader({
+    const { reader: exactReader } = captureReader({
       candidateReleases: [
         { ...releaseSummary(observation.releases.canonical), tagName },
         ...observation.releases.duplicates.map(releaseSummary),
       ],
     })
-    reader.readReleaseSnapshot = async (releaseId) =>
-      releaseId === POLICY.canonicalReleaseId
-        ? observation.releases.canonical
-        : observation.releases.duplicates.find((release) => release.releaseId === releaseId)
+    const reader = Object.freeze({
+      ...exactReader,
+      readReleaseSnapshot: async (releaseId) =>
+        releaseId === POLICY.canonicalReleaseId
+          ? observation.releases.canonical
+          : observation.releases.duplicates.find((release) => release.releaseId === releaseId),
+    })
     await assert.rejects(
       captureDuplicateDraftRecoveryEvidence({
         reviewedCommit: MERGE_COMMIT_SHA,
@@ -801,6 +962,14 @@ test("capture and evidence reject exact-tag or arbitrary canonical raw tag names
       }),
       (error) => typeof error.code === "string",
     )
+  }
+})
+
+test("canonical evidence pins the exact numeric GitHub repository identity", () => {
+  for (const id of ["1210070282", 1210070281, 424242]) {
+    const observation = recoveryObservation()
+    observation.repository.id = id
+    assert.throws(() => canonicalDuplicateDraftEvidence(observation), /repository identity/iu)
   }
 })
 
@@ -920,7 +1089,7 @@ test("rejects noncanonical, unsafe, sparse, and caller-trusted duplicate evidenc
     enumerable: true,
     get() {
       accessed = true
-      return 424242
+      return 1210070282
     },
   })
   assert.throws(() => canonicalDuplicateDraftEvidence(accessor), /Invalid field|unsafe/u)

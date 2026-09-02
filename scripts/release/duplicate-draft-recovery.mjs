@@ -48,6 +48,27 @@ const DUPLICATE_DERIVED_FIELDS = [
 ]
 const MAX_DUPLICATE_EVIDENCE_AGE_MS = 15 * 60 * 1000
 const CANONICAL_OPAQUE_TAG = "untagged-be0ff4bee4ba43b521a9"
+const CAPTURE_RUN_STATUSES = new Set([
+  "requested",
+  "waiting",
+  "pending",
+  "queued",
+  "in_progress",
+  "completed",
+])
+const CAPTURE_JOB_STATUSES = new Set(["waiting", "pending", "queued", "in_progress", "completed"])
+const CAPTURE_TERMINAL_CONCLUSIONS = new Set([
+  "success",
+  "failure",
+  "neutral",
+  "cancelled",
+  "skipped",
+  "timed_out",
+  "action_required",
+  "stale",
+  "startup_failure",
+])
+const CAPTURE_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 const CAPTURE_READER_METHODS = [
   "readReviewedMergeAuthority",
   "readRepositoryState",
@@ -297,7 +318,9 @@ export function classifyDuplicateDraft(value, expected) {
     "original Release assets",
     false,
   )
+  assertUniqueAssets(originalAssets, "original Release assets")
   const assets = normalizeAssets(snapshot.assets, "duplicate Release assets", true)
+  assertUniqueAssets(assets, "duplicate Release assets")
   const evidenceKinds = normalizeEvidenceKinds(snapshot.evidenceAssets)
   let parsedCanonicalMarker
   try {
@@ -368,7 +391,7 @@ export function classifyDuplicateDraft(value, expected) {
     throw new Error("Duplicate Release asset namespace is not exact")
   }
   const originalActual = assets.slice(0, originalAssets.length)
-  if (!sameJson(originalActual, originalAssets)) {
+  if (!sameJson(assetNamespace(originalActual), assetNamespace(originalAssets))) {
     throw new Error("Duplicate Release original asset namespace changed")
   }
   const evidence = assets.slice(originalAssets.length)
@@ -665,9 +688,9 @@ function normalizeReviewedAuthority(value) {
 
 function normalizeRecoveryRepository(value, mergeCommitSha) {
   const source = exactObject(value, ["id", "nameWithOwner", "mainSha"], "recovery repository")
-  assertPositiveInteger(source.id, "Recovery repository ID")
   assertGitSha(source.mainSha, "Recovery repository main SHA")
   if (
+    source.id !== 1210070282 ||
     source.nameWithOwner !== DUPLICATE_DRAFT_RECOVERY_POLICY.repository ||
     source.mainSha !== mergeCommitSha
   ) {
@@ -828,6 +851,7 @@ function normalizeRecoveryDuplicateSource(value, originalAssets) {
           evidenceKinds[index] === "receipt",
         )[0],
     )
+  assertUniqueAssets([...original, ...evidence], "recovery duplicate Release assets")
   return {
     releaseId: source.releaseId,
     tagName: source.tagName,
@@ -876,20 +900,51 @@ function normalizeCanonicalRecoveryRelease(value, candidate) {
 }
 
 function assertCaptureReader(value) {
-  if (!isRecord(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+  let prototype
+  let keys
+  let frozen
+  try {
+    if (!isRecord(value)) throw new TypeError("invalid reader")
+    prototype = Object.getPrototypeOf(value)
+    keys = Reflect.ownKeys(value)
+    frozen = Object.isFrozen(value)
+  } catch {
     captureFail("CAPTURE_READER_SURFACE_INVALID", "Recovery capture reader is invalid")
   }
-  const actual = Object.keys(value).sort(compareText)
-  const expected = [...CAPTURE_READER_METHODS].sort(compareText)
   if (
-    actual.length !== expected.length ||
-    actual.some((name, index) => name !== expected[index]) ||
-    CAPTURE_READER_METHODS.some((name) => typeof value[name] !== "function")
+    ![Object.prototype, null].includes(prototype) ||
+    !frozen ||
+    keys.some((key) => typeof key !== "string")
   ) {
+    captureFail("CAPTURE_READER_SURFACE_INVALID", "Recovery capture reader is invalid")
+  }
+  const actual = [...keys].sort(compareText)
+  const expected = [...CAPTURE_READER_METHODS].sort(compareText)
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
     captureFail(
       "CAPTURE_READER_SURFACE_INVALID",
       "Recovery capture reader must expose only recovery reads",
     )
+  }
+  for (const name of CAPTURE_READER_METHODS) {
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, name)
+    } catch {
+      captureFail("CAPTURE_READER_SURFACE_INVALID", "Recovery capture reader is invalid")
+    }
+    if (
+      descriptor?.enumerable !== true ||
+      !("value" in descriptor) ||
+      descriptor.get !== undefined ||
+      descriptor.set !== undefined ||
+      typeof descriptor.value !== "function"
+    ) {
+      captureFail(
+        "CAPTURE_READER_SURFACE_INVALID",
+        "Recovery capture reader must expose only recovery reads",
+      )
+    }
   }
 }
 
@@ -903,34 +958,52 @@ async function captureRead(reader, method, args, code) {
 }
 
 function normalizeCaptureRuns(value) {
-  const source = exactObject(
-    value,
-    ["nonterminalRuns", "candidateRuns"],
-    "recovery workflow run observation",
-  )
-  if (!Array.isArray(source.nonterminalRuns) || !Array.isArray(source.candidateRuns)) {
+  const source = exactObject(value, ["runs", "candidateRuns"], "recovery workflow run observation")
+  if (!Array.isArray(source.runs) || !Array.isArray(source.candidateRuns)) {
     captureFail("RELEASE_RUNS_MALFORMED", "Recovery workflow run observation is malformed")
   }
-  const nonterminalRuns = source.nonterminalRuns.map((run) =>
-    normalizeCaptureRun(run, "nonterminal Release workflow run", false),
-  )
-  const candidateRuns = source.candidateRuns.map((run) =>
-    normalizeCaptureRun(run, "candidate Release workflow run", true),
-  )
-  assertUniqueRunIds(nonterminalRuns, "nonterminal")
+  const runs = source.runs
+    .map((run) => normalizeCaptureRun(run, "Release workflow run", false))
+    .sort(compareCaptureRun)
+  const candidateRuns = source.candidateRuns
+    .map((run) => normalizeCaptureRun(run, "candidate Release workflow run", true))
+    .sort(compareCaptureRun)
+  assertUniqueRunIds(runs, "exhaustive")
   assertUniqueRunIds(candidateRuns, "candidate")
-  return { nonterminalRuns, candidateRuns }
+  const expectedCandidates = runs.filter(
+    (run) => run.headSha === DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha,
+  )
+  if (!sameJson(expectedCandidates, candidateRuns)) {
+    captureFail("RELEASE_RUNS_MALFORMED", "Candidate workflow run set is not exhaustive")
+  }
+  return {
+    nonterminalRuns: runs.filter((run) => run.status !== "completed"),
+    candidateRuns,
+  }
+}
+
+function compareCaptureRun(left, right) {
+  return left.id - right.id || left.runAttempt - right.runAttempt
 }
 
 function normalizeCaptureRun(value, label, requireCandidateSha) {
-  const source = exactObject(value, ["id", "runAttempt", "status", "conclusion", "headSha"], label)
+  const source = exactObject(
+    value,
+    ["id", "runAttempt", "status", "conclusion", "headSha", "createdAt", "startedAt", "updatedAt"],
+    label,
+  )
   assertPositiveInteger(source.id, `${label} ID`)
   assertPositiveInteger(source.runAttempt, `${label} attempt`)
   assertGitSha(source.headSha, `${label} head SHA`)
   if (
-    typeof source.status !== "string" ||
-    source.status.length === 0 ||
-    !(source.conclusion === null || typeof source.conclusion === "string") ||
+    !CAPTURE_RUN_STATUSES.has(source.status) ||
+    !isCaptureTimestamp(source.createdAt) ||
+    !isNullableCaptureTimestamp(source.startedAt) ||
+    !isCaptureTimestamp(source.updatedAt) ||
+    !coherentCaptureTerminalState(source.status, source.conclusion) ||
+    (source.status === "completed" || source.status === "in_progress") !==
+      (source.startedAt !== null) ||
+    !orderedCaptureTimestamps(source.createdAt, source.startedAt, source.updatedAt) ||
     (requireCandidateSha && source.headSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha)
   ) {
     captureFail("RELEASE_RUNS_MALFORMED", "Recovery workflow run observation is malformed")
@@ -945,37 +1018,53 @@ function assertUniqueRunIds(runs, label) {
 }
 
 function assertNoStartedPublishJob(value) {
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || value.length === 0) {
     captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
   }
+  const ids = new Set()
+  const attempts = new Set()
   for (const raw of value) {
     let job
     try {
-      job = snapshotJson(raw)
+      job = exactObject(
+        raw,
+        ["id", "runAttempt", "name", "status", "conclusion", "startedAt", "completedAt"],
+        "candidate workflow job",
+      )
     } catch {
       captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
     if (
-      !isRecord(job) ||
       !Number.isSafeInteger(job.id) ||
       job.id < 1 ||
-      typeof job.name !== "string" ||
-      job.name.length === 0 ||
-      typeof job.status !== "string" ||
-      job.status.length === 0 ||
-      !(
-        job.startedAt === null ||
-        (typeof job.startedAt === "string" && !Number.isNaN(Date.parse(job.startedAt)))
-      )
+      ids.has(job.id) ||
+      !Number.isSafeInteger(job.runAttempt) ||
+      job.runAttempt < 1 ||
+      !isBoundedCaptureText(job.name, 512) ||
+      !CAPTURE_JOB_STATUSES.has(job.status) ||
+      !isNullableCaptureTimestamp(job.startedAt) ||
+      !isNullableCaptureTimestamp(job.completedAt) ||
+      !coherentCaptureTerminalState(job.status, job.conclusion) ||
+      (job.status === "completed"
+        ? job.startedAt === null || job.completedAt === null
+        : job.completedAt !== null ||
+          (job.status === "in_progress") !== (job.startedAt !== null)) ||
+      !orderedCaptureTimestamps(job.startedAt, job.completedAt)
     ) {
       captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
+    ids.add(job.id)
+    attempts.add(job.runAttempt)
     if (job.name === "publish-npm" && job.startedAt !== null) {
       captureFail(
         "CANDIDATE_PUBLISH_JOB_STARTED",
         "A candidate publish-npm job has already started",
       )
     }
+  }
+  const maximumAttempt = Math.max(...attempts)
+  if (attempts.size !== maximumAttempt) {
+    captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow job attempt coverage is incomplete")
   }
 }
 
@@ -1291,6 +1380,36 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
+function isCaptureTimestamp(value) {
+  return (
+    typeof value === "string" &&
+    CAPTURE_TIMESTAMP_PATTERN.test(value) &&
+    Number.isFinite(Date.parse(value))
+  )
+}
+
+function isNullableCaptureTimestamp(value) {
+  return value === null || isCaptureTimestamp(value)
+}
+
+function isBoundedCaptureText(value, maximumBytes) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value) <= maximumBytes &&
+    !/[\0\r\n]/u.test(value)
+  )
+}
+
+function coherentCaptureTerminalState(status, conclusion) {
+  return status === "completed" ? CAPTURE_TERMINAL_CONCLUSIONS.has(conclusion) : conclusion === null
+}
+
+function orderedCaptureTimestamps(...values) {
+  const timestamps = values.filter((value) => value !== null).map((value) => Date.parse(value))
+  return timestamps.every((value, index) => index === 0 || timestamps[index - 1] <= value)
+}
+
 function compareText(left, right) {
   return left === right ? 0 : left < right ? -1 : 1
 }
@@ -1300,9 +1419,11 @@ function sha256(value) {
 }
 
 function assetSetSha256(assets) {
-  return sha256(
-    `${JSON.stringify(assets.map(({ name, sha256: digest }) => ({ name, sha256: digest })))}\n`,
-  )
+  return sha256(`${JSON.stringify(assetNamespace(assets))}\n`)
+}
+
+function assetNamespace(assets) {
+  return assets.map(({ name, sha256: digest }) => ({ name, sha256: digest }))
 }
 
 function sha256Bytes(value) {
