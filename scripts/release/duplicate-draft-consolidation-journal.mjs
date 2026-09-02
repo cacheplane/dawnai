@@ -9,6 +9,7 @@ import {
 } from "./duplicate-draft-consolidation-schema.mjs";
 
 const MAXIMUM_DELETE_ATTEMPTS = 3;
+const MAXIMUM_CONSECUTIVE_AUTHORITIES = 3;
 const APPROVED_DUPLICATE_IDS = Object.freeze(["379982100", "379986168"]);
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const TIMESTAMP_PATTERN =
@@ -272,6 +273,7 @@ function replayJournal(journal) {
 		lastOutcomeClassification: null,
 		lastAuthority: null,
 		lastAuthorityEventSha256: null,
+		consecutiveAuthorities: 0,
 	};
 	let previousTimestamp = started.recordedAt;
 	for (let index = 1; index < events.length; index += 1) {
@@ -321,6 +323,7 @@ function applyEvent(state, event, eventSha256) {
 		return;
 	}
 	if (event.type === "delete-authority-observed") {
+		const supersedingOrphan = state.phase === "delete-authority-observed";
 		const expectedAttempt =
 			state.phase === "resume-present"
 				? state.attemptNumber + 1
@@ -335,12 +338,21 @@ function applyEvent(state, event, eventSha256) {
 				"npm-observed",
 				"target-converged",
 				"resume-present",
+				"delete-authority-observed",
 			].includes(state.phase)
 		) {
 			throw new Error("Delete authority is not legal in the current state");
 		}
 		if (expectedAttempt > MAXIMUM_DELETE_ATTEMPTS) {
 			throw new Error("Delete attempts are exhausted at the reviewed maximum");
+		}
+		const consecutiveAuthorities = supersedingOrphan
+			? state.consecutiveAuthorities + 1
+			: 1;
+		if (consecutiveAuthorities > MAXIMUM_CONSECUTIVE_AUTHORITIES) {
+			throw new Error(
+				"Consecutive orphan delete authorities exceed their bound",
+			);
 		}
 		const targetIndex = state.deletionOrder.indexOf(
 			state.currentTargetReleaseId,
@@ -362,6 +374,7 @@ function applyEvent(state, event, eventSha256) {
 		state.lastOutcomeClassification = null;
 		state.lastAuthority = event.payload.authority;
 		state.lastAuthorityEventSha256 = eventSha256;
+		state.consecutiveAuthorities = consecutiveAuthorities;
 		return;
 	}
 	if (event.type === "delete-intent") {
@@ -437,6 +450,7 @@ function applyEvent(state, event, eventSha256) {
 		state.lastOutcomeClassification = null;
 		state.lastAuthority = null;
 		state.lastAuthorityEventSha256 = null;
+		state.consecutiveAuthorities = 0;
 		state.phase = "target-converged";
 		return;
 	}

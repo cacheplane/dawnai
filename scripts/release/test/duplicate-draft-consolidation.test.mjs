@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, renameSync } from "node:fs";
 import {
 	lstat,
@@ -14,9 +15,26 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { inspectDuplicateDrafts } from "../duplicate-draft-consolidation.mjs";
+import {
+	inspectDuplicateDrafts,
+	performOneDuplicateDeletion,
+} from "../duplicate-draft-consolidation.mjs";
 import { captureDirectTargetRead } from "../duplicate-draft-consolidation-evidence.mjs";
-import { parseConsolidationEnvelope } from "../duplicate-draft-consolidation-schema.mjs";
+import {
+	readPrivateEnvelope,
+	writePrivateEnvelope,
+} from "../duplicate-draft-consolidation-files.mjs";
+import {
+	appendJournalEvent,
+	createConsolidationJournal,
+	deriveConsolidationState,
+} from "../duplicate-draft-consolidation-journal.mjs";
+import {
+	canonicalConsolidationEnvelopeBytes,
+	canonicalRecordSha256,
+	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
+	parseConsolidationEnvelope,
+} from "../duplicate-draft-consolidation-schema.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs";
 import {
 	createDuplicateDraftConsolidationFixture,
@@ -28,6 +46,302 @@ import {
 const OUTPUT = ".dawn/release/duplicate-draft-consolidation.proposed.json";
 const BASE_TIME = Date.parse("2026-09-01T12:00:00.000Z");
 const CONTROLLER_SHA = "b".repeat(40);
+
+test("one-target deletion rejects a numeric or survivor target before creating network adapters", async () => {
+	let adapterCreations = 0;
+	const dependencies = Object.freeze({
+		async createAdapters() {
+			adapterCreations += 1;
+			throw new Error("network adapter creation must not be reached");
+		},
+		async wait() {
+			assert.fail("wait must not be reached");
+		},
+	});
+	for (const targetReleaseId of [379982100, DUPLICATE_DRAFT_SURVIVOR_ID]) {
+		await assert.rejects(
+			performOneDuplicateDeletion(
+				{
+					proposedEnvelope: {},
+					confirmation: "invalid",
+					targetReleaseId,
+					journalPath: "/tmp/duplicate-draft-consolidation.journal.json",
+				},
+				dependencies,
+			),
+			/failed/iu,
+		);
+	}
+	assert.equal(adapterCreations, 0);
+});
+
+test("one-target deletion durably orders authority, intent, confirmed outcome, and two-source convergence", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["confirmed-204"],
+	});
+	const result = await performOneDuplicateDeletion(
+		harness.input,
+		harness.dependencies,
+	);
+
+	assert.deepEqual(result, {
+		status: "converged",
+		targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+		attemptNumber: 1,
+		basis: "confirmed-204",
+	});
+	assert.deepEqual(harness.events, [
+		"authority:pre-delete-1:379982100",
+		"durable:authority",
+		"durable:intent",
+		"delete:379982100",
+		"durable:outcome:confirmed-204",
+		"direct:379982100",
+		"list",
+	]);
+	const journal = await readPrivateEnvelope(
+		harness.input.journalPath,
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+	);
+	const state = deriveConsolidationState(journal);
+	assert.equal(state.phase, "target-converged");
+	assert.deepEqual(state.completedTargets, [DUPLICATE_DRAFT_IDS[0]]);
+	assert.equal(state.currentTargetReleaseId, DUPLICATE_DRAFT_IDS[1]);
+	assert.deepEqual(
+		parseConsolidationEnvelope("journal", journal).record.events.map(
+			({ event }) => event.type,
+		),
+		[
+			"operation-started",
+			"delete-authority-observed",
+			"delete-intent",
+			"delete-outcome",
+			"absence-converged",
+		],
+	);
+});
+
+test("one-target deletion resumes a lost post-DELETE outcome as absent ambiguity without another writer", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["confirmed-204"],
+	});
+	await assert.rejects(
+		performOneDuplicateDeletion(
+			harness.input,
+			harness.dependenciesWithFault("after-delete"),
+		),
+		/failed/iu,
+	);
+	const result = await performOneDuplicateDeletion(
+		harness.input,
+		harness.dependencies,
+	);
+	assert.equal(result.basis, "ambiguous");
+	assert.equal(
+		harness.events.filter((entry) => entry.startsWith("delete:")).length,
+		1,
+	);
+	const state = deriveConsolidationState(
+		await readPrivateEnvelope(
+			harness.input.journalPath,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+		),
+	);
+	assert.equal(state.phase, "target-converged");
+});
+
+test("one-target deletion gives an unchanged ambiguous target six complete reads before fresh attempt two", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["transport-ambiguous", "confirmed-204"],
+	});
+	const result = await performOneDuplicateDeletion(
+		harness.input,
+		harness.dependencies,
+	);
+	assert.equal(result.basis, "confirmed-204");
+	assert.equal(harness.events.filter((entry) => entry === "list").length, 7);
+	assert.deepEqual(
+		harness.events.filter((entry) => entry.startsWith("authority:")),
+		["authority:pre-delete-1:379982100", "authority:pre-delete-1:379982100"],
+	);
+	const journal = parseConsolidationEnvelope(
+		"journal",
+		await readPrivateEnvelope(
+			harness.input.journalPath,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+		),
+	);
+	assert.deepEqual(
+		journal.record.events
+			.filter(({ event }) => event.type === "delete-intent")
+			.map(({ event }) => event.payload.attemptNumber),
+		[1, 2],
+	);
+});
+
+test("one-target deletion preserves received 404 ambiguity while converging absence", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["response-404-ambiguous"],
+	});
+	const result = await performOneDuplicateDeletion(
+		harness.input,
+		harness.dependencies,
+	);
+	assert.equal(result.basis, "ambiguous");
+	const journal = parseConsolidationEnvelope(
+		"journal",
+		await readPrivateEnvelope(
+			harness.input.journalPath,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+		),
+	);
+	assert.equal(
+		journal.record.events.find(({ event }) => event.type === "delete-outcome")
+			.event.payload.classification,
+		"response-404-ambiguous",
+	);
+});
+
+test("one-target deletion resumes crashes after intent and after an outcome journal write from disk", async (t) => {
+	for (const faultAt of ["after-intent", "after-outcome-journal"]) {
+		const harness = await oneDeletionFixture(t, {
+			deleteClassifications: ["confirmed-204"],
+		});
+		await assert.rejects(
+			performOneDuplicateDeletion(
+				harness.input,
+				harness.dependenciesWithFault(faultAt),
+			),
+			/failed/iu,
+		);
+		const result = await performOneDuplicateDeletion(
+			harness.input,
+			harness.dependencies,
+		);
+		assert.equal(result.status, "converged");
+		assert.equal(
+			harness.events.filter((entry) => entry.startsWith("delete:")).length,
+			1,
+		);
+	}
+});
+
+test("one-target deletion supersedes orphan authority after either authority durability crash window", async (t) => {
+	for (const faultAt of ["after-authority-journal", "after-authority-head"]) {
+		const harness = await oneDeletionFixture(t, {
+			deleteClassifications: ["confirmed-204"],
+		});
+		await assert.rejects(
+			performOneDuplicateDeletion(
+				harness.input,
+				harness.dependenciesWithFault(faultAt),
+			),
+			/failed/iu,
+		);
+		const result = await performOneDuplicateDeletion(
+			harness.input,
+			harness.dependencies,
+		);
+		assert.equal(result.status, "converged");
+		assert.equal(
+			harness.events.filter((entry) => entry.startsWith("authority:")).length,
+			2,
+		);
+		assert.equal(
+			harness.events.filter((entry) => entry.startsWith("delete:")).length,
+			1,
+		);
+	}
+});
+
+test("one-target deletion resumes either convergence durability crash window from its completed target", async (t) => {
+	for (const faultAt of [
+		"after-convergence-journal",
+		"after-convergence-head",
+	]) {
+		const harness = await oneDeletionFixture(t, {
+			deleteClassifications: ["confirmed-204"],
+		});
+		await assert.rejects(
+			performOneDuplicateDeletion(
+				harness.input,
+				harness.dependenciesWithFault(faultAt),
+			),
+			/failed/iu,
+		);
+		const networkEventsBeforeResume = harness.events.length;
+		const result = await performOneDuplicateDeletion(
+			harness.input,
+			harness.dependencies,
+		);
+		assert.deepEqual(result, {
+			status: "converged",
+			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+			attemptNumber: 1,
+			basis: "confirmed-204",
+		});
+		assert.equal(harness.events.length, networkEventsBeforeResume);
+		assert.equal(
+			harness.events.filter((entry) => entry.startsWith("delete:")).length,
+			1,
+		);
+	}
+});
+
+test("one-target deletion stops on third ambiguity and never mints a fourth writer permit", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: [
+			"transport-ambiguous",
+			"transport-ambiguous",
+			"transport-ambiguous",
+		],
+	});
+	await assert.rejects(
+		performOneDuplicateDeletion(harness.input, harness.dependencies),
+		/failed/iu,
+	);
+	assert.equal(
+		harness.events.filter((entry) => entry.startsWith("delete:")).length,
+		3,
+	);
+});
+
+test("one-target deletion stops on reader disagreement, changed evidence, confirmed-204 presence, and bounded read errors", async (t) => {
+	for (const scenario of [
+		{ deleteLeavesPresent: true },
+		{ retainDeletedInList: true },
+		{
+			deleteClassifications: ["transport-ambiguous"],
+			currentMutation: "changed",
+		},
+		{
+			deleteClassifications: ["transport-ambiguous"],
+			currentMutation: "published",
+		},
+		{
+			deleteClassifications: ["transport-ambiguous"],
+			currentMutation: "malformed",
+		},
+		{ convergenceDirectFailure: 403 },
+		{ convergenceDirectFailure: 429 },
+		{ convergenceDirectFailure: 500 },
+		{ convergenceDirectFailure: "timeout" },
+		{ convergenceListFailure: 429 },
+	]) {
+		const harness = await oneDeletionFixture(t, {
+			deleteClassifications: ["confirmed-204"],
+			...scenario,
+		});
+		await assert.rejects(
+			performOneDuplicateDeletion(harness.input, harness.dependencies),
+			/failed/iu,
+		);
+		assert.equal(
+			harness.events.filter((entry) => entry.startsWith("delete:")).length,
+			1,
+		);
+	}
+});
 
 test("inspects the exact incident, observes the gap, and writes one canonical private proposal", async (t) => {
 	const fixture = await inspectionFixture(t);
@@ -782,4 +1096,339 @@ async function inspectionFixture(t, options = {}) {
 		},
 		dependencies,
 	};
+}
+
+async function oneDeletionFixture(t, options) {
+	const inspection = await inspectionFixture(t);
+	await inspectDuplicateDrafts(exactInput(), inspection.dependencies);
+	const proposalPath = path.join(inspection.root, OUTPUT);
+	const proposal = parseConsolidationEnvelope(
+		"proposed",
+		await readFile(proposalPath),
+	);
+	const confirmation = `CONSOLIDATE ${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`;
+	const confirmationSha256 = createHash("sha256")
+		.update(confirmation, "utf8")
+		.digest("hex");
+	const journalPath = path.join(
+		inspection.root,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	const headPath = journalPath.replace(/journal\.json$/u, "journal.head.json");
+	let journal = createConsolidationJournal({
+		proposedEnvelope: proposal,
+		confirmationSha256,
+		recordedAt: proposal.record.inspectedAt,
+	});
+	await writePrivateEnvelope(
+		journalPath,
+		canonicalConsolidationEnvelopeBytes("journal", journal),
+	);
+	await writePrivateEnvelope(
+		headPath,
+		testJournalHeadBytes(journalPath, journal),
+	);
+
+	const events = [];
+	const targetReleaseId = DUPLICATE_DRAFT_IDS[0];
+	const authorityTime = new Date(
+		Date.parse(proposal.record.inspectedAt) + 1_000,
+	).toISOString();
+	const targetEvidence = proposal.record.releases.find(
+		({ id }) => id === targetReleaseId,
+	);
+	const authority = {
+		stage: "pre-delete-1",
+		controller: structuredClone(proposal.record.controller),
+		annotatedTag: {
+			...structuredClone(proposal.record.annotatedTag),
+			observedAt: authorityTime,
+		},
+		workflowAuthority: {
+			...structuredClone(proposal.record.workflowAuthority),
+			observedAt: authorityTime,
+		},
+		npmInventory: {
+			...structuredClone(proposal.record.npmInventories[1]),
+			stage: "pre-delete-1",
+			startedAt: authorityTime,
+			completedAt: authorityTime,
+			packages: proposal.record.npmInventories[1].packages.map((entry) => ({
+				...structuredClone(entry),
+				observedAt: authorityTime,
+			})),
+		},
+		releases: structuredClone(proposal.record.releases),
+		payloadProof: structuredClone(proposal.record.payloadProof),
+		targetRead: {
+			releaseGetStartedAt: authorityTime,
+			releaseGetCompletedAt: authorityTime,
+			assetsListStartedAt: authorityTime,
+			assetsListCompletedAt: authorityTime,
+			evidence: structuredClone(targetEvidence),
+			evidenceSha256: canonicalRecordSha256(targetEvidence),
+		},
+		observedAt: authorityTime,
+	};
+	let deleted = false;
+	let deleteCalls = 0;
+	let permit;
+	let currentAuthorityTime = authorityTime;
+	const unsupported = async () => {
+		throw new Error("unexpected fake adapter operation");
+	};
+	const currentRawReleases = () => {
+		const releases = inspection.releaseFixture.releases
+			.filter(
+				(release) =>
+					!deleted ||
+					options.retainDeletedInList === true ||
+					String(release.id) !== targetReleaseId,
+			)
+			.map((release) => structuredClone(release));
+		const target = releases.find(({ id }) => String(id) === targetReleaseId);
+		if (target !== undefined) {
+			if (options.currentMutation === "changed") target.name = "changed";
+			if (options.currentMutation === "published") {
+				target.draft = false;
+				target.published_at = "2026-09-01T12:35:00Z";
+			}
+			if (options.currentMutation === "malformed") target.body = "{";
+		}
+		return releases;
+	};
+	const github = Object.freeze({
+		getRepository: unsupported,
+		getAuthenticatedUser: unsupported,
+		getDefaultBranchSha: unsupported,
+		getWorkflowState: unsupported,
+		listNonterminalWorkflowRuns: unsupported,
+		getAnnotatedTag: unsupported,
+		async listReleases() {
+			events.push("list");
+			if (options.convergenceListFailure !== undefined) {
+				return {
+					status: "ERROR",
+					operation: "releases",
+					httpStatus: options.convergenceListFailure,
+					code: "HTTP_ERROR",
+				};
+			}
+			return {
+				status: "PRESENT",
+				operation: "releases",
+				httpStatus: 200,
+				code: null,
+				value: currentRawReleases(),
+			};
+		},
+		async getRelease({ releaseId }) {
+			events.push(`direct:${releaseId}`);
+			if (options.convergenceDirectFailure === "timeout") {
+				throw new Error("simulated timeout");
+			}
+			if (Number.isInteger(options.convergenceDirectFailure)) {
+				return {
+					status: "ERROR",
+					operation: "release",
+					httpStatus: options.convergenceDirectFailure,
+					code: "HTTP_ERROR",
+				};
+			}
+			const current = await readPrivateEnvelope(
+				journalPath,
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+			);
+			const outcome =
+				deriveConsolidationState(current).lastOutcomeClassification;
+			if (outcome !== null) events.splice(-1, 0, `durable:outcome:${outcome}`);
+			if (deleted) {
+				return {
+					status: "AMBIGUOUS",
+					operation: "release",
+					httpStatus: 404,
+					code: "NOT_FOUND",
+				};
+			}
+			const release = currentRawReleases().find(
+				({ id }) => String(id) === releaseId,
+			);
+			return {
+				status: "PRESENT",
+				operation: "release",
+				httpStatus: 200,
+				code: null,
+				value: structuredClone(release),
+			};
+		},
+		listReleaseAssets: unsupported,
+		downloadReleaseAsset: unsupported,
+	});
+	const writer = Object.freeze({
+		async deleteDuplicate({ releaseId, permit: candidate }) {
+			assert.equal(releaseId, targetReleaseId);
+			assert.equal(candidate, permit);
+			events.push(`delete:${releaseId}`);
+			const classification = options.deleteClassifications[deleteCalls];
+			deleteCalls += 1;
+			if (classification === undefined)
+				throw new Error("unexpected additional delete attempt");
+			deleted =
+				classification !== "transport-ambiguous" &&
+				options.deleteLeavesPresent !== true;
+			return {
+				classification,
+				httpStatus:
+					classification === "confirmed-204"
+						? 204
+						: classification === "response-404-ambiguous"
+							? 404
+							: null,
+				observedAt: currentAuthorityTime,
+			};
+		},
+	});
+	const adapters = {
+		local: Object.freeze({ readState: unsupported }),
+		github,
+		npm: Object.freeze({ observePackageVersion: unsupported }),
+		attestations: Object.freeze({ verify: unsupported }),
+		writer,
+	};
+	Object.defineProperty(adapters, "captureConsolidationAuthority", {
+		value: Object.freeze(async function capture(input) {
+			assert.equal(input.adapters, adapters);
+			events.push(`authority:${input.stage}:${input.targetReleaseId}`);
+			const beforeAuthority = parseConsolidationEnvelope(
+				"journal",
+				await readPrivateEnvelope(
+					journalPath,
+					DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+				),
+			);
+			const beforeAuthorityState = deriveConsolidationState(beforeAuthority);
+			currentAuthorityTime = new Date(
+				Date.parse(beforeAuthority.record.updatedAt) + 1_000,
+			).toISOString();
+			const attemptNumber =
+				beforeAuthorityState.phase === "resume-present"
+					? beforeAuthorityState.attemptNumber + 1
+					: beforeAuthorityState.attemptNumber;
+			const networkEpoch = {};
+			Object.defineProperty(networkEpoch, "consume", {
+				value: async (consumption) => {
+					assert.equal(consumption.targetReleaseId, targetReleaseId);
+					assert.equal(
+						deriveConsolidationState(consumption.currentJournal).phase,
+						"delete-authority-observed",
+					);
+					events.push("durable:authority");
+					journal = appendJournalEvent(
+						consumption.currentJournal,
+						"delete-intent",
+						{
+							targetReleaseId,
+							attemptNumber,
+							authorityEventSha256:
+								consumption.currentJournal.record.events.at(-1).eventSha256,
+						},
+						currentAuthorityTime,
+					);
+					await writePrivateEnvelope(
+						journalPath,
+						canonicalConsolidationEnvelopeBytes("journal", journal),
+					);
+					await writePrivateEnvelope(
+						headPath,
+						testJournalHeadBytes(journalPath, journal),
+					);
+					events.push("durable:intent");
+					permit = Object.freeze({});
+					return permit;
+				},
+				enumerable: false,
+				writable: false,
+				configurable: false,
+			});
+			Object.freeze(networkEpoch);
+			const freshAuthority = structuredClone(authority);
+			freshAuthority.annotatedTag.observedAt = currentAuthorityTime;
+			freshAuthority.workflowAuthority.observedAt = currentAuthorityTime;
+			freshAuthority.npmInventory.startedAt = currentAuthorityTime;
+			freshAuthority.npmInventory.completedAt = currentAuthorityTime;
+			for (const entry of freshAuthority.npmInventory.packages)
+				entry.observedAt = currentAuthorityTime;
+			freshAuthority.targetRead.releaseGetStartedAt = currentAuthorityTime;
+			freshAuthority.targetRead.releaseGetCompletedAt = currentAuthorityTime;
+			freshAuthority.targetRead.assetsListStartedAt = currentAuthorityTime;
+			freshAuthority.targetRead.assetsListCompletedAt = currentAuthorityTime;
+			freshAuthority.observedAt = currentAuthorityTime;
+			const captured = { authority: freshAuthority };
+			Object.defineProperty(captured, "networkEpoch", {
+				value: networkEpoch,
+				enumerable: false,
+				writable: false,
+				configurable: false,
+			});
+			return Object.freeze(captured);
+		}),
+		enumerable: false,
+		writable: false,
+		configurable: false,
+	});
+	for (const name of [
+		"captureInspectionTerminal",
+		"assertInspectionTerminalSealed",
+	]) {
+		Object.defineProperty(adapters, name, {
+			value: Object.freeze(unsupported),
+			enumerable: false,
+			writable: false,
+			configurable: false,
+		});
+	}
+	Object.freeze(adapters);
+
+	return {
+		events,
+		input: {
+			proposedEnvelope: proposal,
+			confirmation,
+			targetReleaseId,
+			journalPath,
+		},
+		dependencies: Object.freeze({
+			createAdapters: Object.freeze(async () => adapters),
+			wait: Object.freeze(async (_milliseconds, { signal }) => {
+				assert.equal(signal instanceof AbortSignal, true);
+			}),
+		}),
+		dependenciesWithFault(faultAt) {
+			return Object.freeze({
+				createAdapters: Object.freeze(async () => adapters),
+				wait: Object.freeze(async (_milliseconds, { signal }) => {
+					assert.equal(signal instanceof AbortSignal, true);
+				}),
+				faultAt,
+			});
+		},
+	};
+}
+
+function testJournalHeadBytes(journalPath, journal) {
+	return Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			journalPath,
+			repository: journal.record.repository,
+			proposedRecordSha256: journal.record.proposedRecordSha256,
+			journalRecordSha256: journal.recordSha256,
+			lastEventSha256: journal.record.events.at(-1).eventSha256,
+			sequence: journal.record.events.length,
+			updatedAt: journal.record.updatedAt,
+		})}\n`,
+		"utf8",
+	);
 }

@@ -161,6 +161,35 @@ test("requires an authority event and its exact digest immediately before intent
 	);
 });
 
+test("supersedes at most two orphan authorities for the same unattempted request", () => {
+	let journal = newJournal();
+	const authority = preDeleteAuthority(0);
+	journal = appendAuthority(journal, 0, 1, authority, 1);
+	const firstDigest = journal.record.events.at(-1).eventSha256;
+	journal = appendAuthority(journal, 0, 1, authority, 2);
+	journal = appendAuthority(journal, 0, 1, authority, 3);
+	const newestDigest = journal.record.events.at(-1).eventSha256;
+	assert.notEqual(newestDigest, firstDigest);
+	assert.equal(
+		deriveConsolidationState(journal).phase,
+		"delete-authority-observed",
+	);
+
+	assert.throws(
+		() => appendAuthority(journal, 0, 1, authority, 4),
+		/orphan|authority|bound/iu,
+	);
+	journal = appendIntent(journal, 0, 1, 4);
+	assert.equal(
+		journal.record.events.at(-1).event.payload.authorityEventSha256,
+		newestDigest,
+	);
+	assert.throws(
+		() => appendAuthority(journal, 0, 1, authority, 5),
+		/authority|intent|legal|state/iu,
+	);
+});
+
 for (const [classification, httpStatus] of [
 	["transport-ambiguous", null],
 	["response-404-ambiguous", 404],
