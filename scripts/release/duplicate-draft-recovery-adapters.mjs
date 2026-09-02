@@ -37,11 +37,17 @@ const MAX_RECORDS = 10_000
 const RECOVERY_ASSET_BYTES = 64 * 1024
 const WRITER_MAX_TIMEOUT_MS = 300_000
 const WRITER_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+const WRITER_MAX_RESPONSE_CHUNKS = 1_024
 const WRITER_TITLE = `Dawn v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}`
 const DUPLICATE_TAG_BY_ID = new Map(
   DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.map(({ releaseId, tagName }) => [releaseId, tagName]),
 )
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype)
+const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteLength",
+).get
 const NONTERMINAL_STATUSES = new Set(["requested", "waiting", "pending", "queued", "in_progress"])
 const RUN_STATUSES = new Set([...NONTERMINAL_STATUSES, "completed"])
 const JOB_STATUSES = new Set(["waiting", "pending", "queued", "in_progress", "completed"])
@@ -376,27 +382,28 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
     WRITER_MAX_RESPONSE_BYTES,
     "Recovery writer response limit",
   )
+  const strictFetchImpl = createStrictCredentialFetch(fetchImpl, token, maxResponseBytes)
   const github = createGitHubReader({
     owner: OWNER,
     repo: REPOSITORY,
     repositoryId: REPOSITORY_ID,
-    token,
-    fetchImpl,
+    fetchImpl: strictFetchImpl,
     timeoutMs,
     maxResponseBytes,
     now: Date.now,
     maxPages: MAX_PAGES,
     maxRecords: MAX_RECORDS,
   })
-  const http = createHttpGet({ fetchImpl, timeoutMs, maxResponseBytes })
+  const http = createHttpGet({ fetchImpl: strictFetchImpl, timeoutMs, maxResponseBytes })
   const context = Object.freeze({
     token,
     github,
     http,
-    fetchImpl,
+    fetchImpl: strictFetchImpl,
     timeoutMs,
     maxResponseBytes,
     now: Date.now,
+    strictCredentials: true,
   })
 
   return Object.freeze({
@@ -405,7 +412,6 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
       const expected = normalizeExpectedWriterSnapshot(args.expectedSnapshot)
       const releaseId = expected.releaseId
       const kind = validateEvidenceUpload(expected, args)
-      await verifyRecoveryCandidateTag(context)
       const current = await readExpectedWriterSnapshot(context, expected, expected.body)
       const existing = current.assets.find((asset) => asset.name === args.name) ?? null
       if (existing !== null) {
@@ -420,17 +426,25 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         })
       }
 
-      const response = await requestRecoveryJson(context, {
-        url: `${UPLOAD_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/${releaseId}/assets?name=${encodeURIComponent(args.name)}`,
-        method: "POST",
-        bytes: args.bytes,
-        contentType: "application/octet-stream",
-        maximumRequestBytes: RECOVERY_ASSET_BYTES,
-      })
-      if (response.httpStatus !== 201) {
-        writeFail("EVIDENCE_UPLOAD_REJECTED", "GitHub evidence upload did not return HTTP 201")
+      await verifyRecoveryCandidateTag(context)
+      const response = await requestFencedRecoveryMutation(context, () =>
+        requestRecoveryJson(context, {
+          url: `${UPLOAD_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/${releaseId}/assets?name=${encodeURIComponent(args.name)}`,
+          method: "POST",
+          bytes: args.bytes,
+          contentType: "application/octet-stream",
+          maximumRequestBytes: RECOVERY_ASSET_BYTES,
+        }),
+      )
+      let created
+      try {
+        if (response.httpStatus !== 201) {
+          throw new TypeError("Unexpected upload status")
+        }
+        created = normalizeUploadResponse(response.body, args)
+      } catch {
+        writeFail("MUTATION_OUTCOME_AMBIGUOUS", "GitHub recovery mutation outcome is ambiguous")
       }
-      const created = normalizeUploadResponse(response.body, args)
       const appendedAsset = {
         id: created.id,
         name: args.name,
@@ -443,7 +457,6 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         evidenceAssets: [...current.evidenceAssets, kind],
       }
       await readExpectedWriterSnapshot(context, expectedAfter, current.body)
-      await verifyRecoveryCandidateTag(context)
       return deepFreeze({
         releaseId,
         assetId: created.id,
@@ -464,26 +477,29 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         throw new TypeError("Recovery notice contains configured credentials")
       }
       validateQuarantineInput(expected, args)
-      await verifyRecoveryCandidateTag(context)
       const current = await readExpectedWriterSnapshot(context, expected, expected.body)
-      const response = await requestRecoveryJson(context, {
-        url: `${API_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/${current.releaseId}`,
-        method: "PATCH",
-        body: { body: args.expectedNotice },
-        contentType: "application/json",
-        maximumRequestBytes: 16 * 1024,
-      })
-      if (response.httpStatus !== 200) {
-        writeFail("QUARANTINE_PATCH_REJECTED", "GitHub quarantine update did not return HTTP 200")
+      await verifyRecoveryCandidateTag(context)
+      const response = await requestFencedRecoveryMutation(context, () =>
+        requestRecoveryJson(context, {
+          url: `${API_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/${current.releaseId}`,
+          method: "PATCH",
+          body: { body: args.expectedNotice },
+          contentType: "application/json",
+          maximumRequestBytes: 16 * 1024,
+        }),
+      )
+      try {
+        if (response.httpStatus !== 200) throw new TypeError("Unexpected quarantine status")
+        normalizePatchResponse(response.body, current, args.expectedNotice)
+      } catch {
+        writeFail("MUTATION_OUTCOME_AMBIGUOUS", "GitHub recovery mutation outcome is ambiguous")
       }
-      normalizePatchResponse(response.body, current, args.expectedNotice)
       const expectedAfter = {
         ...current,
         body: args.expectedNotice,
         marker: null,
       }
       await readExpectedWriterSnapshot(context, expectedAfter, current.body)
-      await verifyRecoveryCandidateTag(context)
       return deepFreeze({
         releaseId: current.releaseId,
         status: "quarantined",
@@ -514,15 +530,7 @@ function snapshotRecoveryAssetInput(value, token) {
   if (!isPlainObject(value)) throw new TypeError("Recovery asset input schema is invalid")
   const expectedFields = ["expectedSnapshot", "name", "bytes", "sha256"]
   assertExactDataFields(value, expectedFields, "Recovery asset input")
-  const bytes = Object.getOwnPropertyDescriptor(value, "bytes").value
-  if (
-    !(bytes instanceof Uint8Array) ||
-    bytes.byteLength < 1 ||
-    bytes.byteLength > RECOVERY_ASSET_BYTES
-  ) {
-    throw new TypeError("Recovery evidence bytes are invalid")
-  }
-  const copied = Buffer.from(bytes)
+  const copied = snapshotExactEvidenceBytes(Object.getOwnPropertyDescriptor(value, "bytes").value)
   if (copied.includes(Buffer.from(token, "utf8"))) {
     throw new TypeError("Recovery evidence bytes contain configured credentials")
   }
@@ -533,6 +541,42 @@ function snapshotRecoveryAssetInput(value, token) {
     name: Object.getOwnPropertyDescriptor(value, "name").value,
     bytes: copied,
     sha256: Object.getOwnPropertyDescriptor(value, "sha256").value,
+  }
+}
+
+function snapshotExactEvidenceBytes(value) {
+  let prototype
+  let byteLength
+  try {
+    prototype = Object.getPrototypeOf(value)
+    if (prototype !== Buffer.prototype && prototype !== Uint8Array.prototype) {
+      throw new TypeError("Unexpected byte container prototype")
+    }
+    byteLength = TYPED_ARRAY_BYTE_LENGTH.call(value)
+  } catch {
+    throw new TypeError("Recovery evidence bytes are invalid")
+  }
+  if (!Number.isSafeInteger(byteLength) || byteLength < 1 || byteLength > RECOVERY_ASSET_BYTES) {
+    throw new TypeError("Recovery evidence bytes are invalid")
+  }
+  let keys
+  try {
+    keys = Reflect.ownKeys(value)
+  } catch {
+    throw new TypeError("Recovery evidence bytes are invalid")
+  }
+  if (keys.length !== byteLength) throw new TypeError("Recovery evidence bytes are invalid")
+  for (let index = 0; index < byteLength; index += 1) {
+    const key = keys[index]
+    const descriptor = typeof key === "string" ? Object.getOwnPropertyDescriptor(value, key) : null
+    if (key !== String(index) || !isEnumerableData(descriptor)) {
+      throw new TypeError("Recovery evidence bytes are invalid")
+    }
+  }
+  try {
+    return Buffer.from(Uint8Array.prototype.slice.call(value))
+  } catch {
+    throw new TypeError("Recovery evidence bytes are invalid")
   }
 }
 
@@ -866,6 +910,28 @@ async function verifyRecoveryCandidateTag(context) {
   }
 }
 
+async function requestFencedRecoveryMutation(context, request) {
+  let response
+  let requestFailed = false
+  try {
+    response = await request()
+  } catch {
+    requestFailed = true
+  }
+  try {
+    await verifyRecoveryCandidateTag(context)
+  } catch {
+    writeFail(
+      "POST_WRITE_TAG_FENCE_CONFLICT",
+      "Candidate tag post-write fence could not be verified",
+    )
+  }
+  if (requestFailed) {
+    writeFail("MUTATION_OUTCOME_AMBIGUOUS", "GitHub recovery mutation outcome is ambiguous")
+  }
+  return response
+}
+
 async function readExpectedWriterSnapshot(context, expected, originalBody) {
   try {
     const release = requirePresent(
@@ -873,7 +939,7 @@ async function readExpectedWriterSnapshot(context, expected, originalBody) {
       "RELEASE_UNAVAILABLE",
       "Release snapshot could not be verified",
     )
-    const raw = safeRemoteSnapshot(release, context.token, "RELEASE_MALFORMED")
+    const raw = safeWriterRemoteSnapshot(release, context.token, "RELEASE_MALFORMED")
     if (raw.name !== WRITER_TITLE) {
       writeFail("RELEASE_TITLE_CONFLICT", "Duplicate Release title is not exact")
     }
@@ -949,6 +1015,92 @@ function safeWriteResponse(value, code) {
   }
 }
 
+function createStrictCredentialFetch(fetchImpl, token, maximumChunkBytes) {
+  const credential = Buffer.from(token, "utf8")
+  return async (url, init) => {
+    const parsedUrl = new URL(url)
+    const existingHeaders = new Headers(init?.headers)
+    const authenticatedInit =
+      parsedUrl.origin === API_ORIGIN && !existingHeaders.has("authorization")
+        ? {
+            ...init,
+            headers: {
+              ...Object.fromEntries(existingHeaders.entries()),
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        : init
+    const response = await fetchImpl(url, authenticatedInit)
+    const body = response?.body
+    if (body === null || body === undefined || typeof body.getReader !== "function") {
+      return response
+    }
+    const reader = body.getReader()
+    let tail = Buffer.alloc(0)
+    const strictBody = {
+      getReader() {
+        return {
+          async read() {
+            const result = await reader.read()
+            if (result.done) return result
+            const bytes = snapshotStrictResponseChunk(result.value, maximumChunkBytes)
+            const searchable = tail.length === 0 ? bytes : Buffer.concat([tail, bytes])
+            if (searchable.includes(credential)) {
+              void reader.cancel().catch(() => {})
+              writeFail(
+                "REMOTE_CREDENTIAL_CONFLICT",
+                "GitHub recovery response contains configured credentials",
+              )
+            }
+            const retained = Math.min(Math.max(credential.byteLength - 1, 0), searchable.byteLength)
+            tail =
+              retained === 0
+                ? Buffer.alloc(0)
+                : searchable.subarray(searchable.byteLength - retained)
+            return { done: false, value: bytes }
+          },
+          cancel(reason) {
+            return reader.cancel(reason)
+          },
+          releaseLock() {
+            return reader.releaseLock()
+          },
+        }
+      },
+      cancel(reason) {
+        return reader.cancel(reason)
+      },
+    }
+    return {
+      status: response.status,
+      headers: response.headers,
+      body: strictBody,
+    }
+  }
+}
+
+function snapshotStrictResponseChunk(value, maximum) {
+  let prototype
+  let byteLength
+  try {
+    prototype = Object.getPrototypeOf(value)
+    if (prototype !== Buffer.prototype && prototype !== Uint8Array.prototype) {
+      throw new TypeError("Unexpected response chunk prototype")
+    }
+    byteLength = TYPED_ARRAY_BYTE_LENGTH.call(value)
+  } catch {
+    writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery response chunk is malformed")
+  }
+  if (byteLength > maximum) {
+    writeFail("WRITE_RESPONSE_OVER_LIMIT", "GitHub recovery write response exceeds byte limit")
+  }
+  try {
+    return Buffer.from(Uint8Array.prototype.slice.call(value))
+  } catch {
+    writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery response chunk is malformed")
+  }
+}
+
 async function requestRecoveryJson(
   context,
   { url, method, body, bytes: suppliedBytes, contentType, maximumRequestBytes },
@@ -969,6 +1121,7 @@ async function requestRecoveryJson(
     throw new TypeError("Recovery write request exceeds its byte limit")
   }
   const controller = new AbortController()
+  const deadline = performance.now() + context.timeoutMs
   const timeout = setTimeout(() => controller.abort(), context.timeoutMs)
   try {
     let response
@@ -990,6 +1143,7 @@ async function requestRecoveryJson(
         },
         controller.signal,
       )
+      assertRecoveryWriteDeadline(deadline, controller.signal)
     } catch {
       writeFail(
         controller.signal.aborted ? "WRITE_TIMEOUT" : "WRITE_UNAVAILABLE",
@@ -1010,6 +1164,7 @@ async function requestRecoveryJson(
       response.body,
       context.maxResponseBytes,
       controller.signal,
+      deadline,
     )
     if (responseBytes.byteLength === 0) {
       return { httpStatus: response.status, body: null }
@@ -1029,7 +1184,7 @@ async function requestRecoveryJson(
     }
     return {
       httpStatus: response.status,
-      body: safeRemoteSnapshot(parsed, context.token, "WRITE_RESPONSE_MALFORMED"),
+      body: safeWriterRemoteSnapshot(parsed, context.token, "WRITE_RESPONSE_MALFORMED"),
     }
   } catch (error) {
     if (error instanceof DuplicateDraftRecoveryWriteError) throw error
@@ -1060,7 +1215,7 @@ async function fetchRecoveryWrite(fetchImpl, url, init, signal) {
   }
 }
 
-async function readBoundedWriteResponse(stream, maximum, signal) {
+async function readBoundedWriteResponse(stream, maximum, signal, deadline) {
   if (stream === null) return Buffer.alloc(0)
   if (stream === undefined || typeof stream.getReader !== "function") {
     writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery write response body is malformed")
@@ -1068,13 +1223,25 @@ async function readBoundedWriteResponse(stream, maximum, signal) {
   const reader = stream.getReader()
   const chunks = []
   let total = 0
+  let chunkCount = 0
   try {
     while (true) {
-      if (signal.aborted) writeFail("WRITE_TIMEOUT", "GitHub recovery write timed out")
-      const { done, value } = await readRecoveryWriteChunk(reader, signal)
+      assertRecoveryWriteDeadline(deadline, signal)
+      const { done, value } = await readRecoveryWriteChunk(reader, signal, deadline)
+      assertRecoveryWriteDeadline(deadline, signal)
       if (done) break
       if (!(value instanceof Uint8Array)) {
         writeFail("WRITE_RESPONSE_MALFORMED", "GitHub recovery write response body is malformed")
+      }
+      if (value.byteLength === 0) {
+        writeFail("WRITE_RESPONSE_NO_PROGRESS", "GitHub recovery write response made no progress")
+      }
+      chunkCount += 1
+      if (chunkCount > WRITER_MAX_RESPONSE_CHUNKS) {
+        writeFail(
+          "WRITE_RESPONSE_CHUNKS_OVER_LIMIT",
+          "GitHub recovery write response has too many chunks",
+        )
       }
       total += value.byteLength
       if (total > maximum) {
@@ -1089,8 +1256,8 @@ async function readBoundedWriteResponse(stream, maximum, signal) {
   return Buffer.concat(chunks, total)
 }
 
-async function readRecoveryWriteChunk(reader, signal) {
-  if (signal.aborted) writeFail("WRITE_TIMEOUT", "GitHub recovery write timed out")
+async function readRecoveryWriteChunk(reader, signal, deadline) {
+  assertRecoveryWriteDeadline(deadline, signal)
   let rejectAbort
   const aborted = new Promise((_resolve, reject) => {
     rejectAbort = () =>
@@ -1103,6 +1270,12 @@ async function readRecoveryWriteChunk(reader, signal) {
     return await Promise.race([reader.read(), aborted])
   } finally {
     signal.removeEventListener("abort", rejectAbort)
+  }
+}
+
+function assertRecoveryWriteDeadline(deadline, signal) {
+  if (signal.aborted || performance.now() >= deadline) {
+    writeFail("WRITE_TIMEOUT", "GitHub recovery write timed out")
   }
 }
 
@@ -1595,7 +1768,7 @@ async function readExactJson(context, { path, operation, accept = "application/v
     fail(`${operation.toUpperCase().replaceAll("-", "_")}_UNAVAILABLE`, `${operation} read failed`)
   }
   const malformedCode = `${operation.toUpperCase().replaceAll("-", "_")}_MALFORMED`
-  return safeRemoteSnapshot(result.body, context.token, malformedCode)
+  return safeContextRemoteSnapshot(context, result.body, malformedCode)
 }
 
 async function readStrictPages(context, { path, operation, field, requireTotalCount = false }) {
@@ -1640,7 +1813,7 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
       fail(`${operation}_MALFORMED`, `${operation.toLowerCase()} response is malformed`)
     }
     remainingBytes -= result.bodyBytes
-    const body = safeRemoteSnapshot(result.body, context.token, `${operation}_MALFORMED`)
+    const body = safeContextRemoteSnapshot(context, result.body, `${operation}_MALFORMED`)
     let pageRecords
     if (field === undefined) {
       if (!Array.isArray(body)) {
@@ -1809,6 +1982,52 @@ function safeRemoteSnapshot(value, token, code) {
   } catch {
     fail(code, "Recovery read response is malformed")
   }
+}
+
+function safeContextRemoteSnapshot(context, value, code) {
+  return context.strictCredentials === true
+    ? safeWriterRemoteSnapshot(value, context.token, code)
+    : safeRemoteSnapshot(value, context.token, code)
+}
+
+function safeWriterRemoteSnapshot(value, token, code) {
+  let snapshot
+  try {
+    snapshot = snapshotJson(value)
+  } catch {
+    writeFail(code, "GitHub recovery response is malformed")
+  }
+  try {
+    return canonicalWriterRemoteJson(snapshot, token)
+  } catch {
+    writeFail("REMOTE_CREDENTIAL_CONFLICT", "GitHub recovery response is not credential-safe")
+  }
+}
+
+function canonicalWriterRemoteJson(value, token) {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value
+  if (typeof value === "string") {
+    if (value.includes(token)) throw new TypeError("Credential occurrence")
+    return value
+  }
+  if (Array.isArray(value)) return value.map((item) => canonicalWriterRemoteJson(item, token))
+  const normalized = {}
+  for (const key of Object.keys(value).sort()) {
+    if (
+      UNSAFE_REMOTE_KEYS.has(key) ||
+      /token|secret|authorization|cookie/iu.test(key) ||
+      key.includes(token)
+    ) {
+      throw new TypeError("Unsafe remote response key")
+    }
+    Object.defineProperty(normalized, key, {
+      value: canonicalWriterRemoteJson(value[key], token),
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    })
+  }
+  return normalized
 }
 
 function canonicalRemoteJson(value, token) {

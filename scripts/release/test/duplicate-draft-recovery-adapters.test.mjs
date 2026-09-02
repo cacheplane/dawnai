@@ -143,6 +143,18 @@ test("recovery writer uploads only exact candidate-derived evidence with pre/pos
     ],
   )
   assert.equal(calls.filter(({ url }) => url.includes("/git/ref/tags%2Fv0.8.22")).length, 2)
+  assert.deepEqual(calls.map(callKind), [
+    "release",
+    "assets",
+    "tag-ref",
+    "tag-object",
+    "POST",
+    "tag-ref",
+    "tag-object",
+    "release",
+    "assets",
+    "asset-download",
+  ])
   assert.equal(
     calls.some(({ url }) => /npm|actions|dispatch|DELETE/iu.test(url)),
     false,
@@ -181,6 +193,13 @@ test("recovery writer accepts an existing evidence asset only after exact downlo
     calls.every(({ init }) => init.method === "GET"),
     true,
   )
+  assert.deepEqual(calls.map(callKind), [
+    "release",
+    "assets",
+    "asset-download",
+    "tag-ref",
+    "tag-object",
+  ])
 
   const unequal = createDuplicateDraftRecoveryWriter({
     token: "secret-token",
@@ -270,6 +289,21 @@ test("recovery writer quarantines with an exact body-only compare-and-swap", asy
   assert.ok(patch)
   assert.deepEqual(Object.keys(JSON.parse(Buffer.from(patch.init.body))).sort(), ["body"])
   assert.equal(calls.filter(({ url }) => url.includes("/git/ref/tags%2Fv0.8.22")).length, 2)
+  assert.deepEqual(calls.map(callKind), [
+    "release",
+    "assets",
+    "asset-download",
+    "asset-download",
+    "tag-ref",
+    "tag-object",
+    "PATCH",
+    "tag-ref",
+    "tag-object",
+    "release",
+    "assets",
+    "asset-download",
+    "asset-download",
+  ])
 })
 
 test("recovery writer rejects non-candidate inputs and concurrent drift before mutation", async () => {
@@ -393,7 +427,7 @@ test("recovery writer bounds a stalled mutation response body", async () => {
           guard = setTimeout(() => reject(new Error("mutation response was not time-bounded")), 200)
         }),
       ]),
-      (error) => error.code === "WRITE_TIMEOUT",
+      (error) => error.code === "MUTATION_OUTCOME_AMBIGUOUS",
     )
   } finally {
     clearTimeout(guard)
@@ -434,11 +468,180 @@ test("recovery writer bounds a stalled mutation response body", async () => {
           )
         }),
       ]),
-      (error) => error.code === "WRITE_TIMEOUT",
+      (error) => error.code === "MUTATION_OUTCOME_AMBIGUOUS",
     )
   } finally {
     clearTimeout(fetchGuard)
   }
+})
+
+test("recovery writer snapshots only exact intrinsic byte containers without invoking getters", async () => {
+  const fixture = writerFixture()
+  let networkCalls = 0
+  let getterCalls = 0
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    fetchImpl: async () => {
+      networkCalls += 1
+      assert.fail("malformed byte containers must fail before network access")
+    },
+  })
+  const inputFor = (bytes) => ({
+    expectedSnapshot: fixture.untouchedSnapshot,
+    name: fixture.archiveName,
+    bytes,
+    sha256: fixture.archiveSha256,
+  })
+  const ownByteLength = Uint8Array.from(fixture.archiveBytes)
+  Object.defineProperty(ownByteLength, "byteLength", {
+    configurable: true,
+    get() {
+      getterCalls += 1
+      return fixture.archiveBytes.byteLength
+    },
+  })
+  const ownLength = Uint8Array.from(fixture.archiveBytes)
+  Object.defineProperty(ownLength, "length", {
+    configurable: true,
+    get() {
+      getterCalls += 1
+      return fixture.archiveBytes.byteLength
+    },
+  })
+  const symbol = Uint8Array.from(fixture.archiveBytes)
+  Object.defineProperty(symbol, Symbol("hidden"), { value: true })
+  const iterator = Uint8Array.from(fixture.archiveBytes)
+  Object.defineProperty(iterator, Symbol.iterator, {
+    value: function* customIterator() {
+      yield 0
+    },
+  })
+  const customPrototype = Uint8Array.from(fixture.archiveBytes)
+  Object.setPrototypeOf(customPrototype, Object.create(Uint8Array.prototype))
+  const proxy = new Proxy(Uint8Array.from(fixture.archiveBytes), {})
+  const oversized = new Uint8Array(64 * 1024 + 1)
+  for (const bytes of [
+    ownByteLength,
+    ownLength,
+    symbol,
+    iterator,
+    customPrototype,
+    proxy,
+    oversized,
+    [],
+    { 0: 1, length: 1 },
+  ]) {
+    await assert.rejects(writer.uploadEvidenceAssetIfAbsentAndEqual(inputFor(bytes)))
+  }
+  assert.equal(getterCalls, 0)
+  assert.equal(networkCalls, 0)
+})
+
+test("recovery writer bounds response streams by deadline, progress, chunks, and bytes", async (t) => {
+  const fixture = writerFixture()
+  await t.test("500k zero-length chunks stop within the 20ms operation bound", async () => {
+    let reads = 0
+    const harness = uploadStreamHarness(fixture, {
+      timeoutMs: 20,
+      response: streamResponse(async () => {
+        reads += 1
+        return reads <= 500_000
+          ? { done: false, value: new Uint8Array(0) }
+          : { done: true, value: undefined }
+      }),
+    })
+    await assert.rejects(
+      boundedForTest(harness.writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture)), 300),
+      (error) =>
+        ["MUTATION_OUTCOME_AMBIGUOUS", "POST_WRITE_TAG_FENCE_CONFLICT"].includes(error.code),
+    )
+    assert.ok(reads < 500_000)
+  })
+
+  await t.test("a stream that stalls after progress is time-bounded", async () => {
+    let reads = 0
+    const harness = uploadStreamHarness(fixture, {
+      timeoutMs: 20,
+      response: streamResponse(async () => {
+        reads += 1
+        if (reads === 1) return { done: false, value: Buffer.from("{") }
+        return new Promise(() => {})
+      }),
+    })
+    await assert.rejects(
+      boundedForTest(harness.writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture)), 300),
+      (error) => error.code === "MUTATION_OUTCOME_AMBIGUOUS",
+    )
+  })
+
+  await t.test("excessive non-empty chunk count is rejected", async () => {
+    let reads = 0
+    const harness = uploadStreamHarness(fixture, {
+      response: streamResponse(async () => {
+        reads += 1
+        return reads <= 5_000
+          ? { done: false, value: Uint8Array.of(32) }
+          : { done: true, value: undefined }
+      }),
+    })
+    await assert.rejects(
+      harness.writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture)),
+      (error) => error.code === "MUTATION_OUTCOME_AMBIGUOUS",
+    )
+    assert.ok(reads < 5_000)
+  })
+
+  await t.test("an exotic oversized chunk is rejected without invoking accessors", async () => {
+    let getterCalls = 0
+    class ExoticChunk extends Uint8Array {
+      get byteLength() {
+        getterCalls += 1
+        return super.byteLength
+      }
+
+      get length() {
+        getterCalls += 1
+        return super.length
+      }
+    }
+    const harness = uploadStreamHarness(fixture, {
+      maxResponseBytes: 64 * 1024,
+      response: streamResponse(async () => ({
+        done: false,
+        value: new ExoticChunk(64 * 1024 + 1),
+      })),
+    })
+    await assert.rejects(
+      harness.writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture)),
+      (error) => error.code === "MUTATION_OUTCOME_AMBIGUOUS",
+    )
+    assert.equal(getterCalls, 0)
+  })
+
+  await t.test("a normally chunked bounded JSON response succeeds", async () => {
+    const responseBytes = Buffer.from(
+      JSON.stringify({
+        id: fixture.archiveRawAsset.id,
+        name: fixture.archiveName,
+        digest: `sha256:${fixture.archiveSha256}`,
+        size: fixture.archiveBytes.byteLength,
+        state: "uploaded",
+      }),
+    )
+    let offset = 0
+    const harness = uploadStreamHarness(fixture, {
+      response: streamResponse(async () => {
+        if (offset === responseBytes.byteLength) return { done: true, value: undefined }
+        const next = responseBytes.subarray(offset, offset + 7)
+        offset += next.byteLength
+        return { done: false, value: next }
+      }),
+    })
+    assert.equal(
+      (await harness.writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture))).status,
+      "uploaded",
+    )
+  })
 })
 
 test("recovery writer never sends configured credential bytes as evidence or notice content", async () => {
@@ -462,6 +665,72 @@ test("recovery writer never sends configured credential bytes as evidence or not
     (error) => !error.message.includes(token) && !JSON.stringify(error).includes(token),
   )
   assert.equal(calls, 0)
+})
+
+test("recovery writer rejects configured credentials in live response data without redaction", async (t) => {
+  const fixture = writerFixture()
+  const token = "secret-token"
+  for (const location of ["body", "response", "asset-bytes", "mutation-response"]) {
+    await t.test(location, async () => {
+      const calls = []
+      const writer = createDuplicateDraftRecoveryWriter({
+        token,
+        fetchImpl: routingFetch(calls, (url) => {
+          if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
+            return jsonResponse({
+              ...writerRelease(location === "body" ? `${fixture.body}\n${token}` : fixture.body),
+              ...(location === "response" ? { remote_note: token } : {}),
+            })
+          }
+          if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+            return jsonResponse(
+              location === "asset-bytes"
+                ? [...fixture.rawAssets, fixture.archiveRawAsset]
+                : fixture.rawAssets,
+            )
+          }
+          if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+            return binaryResponse(Buffer.from(`${token}\n`))
+          }
+          if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) return jsonResponse(candidateTagRef())
+          if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
+          if (url.startsWith(`${UPLOAD_BASE}/releases/${DUPLICATE_ID}/assets?name=`)) {
+            return jsonResponse(
+              {
+                id: fixture.archiveRawAsset.id,
+                name: fixture.archiveName,
+                digest: `sha256:${fixture.archiveSha256}`,
+                size: fixture.archiveBytes.byteLength,
+                state: "uploaded",
+                remote_note: token,
+              },
+              201,
+            )
+          }
+          assert.fail(`unexpected URL ${url}`)
+        }),
+      })
+      const expectedSnapshot =
+        location === "asset-bytes" ? fixture.bodyArchivedSnapshot : fixture.untouchedSnapshot
+
+      await assert.rejects(
+        writer.uploadEvidenceAssetIfAbsentAndEqual({
+          expectedSnapshot,
+          name: fixture.archiveName,
+          bytes: fixture.archiveBytes,
+          sha256: fixture.archiveSha256,
+        }),
+        (error) => !error.message.includes(token) && !JSON.stringify(error).includes(token),
+      )
+      assert.equal(
+        calls.filter(({ init }) => init.method === "POST" || init.method === "PATCH").length,
+        location === "mutation-response" ? 1 : 0,
+      )
+      if (location === "mutation-response") {
+        assert.equal(calls.filter(({ url }) => url.includes("/git/ref/tags%2Fv0.8.22")).length, 2)
+      }
+    })
+  }
 })
 
 test("recovery writer rejects post-upload snapshot or candidate-tag drift", async (t) => {
@@ -529,10 +798,45 @@ test("recovery writer rejects post-upload snapshot or candidate-tag drift", asyn
           bytes: fixture.archiveBytes,
           sha256: fixture.archiveSha256,
         }),
-        (error) => ["RELEASE_SNAPSHOT_CONFLICT", "CANDIDATE_TAG_CONFLICT"].includes(error.code),
+        (error) =>
+          ["RELEASE_SNAPSHOT_CONFLICT", "POST_WRITE_TAG_FENCE_CONFLICT"].includes(error.code),
       )
       assert.equal(posts, 1)
     })
+  }
+})
+
+test("recovery writer preserves immediate post-write tag fences on failure paths", async (t) => {
+  const fixture = writerFixture()
+  for (const method of ["POST", "PATCH"]) {
+    for (const failure of ["response", "post-snapshot"]) {
+      await t.test(`${method} ${failure}`, async () => {
+        const harness = mutationFenceHarness(fixture, { method, failure })
+        await assert.rejects(harness.operation(), (error) =>
+          failure === "response"
+            ? error.code === "MUTATION_OUTCOME_AMBIGUOUS"
+            : ["RELEASE_TITLE_CONFLICT", "RELEASE_SNAPSHOT_CONFLICT"].includes(error.code),
+        )
+        const pre =
+          method === "POST"
+            ? ["release", "assets", "tag-ref", "tag-object", "POST"]
+            : [
+                "release",
+                "assets",
+                "asset-download",
+                "asset-download",
+                "tag-ref",
+                "tag-object",
+                "PATCH",
+              ]
+        assert.deepEqual(harness.calls.map(callKind), [
+          ...pre,
+          "tag-ref",
+          "tag-object",
+          ...(failure === "post-snapshot" ? ["release"] : []),
+        ])
+      })
+    }
   }
 })
 
@@ -1889,6 +2193,157 @@ function routingFetch(calls, route) {
   return async (url, init) => {
     calls.push({ url, init })
     return route(url, init)
+  }
+}
+
+function callKind({ url, init }) {
+  if (init.method !== "GET") return init.method
+  if (url.includes("/git/ref/tags%2Fv0.8.22")) return "tag-ref"
+  if (url.includes(`/git/tags/${TAG_OBJECT}`)) return "tag-object"
+  if (url.includes("/releases/assets/")) return "asset-download"
+  if (url.includes("/assets?per_page=100")) return "assets"
+  if (url === `${BASE}/releases/${DUPLICATE_ID}`) return "release"
+  return url
+}
+
+function uploadInput(fixture) {
+  return {
+    expectedSnapshot: fixture.untouchedSnapshot,
+    name: fixture.archiveName,
+    bytes: fixture.archiveBytes,
+    sha256: fixture.archiveSha256,
+  }
+}
+
+function uploadStreamHarness(
+  fixture,
+  { response, timeoutMs = 1_000, maxResponseBytes = 4 * 1024 * 1024 },
+) {
+  let uploaded = false
+  const calls = []
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    timeoutMs,
+    maxResponseBytes,
+    fetchImpl: routingFetch(calls, (url, init) => {
+      if (url === `${BASE}/releases/${DUPLICATE_ID}`)
+        return jsonResponse(writerRelease(fixture.body))
+      if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+        return jsonResponse(
+          uploaded ? [...fixture.rawAssets, fixture.archiveRawAsset] : fixture.rawAssets,
+        )
+      }
+      if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+        return binaryResponse(fixture.archiveBytes)
+      }
+      if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) return jsonResponse(candidateTagRef())
+      if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
+      if (url.startsWith(`${UPLOAD_BASE}/releases/${DUPLICATE_ID}/assets?name=`)) {
+        assert.equal(init.method, "POST")
+        uploaded = true
+        return response
+      }
+      assert.fail(`unexpected URL ${url}`)
+    }),
+  })
+  return { writer, calls }
+}
+
+function mutationFenceHarness(fixture, { method, failure }) {
+  let mutated = false
+  const calls = []
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    fetchImpl: routingFetch(calls, (url, init) => {
+      if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) return jsonResponse(candidateTagRef())
+      if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
+      if (url === `${BASE}/releases/${DUPLICATE_ID}` && init.method === "PATCH") {
+        mutated = true
+        return failure === "response"
+          ? binaryResponse(Buffer.from("not-json"), 200, { "content-type": "application/json" })
+          : jsonResponse(writerRelease(fixture.notice), 200)
+      }
+      if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
+        return jsonResponse({
+          ...writerRelease(mutated && method === "PATCH" ? fixture.notice : fixture.body),
+          ...(mutated && failure === "post-snapshot" ? { name: "concurrent title" } : {}),
+        })
+      }
+      if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+        if (method === "PATCH") {
+          return jsonResponse([
+            ...fixture.rawAssets,
+            fixture.archiveRawAsset,
+            fixture.receiptRawAsset,
+          ])
+        }
+        return jsonResponse(
+          mutated ? [...fixture.rawAssets, fixture.archiveRawAsset] : fixture.rawAssets,
+        )
+      }
+      if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+        return binaryResponse(fixture.archiveBytes)
+      }
+      if (url === `${BASE}/releases/assets/${fixture.receiptRawAsset.id}`) {
+        return binaryResponse(fixture.receiptBytes)
+      }
+      if (url.startsWith(`${UPLOAD_BASE}/releases/${DUPLICATE_ID}/assets?name=`)) {
+        mutated = true
+        return failure === "response"
+          ? binaryResponse(Buffer.from("not-json"), 201, { "content-type": "application/json" })
+          : jsonResponse(
+              {
+                id: fixture.archiveRawAsset.id,
+                name: fixture.archiveName,
+                digest: `sha256:${fixture.archiveSha256}`,
+                size: fixture.archiveBytes.byteLength,
+                state: "uploaded",
+              },
+              201,
+            )
+      }
+      assert.fail(`unexpected URL ${url}`)
+    }),
+  })
+  return {
+    calls,
+    operation: () =>
+      method === "POST"
+        ? writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture))
+        : writer.quarantineDuplicateBodyIfCurrent({
+            expectedSnapshot: fixture.receiptArchivedSnapshot,
+            expectedBodySha256: fixture.archiveSha256,
+            expectedNotice: fixture.notice,
+          }),
+  }
+}
+
+function streamResponse(read, status = 201) {
+  return {
+    status,
+    headers: new Headers({ "content-type": "application/json" }),
+    body: {
+      getReader() {
+        return { read, cancel: async () => {} }
+      },
+    },
+  }
+}
+
+async function boundedForTest(operation, milliseconds) {
+  let guard
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_resolve, reject) => {
+        guard = setTimeout(
+          () => reject(new Error("operation exceeded test deadline")),
+          milliseconds,
+        )
+      }),
+    ])
+  } finally {
+    clearTimeout(guard)
   }
 }
 
