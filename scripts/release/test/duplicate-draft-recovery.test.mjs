@@ -625,9 +625,15 @@ function createApplyHarness({
   states = ["untouched", "untouched"],
   writerFailure,
   malformedQuarantineReceipt = false,
+  uploadStatus = "uploaded",
+  uploadReceiptTransform = (receipt) => Object.freeze(receipt),
+  quarantineReceiptTransform = (receipt) => Object.freeze(receipt),
+  writerTransform = (writer) => Object.freeze(writer),
+  fenceTimes = ["2026-09-01T00:10:00.000Z", "2026-09-01T00:10:00.000Z"],
   drift,
   fourthCandidate = false,
   finalObservation = FINAL_RECOVERY_OBSERVATION,
+  clock = () => RECOVERY_NOW,
 } = {}) {
   const liveStates = [...states]
   const events = []
@@ -700,7 +706,7 @@ function createApplyHarness({
   function createWriter() {
     writerConstructions += 1
     events.push(["writer-created", authorizationCount])
-    return Object.freeze({
+    return writerTransform({
       async uploadEvidenceAssetIfAbsentAndEqual(input) {
         mutationCount += 1
         const duplicateIndex = POLICY.duplicates.findIndex(
@@ -721,15 +727,18 @@ function createApplyHarness({
           authorizationCount,
         ])
         liveStates[duplicateIndex] = isBody ? "body-archived" : "receipt-archived"
-        if (writerFailure?.(mutationCount, "upload")) throw new Error("simulated writer failure")
-        return Object.freeze({
+        const uploadFailure = writerFailure?.(mutationCount, "upload")
+        if (uploadFailure) {
+          throw uploadFailure === true ? new Error("simulated writer failure") : uploadFailure
+        }
+        return uploadReceiptTransform({
           releaseId: input.expectedSnapshot.releaseId,
           assetId: recoverySnapshotForState(
             input.expectedSnapshot.releaseId,
             liveStates[duplicateIndex],
           ).assets.at(-1).id,
           name: input.name,
-          status: "uploaded",
+          status: typeof uploadStatus === "function" ? uploadStatus(isBody) : uploadStatus,
           sha256: input.sha256,
         })
       },
@@ -748,21 +757,24 @@ function createApplyHarness({
           authorizationCount,
         ])
         liveStates[duplicateIndex] = "quarantined"
-        if (writerFailure?.(mutationCount, "quarantine")) {
-          throw new Error("simulated writer failure")
+        const quarantineFailure = writerFailure?.(mutationCount, "quarantine")
+        if (quarantineFailure) {
+          throw quarantineFailure === true
+            ? new Error("simulated writer failure")
+            : quarantineFailure
         }
         if (malformedQuarantineReceipt) return Object.freeze({ outcome: "performed" })
-        return Object.freeze({
+        return quarantineReceiptTransform({
           atomic: false,
           releaseId: input.expectedSnapshot.releaseId,
           outcome: "performed",
           preWriteFence: Object.freeze({
-            observedAt: "2026-09-01T00:10:01.000Z",
+            observedAt: fenceTimes[0],
             projectionSha256: "a".repeat(64),
             tagObjectSha: TAG_OBJECT_SHA,
           }),
           postWriteFence: Object.freeze({
-            observedAt: "2026-09-01T00:10:02.000Z",
+            observedAt: fenceTimes[1],
             projectionSha256: "b".repeat(64),
             tagObjectSha: TAG_OBJECT_SHA,
           }),
@@ -773,7 +785,7 @@ function createApplyHarness({
 
   const observer = async (input) => {
     events.push(["observe", structuredClone(input)])
-    return structuredClone(finalObservation)
+    return finalObservation
   }
   const evidence = parseDuplicateDraftEvidence(
     canonicalDuplicateDraftEvidence(recoveryObservation({ states })),
@@ -783,7 +795,7 @@ function createApplyHarness({
     reader,
     createWriter,
     observer,
-    now: () => RECOVERY_NOW,
+    now: clock,
     events,
     liveStates,
     get writerConstructions() {
@@ -848,6 +860,58 @@ test("apply converges every resumable state in ID order with fresh authorization
   }
 })
 
+test("apply accepts exact Task 4 existing receipts for both evidence transitions and reauthorizes", async () => {
+  const statuses = []
+  const harness = createApplyHarness({
+    states: ["untouched", "quarantined"],
+    uploadStatus(isBody) {
+      statuses.push(isBody ? "body" : "receipt")
+      return "existing"
+    },
+  })
+
+  const receipt = await runApply(harness)
+  assert.deepEqual(statuses, ["body", "receipt"])
+  assert.deepEqual(harness.liveStates, ["quarantined", "quarantined"])
+  assert.equal(receipt.duplicates[0].outcome, "performed")
+  assert.equal(harness.events.filter(([kind]) => kind === "authorize").length, 5)
+})
+
+test("apply rejects stale or regressing authorization clocks before writer construction", async () => {
+  const delayedTimes = [
+    Date.parse("2026-09-01T00:00:00.000Z"),
+    Date.parse("2026-09-01T00:00:01.000Z"),
+    Date.parse("2026-09-01T00:15:01.001Z"),
+  ]
+  const delayed = createApplyHarness({ clock: () => delayedTimes.shift() })
+  await assert.rejects(runApply(delayed), /expired|fresh/iu)
+  assert.equal(delayed.writerConstructions, 0)
+  assert.equal(delayed.mutationCount, 0)
+
+  const regressionTimes = [
+    Date.parse("2026-09-01T00:00:00.000Z"),
+    Date.parse("2026-09-01T00:00:01.000Z"),
+    Date.parse("2026-09-01T00:00:00.999Z"),
+  ]
+  const regressing = createApplyHarness({ clock: () => regressionTimes.shift() })
+  await assert.rejects(runApply(regressing), /regress|ordering/iu)
+  assert.equal(regressing.writerConstructions, 0)
+  assert.equal(regressing.mutationCount, 0)
+
+  const constructionDelayTimes = [
+    Date.parse("2026-09-01T00:00:00.000Z"),
+    Date.parse("2026-09-01T00:00:01.000Z"),
+    Date.parse("2026-09-01T00:00:02.000Z"),
+    Date.parse("2026-09-01T00:15:01.001Z"),
+  ]
+  const constructionDelay = createApplyHarness({
+    clock: () => constructionDelayTimes.shift(),
+  })
+  await assert.rejects(runApply(constructionDelay), /expired|fresh/iu)
+  assert.equal(constructionDelay.writerConstructions, 1)
+  assert.equal(constructionDelay.mutationCount, 0)
+})
+
 test("apply resumes an expired partial run without restoring a live marker or inventing prior fences", async () => {
   const later = Date.parse("2026-09-01T00:20:00.000Z")
   for (let failurePoint = 1; failurePoint <= 6; failurePoint += 1) {
@@ -865,7 +929,10 @@ test("apply resumes an expired partial run without restoring a live marker or in
       /expired/iu,
     )
 
-    const resumed = createApplyHarness({ states: first.liveStates })
+    const resumed = createApplyHarness({
+      states: first.liveStates,
+      fenceTimes: [new Date(later).toISOString(), new Date(later).toISOString()],
+    })
     resumed.now = () => later
     resumed.evidence = parseDuplicateDraftEvidence(
       canonicalDuplicateDraftEvidence(
@@ -898,6 +965,11 @@ test("apply rejects malformed acknowledgements before reads, writer construction
   })
   const revoked = Proxy.revocable(concurrencyAcknowledgement(), {})
   revoked.revoke()
+  const liveProxy = new Proxy(concurrencyAcknowledgement(), {})
+  const nestedProxy = Object.freeze({
+    ...concurrencyAcknowledgement(),
+    releaseIds: new Proxy(concurrencyAcknowledgement().releaseIds, {}),
+  })
   const cases = [
     undefined,
     Object.freeze({ acknowledged: false }),
@@ -907,6 +979,8 @@ test("apply rejects malformed acknowledgements before reads, writer construction
       releaseIds: Object.freeze([379986168, 379982100]),
     }),
     accessor,
+    liveProxy,
+    nestedProxy,
     revoked.proxy,
   ]
   for (const acknowledgement of cases) {
@@ -919,6 +993,49 @@ test("apply rejects malformed acknowledgements before reads, writer construction
     assert.equal(harness.events.length, 0)
   }
   assert.equal(accessed, false)
+})
+
+test("apply rejects mutable, expanded, wrong, credential-bearing, or proxied Task 4 upload receipts", async () => {
+  const cases = [
+    (receipt) => receipt,
+    (receipt) => Object.freeze({ ...receipt, extra: true }),
+    (receipt) => Object.freeze({ ...receipt, status: "wrong" }),
+    (receipt) => Object.freeze({ ...receipt, status: "secret-token" }),
+    (receipt) => new Proxy(Object.freeze(receipt), {}),
+  ]
+  for (const uploadReceiptTransform of cases) {
+    const harness = createApplyHarness({ uploadReceiptTransform })
+    await assert.rejects(runApply(harness), /receipt|proxy/iu)
+    assert.equal(harness.mutationCount, 1)
+    assert.deepEqual(harness.liveStates, ["body-archived", "untouched"])
+  }
+})
+
+test("apply rejects proxied writer, quarantine receipt, and observer objects", async () => {
+  const writerProxy = createApplyHarness({
+    writerTransform(writer) {
+      return new Proxy(Object.freeze(writer), {})
+    },
+  })
+  await assert.rejects(runApply(writerProxy), /writer|proxy/iu)
+  assert.equal(writerProxy.mutationCount, 0)
+
+  const receiptProxy = createApplyHarness({
+    states: ["receipt-archived", "untouched"],
+    quarantineReceiptTransform(receipt) {
+      return new Proxy(Object.freeze(receipt), {})
+    },
+  })
+  await assert.rejects(runApply(receiptProxy), /receipt|proxy/iu)
+  assert.equal(receiptProxy.mutationCount, 1)
+  assert.deepEqual(receiptProxy.liveStates, ["quarantined", "untouched"])
+
+  const observerProxy = createApplyHarness({
+    states: ["quarantined", "quarantined"],
+    finalObservation: new Proxy(FINAL_RECOVERY_OBSERVATION, {}),
+  })
+  await assert.rejects(runApply(observerProxy), /authorization|proxy/iu)
+  assert.equal(observerProxy.mutationCount, 0)
 })
 
 test("apply fails closed on stale evidence and adversarial live authorization drift", async () => {
@@ -981,11 +1098,51 @@ test("apply fails closed on stale evidence and adversarial live authorization dr
 })
 
 test("apply never retries failed, ambiguous, or malformed writer outcomes and never starts the next mutation", async () => {
-  for (const failureKind of ["timeout", "transport", "retryable", "ambiguous", "title-drift"]) {
-    const harness = createApplyHarness({ writerFailure: (count) => count === 1 })
-    await assert.rejects(runApply(harness), /writer failure/iu, failureKind)
+  const cases = [
+    {
+      code: "WRITE_TIMEOUT",
+      message: "GitHub recovery response timed out",
+      stage: "upload",
+      states: ["untouched", "untouched"],
+    },
+    {
+      code: "WRITE_TRANSPORT_UNAVAILABLE",
+      message: "GitHub recovery transport rejected",
+      stage: "upload",
+      states: ["untouched", "untouched"],
+    },
+    {
+      code: "WRITE_HTTP_RETRYABLE",
+      message: "GitHub recovery returned retryable status 503",
+      stage: "upload",
+      states: ["untouched", "untouched"],
+    },
+    {
+      code: "MUTATION_OUTCOME_AMBIGUOUS",
+      message: "GitHub recovery mutation outcome is ambiguous",
+      stage: "upload",
+      states: ["untouched", "untouched"],
+    },
+    {
+      code: "POST_WRITE_PROJECTION_DRIFT",
+      message: "Quarantine title changed after body-only PATCH",
+      stage: "quarantine",
+      states: ["receipt-archived", "untouched"],
+    },
+  ]
+  for (const item of cases) {
+    const failure = Object.assign(new Error(item.message), { code: item.code })
+    const harness = createApplyHarness({
+      states: item.states,
+      writerFailure: (count, stage) => (count === 1 && stage === item.stage ? failure : null),
+    })
+    await assert.rejects(
+      runApply(harness),
+      (error) => error === failure && error.code === item.code && error.message === item.message,
+    )
     assert.equal(harness.mutationCount, 1)
-    assert.deepEqual(harness.liveStates, ["body-archived", "untouched"])
+    assert.equal(harness.events.filter(([kind]) => kind === "mutate").length, 1)
+    assert.equal(harness.liveStates[1], "untouched")
   }
 
   const malformed = createApplyHarness({
@@ -995,6 +1152,52 @@ test("apply never retries failed, ambiguous, or malformed writer outcomes and ne
   await assert.rejects(runApply(malformed), /receipt/iu)
   assert.equal(malformed.mutationCount, 1)
   assert.deepEqual(malformed.liveStates, ["quarantined", "untouched"])
+})
+
+test("apply validates the truthful fence and final receipt timeline while passing projection hashes through", async () => {
+  const invalidFences = [
+    ["2026-08-31T23:59:59.999Z", "2026-09-01T00:10:00.000Z"],
+    ["2026-09-01T00:09:59.999Z", "2026-09-01T00:10:00.000Z"],
+    ["2026-09-01T00:10:01.000Z", "2026-09-01T00:10:00.000Z"],
+    ["2026-09-01T00:10:00.000Z", "2026-09-01T00:10:00.001Z"],
+  ]
+  for (const fenceTimes of invalidFences) {
+    const harness = createApplyHarness({
+      states: ["receipt-archived", "quarantined"],
+      fenceTimes,
+    })
+    await assert.rejects(runApply(harness), /fence|timeline|ordering/iu)
+    assert.equal(harness.mutationCount, 1)
+    assert.equal(harness.liveStates[1], "quarantined")
+  }
+
+  const finalRegressionTimes = Array.from({ length: 5 }, () => RECOVERY_NOW)
+  finalRegressionTimes.push(Date.parse("2026-09-01T00:09:59.999Z"))
+  const finalRegression = createApplyHarness({
+    states: ["quarantined", "quarantined"],
+    clock: () => finalRegressionTimes.shift(),
+  })
+  await assert.rejects(runApply(finalRegression), /regress|timeline|ordering/iu)
+
+  const trustedHashes = createApplyHarness({
+    states: ["receipt-archived", "quarantined"],
+    quarantineReceiptTransform(receipt) {
+      return Object.freeze({
+        ...receipt,
+        preWriteFence: Object.freeze({
+          ...receipt.preWriteFence,
+          projectionSha256: "c".repeat(64),
+        }),
+        postWriteFence: Object.freeze({
+          ...receipt.postWriteFence,
+          projectionSha256: "d".repeat(64),
+        }),
+      })
+    },
+  })
+  const receipt = await runApply(trustedHashes)
+  assert.equal(receipt.duplicates[0].preWriteFence.projectionSha256, "c".repeat(64))
+  assert.equal(receipt.duplicates[0].postWriteFence.projectionSha256, "d".repeat(64))
 })
 
 test("apply requires the exact injected production observer result for the exact candidate", async () => {

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { isProxy } from "node:util/types"
 
 import { snapshotJson } from "./adapter-normalize.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
@@ -323,6 +324,7 @@ export async function applyDuplicateDraftRecovery({
   const performed = new Map()
   const results = []
   let writer
+  let lastAuthorizationMs = startedAtMs
 
   for (const [index, configured] of DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.entries()) {
     let lastAuthorization
@@ -333,6 +335,14 @@ export async function applyDuplicateDraftRecovery({
         now,
       })
       assertApplyAuthorization(sealed, fresh, expectedSources)
+      const authorizationMs = readApplyTime(now)
+      assertFreshAuthorizationTimeline({
+        sealed,
+        fresh,
+        authorizationMs,
+        previousAuthorizationMs: lastAuthorizationMs,
+      })
+      lastAuthorizationMs = authorizationMs
       lastAuthorization = fresh
       const duplicate = fresh.releases.duplicates[index]
       if (duplicate.releaseId !== configured.releaseId) {
@@ -344,6 +354,14 @@ export async function applyDuplicateDraftRecovery({
       if (duplicate.state === "quarantined") break
 
       writer ??= normalizeApplyWriter(createWriter())
+      const mutationAuthorizationMs = readApplyTime(now)
+      assertMutationAuthorizationTimeline({
+        sealed,
+        fresh,
+        authorizationMs: mutationAuthorizationMs,
+        previousAuthorizationMs: lastAuthorizationMs,
+      })
+      lastAuthorizationMs = mutationAuthorizationMs
       if (duplicate.state === "untouched") {
         const receipt = await writer.uploadEvidenceAssetIfAbsentAndEqual({
           expectedSnapshot: duplicateSource(duplicate),
@@ -409,6 +427,7 @@ export async function applyDuplicateDraftRecovery({
           }),
           duplicate.releaseId,
           sealed.candidate.tagObjectSha,
+          mutationAuthorizationMs,
         )
         performed.set(duplicate.releaseId, mutation)
         expectedSources[index] = {
@@ -443,7 +462,9 @@ export async function applyDuplicateDraftRecovery({
       },
     }),
   )
-  const appliedAt = new Date(readApplyTime(now)).toISOString()
+  const appliedAtMs = readApplyTime(now)
+  assertFinalReceiptTimeline(results, lastAuthorizationMs, appliedAtMs)
+  const appliedAt = new Date(appliedAtMs).toISOString()
   return deepFreeze({
     schemaVersion: 1,
     atomic: false,
@@ -1593,6 +1614,9 @@ function exactObject(value, fields, label) {
 
 function normalizeConcurrencyAcknowledgement(value) {
   const fields = ["acknowledged", "atomic", "mode", "releaseIds"]
+  if (value === null || typeof value !== "object" || isProxy(value)) {
+    throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+  }
   let keys
   let prototype
   let frozen
@@ -1604,8 +1628,6 @@ function normalizeConcurrencyAcknowledgement(value) {
     throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
   }
   if (
-    value === null ||
-    typeof value !== "object" ||
     ![Object.prototype, null].includes(prototype) ||
     !frozen ||
     keys.length !== fields.length ||
@@ -1654,6 +1676,9 @@ function normalizeConcurrencyAcknowledgement(value) {
 }
 
 function normalizeAcknowledgedReleaseIds(value) {
+  if (value === null || typeof value !== "object" || isProxy(value)) {
+    throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+  }
   let keys
   let prototype
   let frozen
@@ -1760,12 +1785,58 @@ function assertApplyAuthorization(sealed, fresh, expectedSources) {
   }
 }
 
+function assertFreshAuthorizationTimeline({
+  sealed,
+  fresh,
+  authorizationMs,
+  previousAuthorizationMs,
+}) {
+  const evidenceMs = Date.parse(sealed.capturedAt)
+  const captureMs = Date.parse(fresh.capturedAt)
+  if (
+    captureMs < evidenceMs ||
+    captureMs < previousAuthorizationMs ||
+    authorizationMs < captureMs ||
+    authorizationMs < previousAuthorizationMs
+  ) {
+    throw new Error("Duplicate draft recovery authorization timeline regressed")
+  }
+  if (
+    authorizationMs - evidenceMs > MAX_DUPLICATE_EVIDENCE_AGE_MS ||
+    authorizationMs - captureMs > MAX_DUPLICATE_EVIDENCE_AGE_MS
+  ) {
+    throw new Error("Duplicate draft recovery authorization is no longer fresh")
+  }
+}
+
+function assertMutationAuthorizationTimeline({
+  sealed,
+  fresh,
+  authorizationMs,
+  previousAuthorizationMs,
+}) {
+  const evidenceMs = Date.parse(sealed.capturedAt)
+  const captureMs = Date.parse(fresh.capturedAt)
+  if (authorizationMs < captureMs || authorizationMs < previousAuthorizationMs) {
+    throw new Error("Duplicate draft recovery mutation authorization timeline regressed")
+  }
+  if (
+    authorizationMs - evidenceMs > MAX_DUPLICATE_EVIDENCE_AGE_MS ||
+    authorizationMs - captureMs > MAX_DUPLICATE_EVIDENCE_AGE_MS
+  ) {
+    throw new Error("Duplicate draft recovery mutation authorization is no longer fresh")
+  }
+}
+
 function duplicateSource(duplicate) {
   return Object.fromEntries(DUPLICATE_SOURCE_FIELDS.map((field) => [field, duplicate[field]]))
 }
 
 function normalizeApplyWriter(value) {
   const fields = ["quarantineDuplicateBodyIfCurrent", "uploadEvidenceAssetIfAbsentAndEqual"]
+  if (value === null || typeof value !== "object" || isProxy(value)) {
+    throw new TypeError("Duplicate draft recovery writer is invalid")
+  }
   let keys
   let prototype
   let frozen
@@ -1777,8 +1848,6 @@ function normalizeApplyWriter(value) {
     throw new TypeError("Duplicate draft recovery writer is invalid")
   }
   if (
-    value === null ||
-    typeof value !== "object" ||
     ![Object.prototype, null].includes(prototype) ||
     !frozen ||
     keys.length !== fields.length ||
@@ -1794,7 +1863,8 @@ function normalizeApplyWriter(value) {
       !("value" in descriptor) ||
       descriptor.get !== undefined ||
       descriptor.set !== undefined ||
-      typeof descriptor.value !== "function"
+      typeof descriptor.value !== "function" ||
+      isProxy(descriptor.value)
     ) {
       throw new TypeError("Duplicate draft recovery writer surface is invalid")
     }
@@ -1804,6 +1874,7 @@ function normalizeApplyWriter(value) {
 }
 
 function normalizeUploadMutationReceipt(value, expected) {
+  assertFrozenNonProxyGraph(value, "duplicate draft recovery upload receipt")
   const receipt = exactObject(
     value,
     ["releaseId", "assetId", "name", "status", "sha256"],
@@ -1814,7 +1885,7 @@ function normalizeUploadMutationReceipt(value, expected) {
     !Number.isSafeInteger(receipt.assetId) ||
     receipt.assetId < 1 ||
     receipt.name !== expected.name ||
-    receipt.status !== "uploaded" ||
+    !["uploaded", "existing"].includes(receipt.status) ||
     receipt.sha256 !== expected.sha256
   ) {
     throw new Error("Duplicate draft recovery upload receipt is not exact")
@@ -1822,7 +1893,13 @@ function normalizeUploadMutationReceipt(value, expected) {
   return receipt
 }
 
-function normalizeQuarantineMutationReceipt(value, releaseId, expectedTagObjectSha) {
+function normalizeQuarantineMutationReceipt(
+  value,
+  releaseId,
+  expectedTagObjectSha,
+  authorizationMs,
+) {
+  assertFrozenNonProxyGraph(value, "duplicate draft recovery quarantine receipt")
   const receipt = exactObject(
     value,
     ["atomic", "releaseId", "outcome", "preWriteFence", "postWriteFence"],
@@ -1845,7 +1922,10 @@ function normalizeQuarantineMutationReceipt(value, releaseId, expectedTagObjectS
     expectedTagObjectSha,
     "post-write",
   )
-  if (Date.parse(preWriteFence.observedAt) > Date.parse(postWriteFence.observedAt)) {
+  if (
+    Date.parse(preWriteFence.observedAt) < authorizationMs ||
+    Date.parse(preWriteFence.observedAt) > Date.parse(postWriteFence.observedAt)
+  ) {
     throw new Error("Duplicate draft recovery write fence times are not ordered")
   }
   return deepFreeze({
@@ -1857,6 +1937,9 @@ function normalizeQuarantineMutationReceipt(value, releaseId, expectedTagObjectS
 }
 
 function normalizeWriterFence(value, expectedTagObjectSha, label) {
+  // Task 4 owns the complete Release projection (including fields absent from
+  // the core capture model). This boundary preserves its digest exactly while
+  // independently validating the tag binding and truthful timeline.
   const fence = exactObject(
     value,
     ["observedAt", "projectionSha256", "tagObjectSha"],
@@ -1871,6 +1954,7 @@ function normalizeWriterFence(value, expectedTagObjectSha, label) {
 }
 
 function normalizeFinalRecoveryObservation(value) {
+  assertNoProxyGraph(value, "duplicate draft recovery final authorization")
   const observation = exactObject(
     value,
     ["state", "disposition", "nextTransition", "conflicts", "diagnostics", "releaseId"],
@@ -1896,6 +1980,53 @@ function normalizeFinalRecoveryObservation(value) {
     diagnostics: [],
     releaseId: observation.releaseId,
   })
+}
+
+function assertFinalReceiptTimeline(results, lastAuthorizationMs, appliedAtMs) {
+  if (appliedAtMs < lastAuthorizationMs) {
+    throw new Error("Duplicate draft recovery final receipt timeline regressed")
+  }
+  for (const result of results) {
+    if (
+      result.outcome === "performed" &&
+      Date.parse(result.postWriteFence.observedAt) > appliedAtMs
+    ) {
+      throw new Error("Duplicate draft recovery write fence is after the final receipt time")
+    }
+  }
+}
+
+function assertFrozenNonProxyGraph(value, label, seen = new Set()) {
+  if (value === null || typeof value !== "object" || seen.has(value)) return
+  if (isProxy(value) || !Object.isFrozen(value)) {
+    throw new TypeError(`${label} must be deeply frozen and contain no proxy`)
+  }
+  seen.add(value)
+  const keys = Reflect.ownKeys(value)
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (descriptor !== undefined && "value" in descriptor) {
+      assertFrozenNonProxyGraph(descriptor.value, label, seen)
+    }
+  }
+}
+
+function assertNoProxyGraph(value, label, seen = new Set()) {
+  if (value === null || typeof value !== "object" || seen.has(value)) return
+  if (isProxy(value)) throw new TypeError(`${label} contains a proxy`)
+  seen.add(value)
+  let keys
+  try {
+    keys = Reflect.ownKeys(value)
+  } catch {
+    throw new TypeError(`${label} is invalid`)
+  }
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (descriptor !== undefined && "value" in descriptor) {
+      assertNoProxyGraph(descriptor.value, label, seen)
+    }
+  }
 }
 
 function duplicateProjectionSha256(value) {
