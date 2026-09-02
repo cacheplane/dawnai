@@ -1750,12 +1750,12 @@ test("delete rechecks authority and prevalidates outcome time immediately before
 	const writer = await createGuardedWriter({
 		now: () => {
 			clockCalls += 1;
-			if (clockCalls > 3) throw new Error("clock must not run after send");
+			if (clockCalls > 4) throw new Error("clock must not run after send");
 			return NOW;
 		},
 		fetchImpl: async () => {
 			fetchCalls += 1;
-			assert.equal(clockCalls, 3);
+			assert.equal(clockCalls, 4);
 			return { status: 204, headers: new Headers(), body: null };
 		},
 	});
@@ -1766,7 +1766,7 @@ test("delete rechecks authority and prevalidates outcome time immediately before
 		observedAt: NOW,
 	});
 	assert.equal(fetchCalls, 1);
-	assert.equal(clockCalls, 3);
+	assert.equal(clockCalls, 4);
 });
 
 test("composition and delete writer are deeply frozen owned capability sets", async () => {

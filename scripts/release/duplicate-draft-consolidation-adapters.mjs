@@ -420,26 +420,35 @@ export function createExactDuplicateDeleteEffect(options) {
 				throw new Error("Duplicate Release deletion was aborted before send");
 			}
 
+			permitBinding.assertActiveLease();
+			const beforeVerification = canonicalTimestamp(callClock(now));
+			if (beforeVerification > permitBinding.authorityExpiresAt) {
+				throw new Error(
+					"Delete permit expired before final committed-state verification",
+				);
+			}
+			await permitBinding.verifyPreSend();
+			permitBinding.assertActiveLease();
+			const deadline = deleteDeadline(timeoutMs, callerSignal);
 			const observedAt = canonicalTimestamp(callClock(now));
 			if (observedAt > permitBinding.authorityExpiresAt) {
+				deadline.dispose();
 				throw new Error(
 					"Delete permit expired at the writer's final pre-send clock",
 				);
 			}
-			permitBinding.assertActiveLease();
-			await permitBinding.verifyPreSend();
-			permitBinding.assertActiveLease();
-			const deadline = deleteDeadline(timeoutMs, callerSignal);
 			let response;
 			try {
-				response = await deadline.race(
-					fetchImpl(`${API_ORIGIN}/repos/${REPOSITORY}/releases/${releaseId}`, {
+				const pendingResponse = fetchImpl(
+					`${API_ORIGIN}/repos/${REPOSITORY}/releases/${releaseId}`,
+					{
 						method: "DELETE",
 						redirect: "manual",
 						headers: githubHeaders(token),
 						signal: deadline.signal,
-					}),
+					},
 				);
+				response = await deadline.race(pendingResponse);
 			} catch {
 				deadline.dispose();
 				return deleteOutcome("transport-ambiguous", null, observedAt);
@@ -1964,70 +1973,85 @@ function createNetworkGuard({ cwd, now }) {
 			}
 			record.used = true;
 			permitBinding.used = true;
+			let transactionEntered = false;
 			try {
 				const journalHeadPath = `${journalPath.slice(0, -"journal.json".length)}journal.head.json`;
-				return await writePrivateEnvelope.withExclusiveTransaction(
-					journalPath,
-					async (assertActiveLease) => {
-						const verifyCommittedState = async () => {
-							assertActiveLease();
-							const currentJournal = await readPrivateEnvelope(
-								journalPath,
-								DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
-							);
-							if (
-								!sameAuthenticatedPrivateRead(
-									currentJournal,
-									record.committedJournal,
-									journalPath,
-								)
-							) {
+				try {
+					return await writePrivateEnvelope.withExclusiveTransaction(
+						journalPath,
+						async (assertActiveLease) => {
+							transactionEntered = true;
+							const verifyCommittedState = async () => {
+								assertActiveLease();
+								let currentJournal;
+								try {
+									currentJournal = await readPrivateEnvelope(
+										journalPath,
+										DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+									);
+									if (
+										!sameAuthenticatedPrivateRead(
+											currentJournal,
+											record.committedJournal,
+											journalPath,
+										)
+									) {
+										throw new Error("Committed journal changed");
+									}
+								} catch {
+									throw consolidationVerificationError("JOURNAL");
+								}
+								try {
+									const currentHead = await readPrivateEnvelope(
+										journalHeadPath,
+										16 * 1024,
+									);
+									if (
+										!sameAuthenticatedPrivateRead(
+											currentHead,
+											record.committedHead,
+											journalHeadPath,
+										)
+									) {
+										throw new Error("Committed journal head changed");
+									}
+								} catch {
+									throw consolidationVerificationError("HEAD");
+								}
+								assertActiveLease();
+							};
+							const beforeRead = trustedNow();
+							if (beforeRead > record.authorityExpiresAt) {
 								throw new Error(
-									"Delete journal identity or bytes changed after permit issuance",
+									"Delete permit expired with its absolute npm authority",
 								);
 							}
-							const currentHead = await readPrivateEnvelope(
-								journalHeadPath,
-								16 * 1024,
-							);
-							if (
-								!sameAuthenticatedPrivateRead(
-									currentHead,
-									record.committedHead,
-									journalHeadPath,
-								)
-							) {
+							await verifyCommittedState();
+							const immediatelyBeforeSend = trustedNow();
+							if (immediatelyBeforeSend > record.authorityExpiresAt) {
 								throw new Error(
-									"Delete journal head identity or bytes changed after permit issuance",
+									"Delete permit expired with its absolute npm authority",
 								);
 							}
-							assertActiveLease();
-						};
-						const beforeRead = trustedNow();
-						if (beforeRead > record.authorityExpiresAt) {
-							throw new Error(
-								"Delete permit expired with its absolute npm authority",
+							permitBinding.assertActiveLease = assertActiveLease;
+							permitBinding.verifyPreSend = verifyCommittedState;
+							permitBinding.armed = true;
+							permitBinding.used = false;
+							state = "deleting";
+							const outcome = await context.run(
+								record.session.deleteToken,
+								() => runRequest("approved DELETE", operation),
 							);
-						}
-						await verifyCommittedState();
-						const immediatelyBeforeSend = trustedNow();
-						if (immediatelyBeforeSend > record.authorityExpiresAt) {
-							throw new Error(
-								"Delete permit expired with its absolute npm authority",
-							);
-						}
-						permitBinding.assertActiveLease = assertActiveLease;
-						permitBinding.verifyPreSend = verifyCommittedState;
-						permitBinding.armed = true;
-						permitBinding.used = false;
-						state = "deleting";
-						const outcome = await context.run(record.session.deleteToken, () =>
-							runRequest("approved DELETE", operation),
-						);
-						await verifyCommittedState();
-						return outcome;
-					},
-				);
+							await verifyCommittedState();
+							return outcome;
+						},
+					);
+				} catch (error) {
+					if (!transactionEntered) {
+						throw consolidationVerificationError("LOCK");
+					}
+					throw error;
+				}
 			} finally {
 				state = "spent";
 			}
@@ -2090,6 +2114,13 @@ function hiddenMethod(value) {
 
 function hiddenValue(value) {
 	return { value, enumerable: false, writable: false, configurable: false };
+}
+
+function consolidationVerificationError(subject) {
+	const code = subject === "LOCK" ? "JOURNAL_LOCK" : `COMMITTED_${subject}`;
+	return new Error(
+		`ERR_CONSOLIDATION_${code}_VERIFICATION: Committed ${subject.toLowerCase()} verification failed`,
+	);
 }
 
 function authenticatedPrivateRead(value, expectedPath) {

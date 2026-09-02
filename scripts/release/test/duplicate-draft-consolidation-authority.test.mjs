@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { unlinkSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -482,6 +490,115 @@ test("the raw writer enforces expiry on its final pre-send clock", async () => {
 		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
 		false,
 	);
+});
+
+test("a microtask expiry during awaited verification burns zero DELETE fetches", async () => {
+	const fixture = await authorityFixture();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const permit = await captured.networkEpoch.consume(
+		await journalIntentConsumption(captured, fixture),
+	);
+	const expiry =
+		Date.parse(captured.authority.npmInventory.completedAt) + 120_000;
+	let reads = 0;
+	let expired = false;
+	fixture.setClock(() => {
+		reads += 1;
+		if (reads === 3) queueMicrotask(() => (expired = true));
+		return new Date(expiry + (expired ? 1 : 0)).toISOString();
+	});
+
+	await assert.rejects(
+		fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		/expired|final|pre-send|authority|permit/iu,
+	);
+	assert.equal(reads, 4);
+	assert.equal(
+		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
+	);
+});
+
+test("the final guard clock invokes transport before its scheduled microtask", async () => {
+	let betweenFinalClockAndFetch = false;
+	const fixture = await authorityFixture({
+		deleteHook: () => assert.equal(betweenFinalClockAndFetch, false),
+	});
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const permit = await captured.networkEpoch.consume(
+		await journalIntentConsumption(captured, fixture),
+	);
+	const expiry =
+		Date.parse(captured.authority.npmInventory.completedAt) + 120_000;
+	let reads = 0;
+	fixture.setClock(() => {
+		reads += 1;
+		if (reads === 4) {
+			queueMicrotask(() => (betweenFinalClockAndFetch = true));
+		}
+		return new Date(expiry).toISOString();
+	});
+
+	assert.deepEqual(
+		await fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		{
+			classification: "confirmed-204",
+			httpStatus: 204,
+			observedAt: new Date(expiry).toISOString(),
+		},
+	);
+	assert.equal(reads, 4);
+});
+
+test("pre-send journal, head, and lock failures are stable and path-free", async (t) => {
+	for (const failure of ["journal", "head", "lock"]) {
+		await t.test(failure, async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			const permit = await captured.networkEpoch.consume(
+				await journalIntentConsumption(captured, fixture),
+			);
+			if (failure === "journal") await rm(fixture.journalPath);
+			if (failure === "head") await rm(fixture.journalHeadPath);
+			if (failure === "lock") {
+				const lockPath = path.join(
+					path.dirname(fixture.journalPath),
+					`.${path.basename(fixture.journalPath)}.lock`,
+				);
+				await writeFile(lockPath, "secret-root-path-content\n", {
+					mode: 0o600,
+				});
+			}
+
+			await assert.rejects(
+				fixture.adapters.writer.deleteDuplicate({
+					releaseId: DUPLICATE_DRAFT_IDS[0],
+					permit,
+				}),
+				(error) => {
+					const diagnostic = `${error.message}\n${error.stack ?? ""}`;
+					assert.match(
+						error.message,
+						/ERR_CONSOLIDATION_(COMMITTED_JOURNAL|COMMITTED_HEAD|JOURNAL_LOCK)_VERIFICATION/iu,
+					);
+					assert.equal(diagnostic.includes(fixture.root), false);
+					assert.equal(diagnostic.includes("secret-root-path-content"), false);
+					assert.equal(Object.hasOwn(error, "cause"), false);
+					return true;
+				},
+			);
+			assert.equal(
+				fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+				false,
+			);
+		});
+	}
 });
 
 test("missing or replaced committed journal heads burn the permit before DELETE", async (t) => {
