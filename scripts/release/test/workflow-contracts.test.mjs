@@ -16,7 +16,7 @@ import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { parse } from "yaml"
+import { parse, stringify } from "yaml"
 
 import { classifyReleaseWorkflowAbandonment } from "../abandonment-reachability.mjs"
 import { ARTIFACT_STORE_SPARSE_FILES } from "../artifact-store.mjs"
@@ -212,6 +212,81 @@ repos/\${{ github.repository }}/releases/379982100`,
         url: `\${{ github.api_url }}/repos/\${{ github.repository }}/releases/379982100`,
       }),
     ],
+    [
+      "Octokit deleteRelease call",
+      runWorkflow("await github.rest.repos.deleteRelease({ owner, repo, release_id })"),
+    ],
+    [
+      "optional and spaced Octokit deleteRelease call",
+      runWorkflow(
+        "await github ?. rest ?. repos ?. deleteRelease ?. ({ owner, repo, release_id })",
+      ),
+    ],
+    [
+      "GitHub request route template",
+      runWorkflow(
+        "await github.request('DELETE /repos/{owner}/{repo}/releases/{release_id}', options)",
+      ),
+    ],
+    [
+      "optional GitHub request route template",
+      runWorkflow(
+        'await github?.request?.("delete   /repos/{owner}/{repo}/releases/{release_id}", options)',
+      ),
+    ],
+    [
+      "GitHub request object",
+      runWorkflow(
+        "await github.request({ method: 'DELETE', url: '/repos/{owner}/{repo}/releases/{release_id}' })",
+      ),
+    ],
+    [
+      "shell braced path variables",
+      runWorkflow(`gh api --method DELETE "repos/\${GITHUB_REPOSITORY}/releases/\${RELEASE_ID}"`),
+    ],
+    [
+      "shell unbraced path variables",
+      runWorkflow('gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"'),
+    ],
+    [
+      "matrix axes",
+      matrixWorkflow(
+        {
+          method: ["DELETE"],
+          endpoint: ["/repos/{owner}/{repo}/releases/{release_id}"],
+        },
+        `gh api --method "\${{ matrix.method }}" "\${{ matrix.endpoint }}"`,
+      ),
+    ],
+    [
+      "matrix include",
+      matrixWorkflow(
+        {
+          include: [
+            {
+              method: "DELETE",
+              endpoint: "/repos/cacheplane/dawnai/releases/379982100",
+            },
+          ],
+        },
+        `curl --request "\${{ matrix.method }}" "\${{ matrix.endpoint }}"`,
+      ),
+    ],
+    [
+      "matrix exclude",
+      matrixWorkflow(
+        {
+          method: ["GET"],
+          exclude: [
+            {
+              method: "DELETE",
+              endpoint: "/repos/cacheplane/dawnai/releases/379982100",
+            },
+          ],
+        },
+        `curl --request "\${{ matrix.method }}" "\${{ matrix.endpoint }}"`,
+      ),
+    ],
   ]
 
   for (const [name, source] of unsafe) {
@@ -239,6 +314,38 @@ jobs:
       - run: echo /repos/cacheplane/dawnai/releases/379982100
 `
   assert.doesNotThrow(() => assertNoDuplicateDraftWorkflowMutation({ "safe.yml": safe }))
+
+  const unrelatedMatrix = matrixWorkflow(
+    {
+      os: ["ubuntu-latest", "windows-latest"],
+      method: ["GET"],
+      endpoint: ["/repos/{owner}/{repo}/releases/{release_id}"],
+    },
+    `gh api --method "\${{ matrix.method }}" "\${{ matrix.endpoint }}"`,
+  )
+  assert.doesNotThrow(() =>
+    assertNoDuplicateDraftWorkflowMutation({ "unrelated-matrix.yml": unrelatedMatrix }),
+  )
+
+  const separateJobs = `name: separate jobs
+on:
+  workflow_dispatch: {}
+jobs:
+  method:
+    strategy:
+      matrix:
+        method: [DELETE]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "\${{ matrix.method }}"
+  endpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo /repos/cacheplane/dawnai/releases/379982100
+`
+  assert.doesNotThrow(() =>
+    assertNoDuplicateDraftWorkflowMutation({ "separate-jobs.yml": separateJobs }),
+  )
 })
 
 test("version-pr.yml is version-only and uses only RELEASE_GITHUB_TOKEN", async () => {
@@ -1907,7 +2014,10 @@ function assertNoDuplicateDraftWorkflowMutation(sources) {
     const workflow = parseWorkflowSource(source, file)
     for (const context of workflowExecutionContexts(workflow)) {
       const normalized = normalizeExecutionContext(context)
-      if (containsDeleteMethod(normalized) && containsReleaseEndpoint(normalized)) {
+      if (
+        containsDeleteReleaseOperation(normalized) ||
+        (containsDeleteMethod(normalized) && containsReleaseEndpoint(normalized))
+      ) {
         throw new Error(`${file} contains a Release DELETE endpoint in ${context.label}`)
       }
     }
@@ -1923,12 +2033,14 @@ function workflowExecutionContexts(workflow) {
       ...executionObjectScalars(job.env, `jobs.${jobId}.env`),
       ...executionObjectScalars(job.container?.env, `jobs.${jobId}.container.env`),
     ]
+    const jobMatrix = executionObjectScalars(job.strategy?.matrix, `jobs.${jobId}.strategy.matrix`)
     if (typeof job.uses === "string") {
       contexts.push({
         label: `job ${jobId}`,
         values: [
           ...workflowEnv,
           ...jobEnv,
+          ...jobMatrix,
           `jobs.${jobId}.uses=${job.uses}`,
           ...executionObjectScalars(job.with, `jobs.${jobId}.with`),
           ...executionObjectScalars(job.secrets, `jobs.${jobId}.secrets`),
@@ -1941,6 +2053,7 @@ function workflowExecutionContexts(workflow) {
       const values = [
         ...workflowEnv,
         ...jobEnv,
+        ...jobMatrix,
         ...executionObjectScalars(step.env, `jobs.${jobId}.steps.${stepIndex}.env`),
         ...executionObjectScalars(step.with, `jobs.${jobId}.steps.${stepIndex}.with`),
       ]
@@ -1988,15 +2101,19 @@ function normalizeExecutionContext(context) {
 }
 
 function containsDeleteMethod(value) {
-  return /\bdeleterelease\b|(?:^|\s)(?:-x\s*delete\b|--(?:method|request)(?:\s+|\s*=\s*)delete\b|[^\s=]*(?:method|request|verb)[^\s=]*\s*=\s*delete\b)/iu.test(
+  return /(?:^|[\s"'`(])delete\s+(?=\/?repos\/)|(?:^|\s)(?:-x\s*delete\b|--(?:method|request)(?:\s+|\s*=\s*)delete\b|[^\s=:]*(?:method|request|verb)[^\s=:]*\s*[:=]\s*["'`]?delete\b)/iu.test(
     value,
   )
+}
+
+function containsDeleteReleaseOperation(value) {
+  return /\bdeleterelease\s*(?:\?\s*\.\s*)?\(/iu.test(value)
 }
 
 function containsReleaseEndpoint(value) {
   const segment = String.raw`(?:__expression__|\$[a-z_][a-z0-9_]*|[^/\s"'=:]+)`
   const repository = `(?:${segment}|${segment}/${segment})`
-  const releaseId = String.raw`(?:[1-9][0-9]*|__expression__|\$[a-z_][a-z0-9_]*)`
+  const releaseId = String.raw`(?:[1-9][0-9]*|__expression__|\$[a-z_][a-z0-9_]*|\$\{[a-z_][a-z0-9_]*\}|\{[a-z_][a-z0-9_]*\})`
   return new RegExp(
     String.raw`(?:^|[\s"'=])(?:https?://[^/\s"']+|__expression__)?/?repos/${repository}/releases/${releaseId}(?:$|[?&#/\s"'])`,
     "iu",
@@ -2054,6 +2171,26 @@ jobs:
     uses: example/workflows/.github/workflows/delete.yml@0123456789012345678901234567890123456789
     with:
 ${inputs}
+`
+}
+
+function matrixWorkflow(matrix, run) {
+  const matrixYaml = stringify(matrix, { lineWidth: 0 })
+    .trimEnd()
+    .split("\n")
+    .map((line) => `        ${line}`)
+    .join("\n")
+  return `name: fixture
+on:
+  workflow_dispatch: {}
+jobs:
+  mutation:
+    strategy:
+      matrix:
+${matrixYaml}
+    runs-on: ubuntu-latest
+    steps:
+      - run: ${JSON.stringify(run)}
 `
 }
 
