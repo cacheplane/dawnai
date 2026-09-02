@@ -606,6 +606,22 @@ test("workflow isolation follows every repository-local executable transitively"
       },
     },
     {
+      name: "dynamic import with options",
+      workflow: "node scripts/first.mjs",
+      files: {
+        "scripts/first.mjs": "import('./hidden.mjs', {})\n",
+        "scripts/hidden.mjs": "gh release delete opaque-tag --yes\n",
+      },
+    },
+    {
+      name: "CommonJS require with extra argument",
+      workflow: "node scripts/first.cjs",
+      files: {
+        "scripts/first.cjs": "require('./hidden.cjs', undefined)\n",
+        "scripts/hidden.cjs": "gh release delete opaque-tag --yes\n",
+      },
+    },
+    {
       name: "pnpm exec tsx runner",
       workflow: "pnpm exec tsx scripts/hidden.ts",
       files: { "scripts/hidden.ts": "github.rest.repos.deleteRelease({ release_id: 1 })\n" },
@@ -689,6 +705,23 @@ test("workflow isolation follows every repository-local executable transitively"
           "const template = `export * from './missing-three.mjs'`",
           "export const safe = text + template",
         ].join("\n"),
+      },
+    })
+    await assert.doesNotReject(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
+  })
+
+  await t.test("nonliteral first arguments and harmless extra arguments stay safe", async () => {
+    const root = await createWorkflowReachabilityFixture(t, {
+      workflow: "node scripts/safe.mjs",
+      files: {
+        "scripts/safe.mjs": [
+          "const target = './unreachable.mjs'",
+          "import(target, {})",
+          "require(target, undefined)",
+          "import('node:path', {})",
+          "require('node:fs', undefined)",
+        ].join("\n"),
+        "scripts/unreachable.mjs": "gh release delete opaque-tag --yes\n",
       },
     })
     await assert.doesNotReject(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
@@ -2681,7 +2714,7 @@ function localModuleReferences(source, file) {
       node.moduleReference.expression !== undefined
     ) {
       addLiteral(node.moduleReference.expression)
-    } else if (typescript.isCallExpression(node) && node.arguments.length === 1) {
+    } else if (typescript.isCallExpression(node) && node.arguments.length >= 1) {
       if (
         node.expression.kind === typescript.SyntaxKind.ImportKeyword ||
         (typescript.isIdentifier(node.expression) && node.expression.text === "require")
