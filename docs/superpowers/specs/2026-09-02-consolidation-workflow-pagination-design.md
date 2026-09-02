@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved design; implementation pending.
+Approved and implemented.
 
 ## Problem
 
