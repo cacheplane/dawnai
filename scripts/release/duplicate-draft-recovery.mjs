@@ -295,6 +295,176 @@ export async function captureDuplicateDraftRecoveryEvidence({
 }
 
 /**
+ * Converge the two candidate-pinned duplicate drafts through their recognized
+ * partial states. Every individual mutation is preceded by a complete fresh
+ * capture; no failed or ambiguous mutation is retried by this orchestrator.
+ */
+export async function applyDuplicateDraftRecovery({
+  evidence,
+  concurrencyAcknowledgement,
+  reader,
+  createWriter,
+  observer,
+  now = Date.now,
+}) {
+  const acknowledgement = normalizeConcurrencyAcknowledgement(concurrencyAcknowledgement)
+  if (typeof createWriter !== "function") {
+    throw new TypeError("Duplicate draft recovery writer factory is invalid")
+  }
+  if (typeof observer !== "function") {
+    throw new TypeError("Duplicate draft recovery observer is invalid")
+  }
+  if (typeof now !== "function") throw new TypeError("Duplicate draft recovery clock is invalid")
+
+  const startedAtMs = readApplyTime(now)
+  const sealed = parseDuplicateDraftEvidence(canonicalDuplicateDraftEvidence(evidence))
+  assertApplyEvidenceFresh(sealed, startedAtMs)
+  const expectedSources = sealed.releases.duplicates.map(duplicateSource)
+  const performed = new Map()
+  const results = []
+  let writer
+
+  for (const [index, configured] of DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.entries()) {
+    let lastAuthorization
+    while (true) {
+      const fresh = await captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: sealed.reviewedAuthority.mergeCommitSha,
+        reader,
+        now,
+      })
+      assertApplyAuthorization(sealed, fresh, expectedSources)
+      lastAuthorization = fresh
+      const duplicate = fresh.releases.duplicates[index]
+      if (duplicate.releaseId !== configured.releaseId) {
+        throw new Error("Duplicate draft recovery order changed")
+      }
+      if (index > 0 && fresh.releases.duplicates[index - 1].state !== "quarantined") {
+        throw new Error("The prior duplicate Release is not exactly quarantined")
+      }
+      if (duplicate.state === "quarantined") break
+
+      writer ??= normalizeApplyWriter(createWriter())
+      if (duplicate.state === "untouched") {
+        const receipt = await writer.uploadEvidenceAssetIfAbsentAndEqual({
+          expectedSnapshot: duplicateSource(duplicate),
+          expectedTagObjectSha: sealed.candidate.tagObjectSha,
+          name: duplicate.archiveAssetName,
+          bytes: Buffer.from(sealed.releases.canonical.body, "utf8"),
+          sha256: duplicate.originalBodySha256,
+        })
+        const normalized = normalizeUploadMutationReceipt(receipt, {
+          releaseId: duplicate.releaseId,
+          name: duplicate.archiveAssetName,
+          sha256: duplicate.originalBodySha256,
+        })
+        expectedSources[index] = {
+          ...duplicateSource(duplicate),
+          assets: [
+            ...duplicate.assets,
+            {
+              id: normalized.assetId,
+              name: normalized.name,
+              sha256: normalized.sha256,
+            },
+          ],
+          evidenceAssets: ["body"],
+        }
+        continue
+      }
+      if (duplicate.state === "body-archived") {
+        const receipt = await writer.uploadEvidenceAssetIfAbsentAndEqual({
+          expectedSnapshot: duplicateSource(duplicate),
+          expectedTagObjectSha: sealed.candidate.tagObjectSha,
+          name: duplicate.receiptAssetName,
+          bytes: Buffer.from(duplicate.receiptBytes, "utf8"),
+          sha256: duplicate.receiptSha256,
+        })
+        const normalized = normalizeUploadMutationReceipt(receipt, {
+          releaseId: duplicate.releaseId,
+          name: duplicate.receiptAssetName,
+          sha256: duplicate.receiptSha256,
+        })
+        expectedSources[index] = {
+          ...duplicateSource(duplicate),
+          assets: [
+            ...duplicate.assets,
+            {
+              id: normalized.assetId,
+              name: normalized.name,
+              sha256: normalized.sha256,
+              bytes: duplicate.receiptBytes,
+            },
+          ],
+          evidenceAssets: ["body", "receipt"],
+        }
+        continue
+      }
+      if (duplicate.state === "receipt-archived") {
+        const mutation = normalizeQuarantineMutationReceipt(
+          await writer.quarantineDuplicateBodyIfCurrent({
+            expectedSnapshot: duplicateSource(duplicate),
+            expectedTagObjectSha: sealed.candidate.tagObjectSha,
+            expectedBodySha256: duplicate.originalBodySha256,
+            expectedNotice: duplicate.noticeBytes,
+          }),
+          duplicate.releaseId,
+          sealed.candidate.tagObjectSha,
+        )
+        performed.set(duplicate.releaseId, mutation)
+        expectedSources[index] = {
+          ...duplicateSource(duplicate),
+          body: duplicate.noticeBytes,
+          marker: null,
+        }
+        continue
+      }
+      throw new Error("Duplicate Release state is not resumable")
+    }
+
+    const exactDuplicate = lastAuthorization.releases.duplicates[index]
+    const mutation = performed.get(configured.releaseId)
+    results.push(
+      mutation ??
+        deepFreeze({
+          releaseId: configured.releaseId,
+          outcome: "preexisting-quarantined",
+          priorFenceObservations: null,
+          verifiedAt: lastAuthorization.capturedAt,
+          projectionSha256: duplicateProjectionSha256(duplicateSource(exactDuplicate)),
+        }),
+    )
+  }
+
+  const finalAuthorization = normalizeFinalRecoveryObservation(
+    await observer({
+      candidate: {
+        version: DUPLICATE_DRAFT_RECOVERY_POLICY.version,
+        commitSha: DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha,
+      },
+    }),
+  )
+  const appliedAt = new Date(readApplyTime(now)).toISOString()
+  return deepFreeze({
+    schemaVersion: 1,
+    atomic: false,
+    concurrencyAcknowledgement: acknowledgement,
+    freezeScope: {
+      mode: acknowledgement.mode,
+      releaseIds: [...acknowledgement.releaseIds],
+    },
+    evidenceCapturedAt: sealed.capturedAt,
+    appliedAt,
+    candidate: {
+      version: DUPLICATE_DRAFT_RECOVERY_POLICY.version,
+      commitSha: DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha,
+      releaseId: DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId,
+    },
+    duplicates: results,
+    finalAuthorization,
+  })
+}
+
+/**
  * Serialize the authority-bound recovery observation into its sole canonical
  * representation. It performs no I/O and accepts neither credentials nor
  * transport data.
@@ -1419,6 +1589,317 @@ function exactObject(value, fields, label) {
     throw new TypeError(`${label} contains unexpected or missing fields`)
   }
   return source
+}
+
+function normalizeConcurrencyAcknowledgement(value) {
+  const fields = ["acknowledged", "atomic", "mode", "releaseIds"]
+  let keys
+  let prototype
+  let frozen
+  try {
+    keys = Reflect.ownKeys(value)
+    prototype = Object.getPrototypeOf(value)
+    frozen = Object.isFrozen(value)
+  } catch {
+    throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+  }
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    ![Object.prototype, null].includes(prototype) ||
+    !frozen ||
+    keys.length !== fields.length ||
+    keys.some((key) => typeof key !== "string" || !fields.includes(key))
+  ) {
+    throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+  }
+  const values = {}
+  for (const field of fields) {
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, field)
+    } catch {
+      throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+    }
+    if (
+      descriptor?.enumerable !== true ||
+      descriptor.configurable !== false ||
+      descriptor.writable !== false ||
+      !("value" in descriptor) ||
+      descriptor.get !== undefined ||
+      descriptor.set !== undefined
+    ) {
+      throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+    }
+    values[field] = descriptor.value
+  }
+  const releaseIds = normalizeAcknowledgedReleaseIds(values.releaseIds)
+  if (
+    values.acknowledged !== true ||
+    values.atomic !== false ||
+    values.mode !== "operator-freeze-compare-before-write-v1" ||
+    !sameJson(
+      releaseIds,
+      DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.map(({ releaseId }) => releaseId),
+    )
+  ) {
+    throw new TypeError("Duplicate draft recovery concurrency acknowledgement is not exact")
+  }
+  return deepFreeze({
+    acknowledged: true,
+    atomic: false,
+    mode: values.mode,
+    releaseIds,
+  })
+}
+
+function normalizeAcknowledgedReleaseIds(value) {
+  let keys
+  let prototype
+  let frozen
+  try {
+    keys = Reflect.ownKeys(value)
+    prototype = Object.getPrototypeOf(value)
+    frozen = Object.isFrozen(value)
+  } catch {
+    throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+  }
+  if (
+    !Array.isArray(value) ||
+    prototype !== Array.prototype ||
+    !frozen ||
+    keys.length !== 3 ||
+    !keys.includes("0") ||
+    !keys.includes("1") ||
+    !keys.includes("length")
+  ) {
+    throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+  }
+  const result = []
+  for (const key of ["0", "1"]) {
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key)
+    } catch {
+      throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+    }
+    if (
+      descriptor?.enumerable !== true ||
+      descriptor.configurable !== false ||
+      descriptor.writable !== false ||
+      !("value" in descriptor)
+    ) {
+      throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+    }
+    result.push(descriptor.value)
+  }
+  const length = Object.getOwnPropertyDescriptor(value, "length")
+  if (
+    length?.enumerable !== false ||
+    length.configurable !== false ||
+    length.writable !== false ||
+    length.value !== 2
+  ) {
+    throw new TypeError("Duplicate draft recovery concurrency acknowledgement is invalid")
+  }
+  return result
+}
+
+function readApplyTime(now) {
+  let milliseconds
+  try {
+    milliseconds = now()
+  } catch {
+    throw new TypeError("Duplicate draft recovery time is invalid")
+  }
+  if (
+    !Number.isSafeInteger(milliseconds) ||
+    milliseconds < 0 ||
+    milliseconds > 8_640_000_000_000_000
+  ) {
+    throw new TypeError("Duplicate draft recovery time is invalid")
+  }
+  return milliseconds
+}
+
+function assertApplyEvidenceFresh(evidence, nowMs) {
+  const capturedAtMs = Date.parse(evidence.capturedAt)
+  if (capturedAtMs > nowMs) {
+    throw new Error("Duplicate draft recovery evidence capture time is in the future")
+  }
+  if (nowMs - capturedAtMs > MAX_DUPLICATE_EVIDENCE_AGE_MS) {
+    throw new Error("Duplicate draft recovery evidence has expired and must be recaptured")
+  }
+}
+
+function assertApplyAuthorization(sealed, fresh, expectedSources) {
+  assertApplyEvidenceFresh(sealed, Date.parse(fresh.capturedAt))
+  for (const field of [
+    "reviewedAuthority",
+    "repository",
+    "workflow",
+    "immutableReleases",
+    "candidate",
+    "npm",
+    "releaseRuns",
+  ]) {
+    if (!sameJson(fresh[field], sealed[field])) {
+      throw new Error(`Duplicate draft recovery authorization drifted at ${field}`)
+    }
+  }
+  if (!sameJson(fresh.releases.canonical, sealed.releases.canonical)) {
+    throw new Error("Duplicate draft recovery canonical Release drifted")
+  }
+  if (fresh.releases.duplicates.length !== expectedSources.length) {
+    throw new Error("Duplicate draft recovery duplicate inventory drifted")
+  }
+  for (const [index, duplicate] of fresh.releases.duplicates.entries()) {
+    if (!sameJson(duplicateSource(duplicate), expectedSources[index])) {
+      throw new Error("Duplicate draft recovery partial state drifted")
+    }
+  }
+}
+
+function duplicateSource(duplicate) {
+  return Object.fromEntries(DUPLICATE_SOURCE_FIELDS.map((field) => [field, duplicate[field]]))
+}
+
+function normalizeApplyWriter(value) {
+  const fields = ["quarantineDuplicateBodyIfCurrent", "uploadEvidenceAssetIfAbsentAndEqual"]
+  let keys
+  let prototype
+  let frozen
+  try {
+    keys = Reflect.ownKeys(value)
+    prototype = Object.getPrototypeOf(value)
+    frozen = Object.isFrozen(value)
+  } catch {
+    throw new TypeError("Duplicate draft recovery writer is invalid")
+  }
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    ![Object.prototype, null].includes(prototype) ||
+    !frozen ||
+    keys.length !== fields.length ||
+    keys.some((key) => typeof key !== "string" || !fields.includes(key))
+  ) {
+    throw new TypeError("Duplicate draft recovery writer surface is invalid")
+  }
+  const result = {}
+  for (const field of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, field)
+    if (
+      descriptor?.enumerable !== true ||
+      !("value" in descriptor) ||
+      descriptor.get !== undefined ||
+      descriptor.set !== undefined ||
+      typeof descriptor.value !== "function"
+    ) {
+      throw new TypeError("Duplicate draft recovery writer surface is invalid")
+    }
+    result[field] = descriptor.value
+  }
+  return Object.freeze(result)
+}
+
+function normalizeUploadMutationReceipt(value, expected) {
+  const receipt = exactObject(
+    value,
+    ["releaseId", "assetId", "name", "status", "sha256"],
+    "duplicate draft recovery upload receipt",
+  )
+  if (
+    receipt.releaseId !== expected.releaseId ||
+    !Number.isSafeInteger(receipt.assetId) ||
+    receipt.assetId < 1 ||
+    receipt.name !== expected.name ||
+    receipt.status !== "uploaded" ||
+    receipt.sha256 !== expected.sha256
+  ) {
+    throw new Error("Duplicate draft recovery upload receipt is not exact")
+  }
+  return receipt
+}
+
+function normalizeQuarantineMutationReceipt(value, releaseId, expectedTagObjectSha) {
+  const receipt = exactObject(
+    value,
+    ["atomic", "releaseId", "outcome", "preWriteFence", "postWriteFence"],
+    "duplicate draft recovery quarantine receipt",
+  )
+  if (
+    receipt.atomic !== false ||
+    receipt.releaseId !== releaseId ||
+    receipt.outcome !== "performed"
+  ) {
+    throw new Error("Duplicate draft recovery quarantine receipt is not exact")
+  }
+  const preWriteFence = normalizeWriterFence(
+    receipt.preWriteFence,
+    expectedTagObjectSha,
+    "pre-write",
+  )
+  const postWriteFence = normalizeWriterFence(
+    receipt.postWriteFence,
+    expectedTagObjectSha,
+    "post-write",
+  )
+  if (Date.parse(preWriteFence.observedAt) > Date.parse(postWriteFence.observedAt)) {
+    throw new Error("Duplicate draft recovery write fence times are not ordered")
+  }
+  return deepFreeze({
+    releaseId,
+    outcome: "performed",
+    preWriteFence,
+    postWriteFence,
+  })
+}
+
+function normalizeWriterFence(value, expectedTagObjectSha, label) {
+  const fence = exactObject(
+    value,
+    ["observedAt", "projectionSha256", "tagObjectSha"],
+    `duplicate draft recovery ${label} fence`,
+  )
+  normalizeCanonicalTimestamp(fence.observedAt, `Duplicate draft recovery ${label} fence time`)
+  assertSha256(fence.projectionSha256, `Duplicate draft recovery ${label} projection SHA-256`)
+  if (fence.tagObjectSha !== expectedTagObjectSha) {
+    throw new Error(`Duplicate draft recovery ${label} candidate tag drifted`)
+  }
+  return fence
+}
+
+function normalizeFinalRecoveryObservation(value) {
+  const observation = exactObject(
+    value,
+    ["state", "disposition", "nextTransition", "conflicts", "diagnostics", "releaseId"],
+    "duplicate draft recovery final authorization",
+  )
+  if (
+    observation.state !== "CANDIDATE_ESCROWED" ||
+    observation.disposition !== "would-transition" ||
+    observation.nextTransition !== "publish-npm-packages" ||
+    !Array.isArray(observation.conflicts) ||
+    observation.conflicts.length !== 0 ||
+    !Array.isArray(observation.diagnostics) ||
+    observation.diagnostics.length !== 0 ||
+    observation.releaseId !== DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId
+  ) {
+    throw new Error("Duplicate draft recovery final authorization is not exact")
+  }
+  return deepFreeze({
+    state: observation.state,
+    disposition: observation.disposition,
+    nextTransition: observation.nextTransition,
+    conflicts: [],
+    diagnostics: [],
+    releaseId: observation.releaseId,
+  })
+}
+
+function duplicateProjectionSha256(value) {
+  return sha256(`${JSON.stringify(canonicalize(value))}\n`)
 }
 
 function isCanonicalNotice(value) {

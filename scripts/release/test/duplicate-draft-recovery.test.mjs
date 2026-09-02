@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
 import {
+  applyDuplicateDraftRecovery,
   canonicalDuplicateDraftEvidence,
   canonicalRecoveryNotice,
   canonicalRecoveryReceipt,
@@ -581,6 +582,436 @@ const REVIEWED_HEAD_SHA = "1".repeat(40)
 const REVIEWED_TREE_SHA = "2".repeat(40)
 const MERGE_COMMIT_SHA = "3".repeat(40)
 const TAG_OBJECT_SHA = "4".repeat(40)
+
+test("apply requires the exact non-atomic edit-freeze acknowledgement before writer construction", async () => {
+  let writerConstructions = 0
+
+  await assert.rejects(
+    applyDuplicateDraftRecovery({
+      evidence: recoveryObservation(),
+      concurrencyAcknowledgement: { acknowledged: false },
+      reader: Object.freeze({}),
+      createWriter() {
+        writerConstructions += 1
+        return Object.freeze({})
+      },
+      observer: async () => ({}),
+      now: () => RECOVERY_NOW,
+    }),
+    /acknowledgement/iu,
+  )
+  assert.equal(writerConstructions, 0)
+})
+
+const FINAL_RECOVERY_OBSERVATION = Object.freeze({
+  state: "CANDIDATE_ESCROWED",
+  disposition: "would-transition",
+  nextTransition: "publish-npm-packages",
+  conflicts: Object.freeze([]),
+  diagnostics: Object.freeze([]),
+  releaseId: POLICY.canonicalReleaseId,
+})
+
+function concurrencyAcknowledgement() {
+  return Object.freeze({
+    acknowledged: true,
+    atomic: false,
+    mode: "operator-freeze-compare-before-write-v1",
+    releaseIds: Object.freeze(POLICY.duplicates.map(({ releaseId }) => releaseId)),
+  })
+}
+
+function createApplyHarness({
+  states = ["untouched", "untouched"],
+  writerFailure,
+  malformedQuarantineReceipt = false,
+  drift,
+  fourthCandidate = false,
+  finalObservation = FINAL_RECOVERY_OBSERVATION,
+} = {}) {
+  const liveStates = [...states]
+  const events = []
+  let authorizationCount = 0
+  let writerConstructions = 0
+  let mutationCount = 0
+
+  function observation() {
+    const current = structuredClone(
+      recoveryObservation({
+        states: liveStates,
+        capturedAt: new Date(RECOVERY_NOW).toISOString(),
+      }),
+    )
+    drift?.(current, authorizationCount)
+    return current
+  }
+
+  const reader = Object.freeze({
+    async readReviewedMergeAuthority() {
+      authorizationCount += 1
+      events.push(["authorize", authorizationCount, [...liveStates]])
+      return observation().reviewedAuthority
+    },
+    async readRepositoryState() {
+      return observation().repository
+    },
+    async readCandidateTag() {
+      return observation().candidate
+    },
+    async readWorkflowState() {
+      return observation().workflow
+    },
+    async readImmutableReleases() {
+      return observation().immutableReleases
+    },
+    async readReleaseRuns() {
+      const current = observation()
+      return { runs: current.releaseRuns, candidateRuns: current.releaseRuns }
+    },
+    async readCandidatePublishJobs() {
+      assert.fail("no candidate workflow jobs should be read without candidate runs")
+    },
+    async readNpmAbsence(name) {
+      return observation().npm.packages.find((pkg) => pkg.name === name)
+    },
+    async readReleaseSnapshot(releaseId) {
+      const current = observation()
+      return releaseId === POLICY.canonicalReleaseId
+        ? current.releases.canonical
+        : current.releases.duplicates.find((release) => release.releaseId === releaseId)
+    },
+    async listCandidateReleases() {
+      const current = observation()
+      const releases = [
+        releaseSummary(current.releases.canonical),
+        ...current.releases.duplicates.map(releaseSummary),
+      ]
+      if (fourthCandidate) {
+        releases.push({
+          ...releaseSummary(current.releases.duplicates[0]),
+          releaseId: 379999999,
+          tagName: "untagged-fourth-candidate",
+        })
+      }
+      return releases
+    },
+  })
+
+  function createWriter() {
+    writerConstructions += 1
+    events.push(["writer-created", authorizationCount])
+    return Object.freeze({
+      async uploadEvidenceAssetIfAbsentAndEqual(input) {
+        mutationCount += 1
+        const duplicateIndex = POLICY.duplicates.findIndex(
+          ({ releaseId }) => releaseId === input.expectedSnapshot.releaseId,
+        )
+        assert.notEqual(duplicateIndex, -1)
+        const isBody =
+          input.name === input.expectedSnapshot.assets.at(45)?.name ||
+          input.name.includes("-original-body-")
+        const expectedState = isBody ? "untouched" : "body-archived"
+        assert.equal(liveStates[duplicateIndex], expectedState)
+        assert.equal(input.expectedTagObjectSha, TAG_OBJECT_SHA)
+        events.push([
+          "mutate",
+          mutationCount,
+          isBody ? "archive-body" : "archive-receipt",
+          input.expectedSnapshot.releaseId,
+          authorizationCount,
+        ])
+        liveStates[duplicateIndex] = isBody ? "body-archived" : "receipt-archived"
+        if (writerFailure?.(mutationCount, "upload")) throw new Error("simulated writer failure")
+        return Object.freeze({
+          releaseId: input.expectedSnapshot.releaseId,
+          assetId: recoverySnapshotForState(
+            input.expectedSnapshot.releaseId,
+            liveStates[duplicateIndex],
+          ).assets.at(-1).id,
+          name: input.name,
+          status: "uploaded",
+          sha256: input.sha256,
+        })
+      },
+      async quarantineDuplicateBodyIfCurrent(input) {
+        mutationCount += 1
+        const duplicateIndex = POLICY.duplicates.findIndex(
+          ({ releaseId }) => releaseId === input.expectedSnapshot.releaseId,
+        )
+        assert.equal(liveStates[duplicateIndex], "receipt-archived")
+        assert.equal(input.expectedTagObjectSha, TAG_OBJECT_SHA)
+        events.push([
+          "mutate",
+          mutationCount,
+          "quarantine",
+          input.expectedSnapshot.releaseId,
+          authorizationCount,
+        ])
+        liveStates[duplicateIndex] = "quarantined"
+        if (writerFailure?.(mutationCount, "quarantine")) {
+          throw new Error("simulated writer failure")
+        }
+        if (malformedQuarantineReceipt) return Object.freeze({ outcome: "performed" })
+        return Object.freeze({
+          atomic: false,
+          releaseId: input.expectedSnapshot.releaseId,
+          outcome: "performed",
+          preWriteFence: Object.freeze({
+            observedAt: "2026-09-01T00:10:01.000Z",
+            projectionSha256: "a".repeat(64),
+            tagObjectSha: TAG_OBJECT_SHA,
+          }),
+          postWriteFence: Object.freeze({
+            observedAt: "2026-09-01T00:10:02.000Z",
+            projectionSha256: "b".repeat(64),
+            tagObjectSha: TAG_OBJECT_SHA,
+          }),
+        })
+      },
+    })
+  }
+
+  const observer = async (input) => {
+    events.push(["observe", structuredClone(input)])
+    return structuredClone(finalObservation)
+  }
+  const evidence = parseDuplicateDraftEvidence(
+    canonicalDuplicateDraftEvidence(recoveryObservation({ states })),
+  )
+  return {
+    evidence,
+    reader,
+    createWriter,
+    observer,
+    now: () => RECOVERY_NOW,
+    events,
+    liveStates,
+    get writerConstructions() {
+      return writerConstructions
+    },
+    get mutationCount() {
+      return mutationCount
+    },
+  }
+}
+
+async function runApply(harness, overrides = {}) {
+  return applyDuplicateDraftRecovery({
+    evidence: harness.evidence,
+    concurrencyAcknowledgement: concurrencyAcknowledgement(),
+    reader: harness.reader,
+    createWriter: harness.createWriter,
+    observer: harness.observer,
+    now: harness.now,
+    ...overrides,
+  })
+}
+
+test("apply converges every resumable state in ID order with fresh authorization before each mutation", async () => {
+  for (const states of [
+    ["untouched", "untouched"],
+    ["body-archived", "untouched"],
+    ["receipt-archived", "body-archived"],
+    ["quarantined", "quarantined"],
+  ]) {
+    const harness = createApplyHarness({ states })
+    const receipt = await runApply(harness)
+    assert.deepEqual(harness.liveStates, ["quarantined", "quarantined"])
+    assert.equal(receipt.atomic, false)
+    assert.deepEqual(receipt.concurrencyAcknowledgement, concurrencyAcknowledgement())
+    assert.equal(Object.isFrozen(receipt), true)
+    assert.equal(Object.isFrozen(receipt.duplicates), true)
+    const mutations = harness.events.filter(([kind]) => kind === "mutate")
+    for (const mutation of mutations) {
+      const eventIndex = harness.events.indexOf(mutation)
+      const precedingAuthorization = harness.events
+        .slice(0, eventIndex)
+        .findLast(([kind]) => kind === "authorize")
+      assert.equal(mutation[4], precedingAuthorization[1])
+      assert.equal(
+        harness.events
+          .slice(harness.events.indexOf(precedingAuthorization) + 1, eventIndex)
+          .some(([kind]) => kind === "mutate"),
+        false,
+      )
+    }
+    const secondStart = mutations.findIndex((event) => event[3] === POLICY.duplicates[1].releaseId)
+    if (secondStart !== -1) {
+      assert.equal(harness.liveStates[0], "quarantined")
+      assert.equal(
+        harness.events
+          .slice(0, harness.events.indexOf(mutations[secondStart]))
+          .some((event) => event[0] === "authorize" && event[2][0] === "quarantined"),
+        true,
+      )
+    }
+  }
+})
+
+test("apply resumes an expired partial run without restoring a live marker or inventing prior fences", async () => {
+  const later = Date.parse("2026-09-01T00:20:00.000Z")
+  for (let failurePoint = 1; failurePoint <= 6; failurePoint += 1) {
+    const first = createApplyHarness({
+      writerFailure: (mutationCount) => mutationCount === failurePoint,
+    })
+    await assert.rejects(runApply(first), /writer failure/iu)
+    assert.throws(
+      () =>
+        verifyDuplicateDraftEvidence({
+          evidence: first.evidence,
+          current: recoveryObservation({ states: first.liveStates }),
+          now: () => later,
+        }),
+      /expired/iu,
+    )
+
+    const resumed = createApplyHarness({ states: first.liveStates })
+    resumed.now = () => later
+    resumed.evidence = parseDuplicateDraftEvidence(
+      canonicalDuplicateDraftEvidence(
+        recoveryObservation({
+          states: first.liveStates,
+          capturedAt: new Date(later).toISOString(),
+        }),
+      ),
+    )
+    const receipt = await runApply(resumed)
+    assert.deepEqual(resumed.liveStates, ["quarantined", "quarantined"])
+    for (const [index, priorState] of first.liveStates.entries()) {
+      if (priorState !== "quarantined") continue
+      assert.equal(receipt.duplicates[index].outcome, "preexisting-quarantined")
+      assert.equal(receipt.duplicates[index].priorFenceObservations, null)
+      assert.match(receipt.duplicates[index].projectionSha256, /^[0-9a-f]{64}$/u)
+    }
+  }
+})
+
+test("apply rejects malformed acknowledgements before reads, writer construction, or mutation", async () => {
+  const accessor = {}
+  let accessed = false
+  Object.defineProperty(accessor, "acknowledged", {
+    enumerable: true,
+    get() {
+      accessed = true
+      return true
+    },
+  })
+  const revoked = Proxy.revocable(concurrencyAcknowledgement(), {})
+  revoked.revoke()
+  const cases = [
+    undefined,
+    Object.freeze({ acknowledged: false }),
+    Object.freeze({ ...concurrencyAcknowledgement(), extra: true }),
+    Object.freeze({
+      ...concurrencyAcknowledgement(),
+      releaseIds: Object.freeze([379986168, 379982100]),
+    }),
+    accessor,
+    revoked.proxy,
+  ]
+  for (const acknowledgement of cases) {
+    const harness = createApplyHarness()
+    await assert.rejects(
+      runApply(harness, { concurrencyAcknowledgement: acknowledgement }),
+      /acknowledgement/iu,
+    )
+    assert.equal(harness.writerConstructions, 0)
+    assert.equal(harness.events.length, 0)
+  }
+  assert.equal(accessed, false)
+})
+
+test("apply fails closed on stale evidence and adversarial live authorization drift", async () => {
+  const stale = createApplyHarness()
+  stale.evidence = parseDuplicateDraftEvidence(
+    canonicalDuplicateDraftEvidence(
+      recoveryObservation({ capturedAt: "2026-08-31T23:44:59.999Z" }),
+    ),
+  )
+  await assert.rejects(runApply(stale), /expired/iu)
+  assert.equal(stale.writerConstructions, 0)
+
+  const drifts = [
+    (current) => {
+      current.repository.mainSha = "5".repeat(40)
+    },
+    (current) => {
+      current.workflow.state = "active"
+    },
+    (current) => {
+      current.candidate.tagObjectSha = "5".repeat(40)
+    },
+    (current) => {
+      current.npm.packages[0].status = "present"
+    },
+    (current) => {
+      current.releases.canonical.body += "drift"
+    },
+    (current) => {
+      current.releases.canonical.assets[0].sha256 = "5".repeat(64)
+    },
+  ]
+  for (const drift of drifts) {
+    const harness = createApplyHarness({ drift })
+    await assert.rejects(runApply(harness))
+    assert.equal(harness.writerConstructions, 0)
+    assert.equal(harness.mutationCount, 0)
+  }
+
+  const newRun = createApplyHarness({
+    drift(current) {
+      current.releaseRuns.push({
+        id: 701,
+        runAttempt: 1,
+        status: "in_progress",
+        conclusion: null,
+        headSha: POLICY.candidateSha,
+        createdAt: "2026-09-01T00:00:00Z",
+        startedAt: "2026-09-01T00:00:00Z",
+        updatedAt: "2026-09-01T00:00:01Z",
+      })
+    },
+  })
+  await assert.rejects(runApply(newRun), /nonterminal/iu)
+  assert.equal(newRun.writerConstructions, 0)
+
+  const fourth = createApplyHarness({ fourthCandidate: true })
+  await assert.rejects(runApply(fourth), /inventory/iu)
+  assert.equal(fourth.writerConstructions, 0)
+})
+
+test("apply never retries failed, ambiguous, or malformed writer outcomes and never starts the next mutation", async () => {
+  for (const failureKind of ["timeout", "transport", "retryable", "ambiguous", "title-drift"]) {
+    const harness = createApplyHarness({ writerFailure: (count) => count === 1 })
+    await assert.rejects(runApply(harness), /writer failure/iu, failureKind)
+    assert.equal(harness.mutationCount, 1)
+    assert.deepEqual(harness.liveStates, ["body-archived", "untouched"])
+  }
+
+  const malformed = createApplyHarness({
+    states: ["receipt-archived", "untouched"],
+    malformedQuarantineReceipt: true,
+  })
+  await assert.rejects(runApply(malformed), /receipt/iu)
+  assert.equal(malformed.mutationCount, 1)
+  assert.deepEqual(malformed.liveStates, ["quarantined", "untouched"])
+})
+
+test("apply requires the exact injected production observer result for the exact candidate", async () => {
+  const bad = createApplyHarness({
+    states: ["quarantined", "quarantined"],
+    finalObservation: { ...FINAL_RECOVERY_OBSERVATION, diagnostics: ["drift"] },
+  })
+  await assert.rejects(runApply(bad), /final authorization/iu)
+
+  const good = createApplyHarness({ states: ["quarantined", "quarantined"] })
+  const receipt = await runApply(good)
+  const observeEvent = good.events.find(([kind]) => kind === "observe")
+  assert.deepEqual(observeEvent[1], {
+    candidate: { version: POLICY.version, commitSha: POLICY.candidateSha },
+  })
+  assert.deepEqual(receipt.finalAuthorization, FINAL_RECOVERY_OBSERVATION)
+})
 
 function recoveryObservation({
   states = ["untouched", "untouched"],
