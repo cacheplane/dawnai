@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { execFile as execFileCallback } from "node:child_process"
 import { EventEmitter } from "node:events"
+import { constants as fsConstants } from "node:fs"
 import * as fileSystem from "node:fs/promises"
 import {
   chmod,
@@ -17,7 +18,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { promisify } from "node:util"
-
+import * as recoveryCliModule from "../recover-v0.8.22-duplicate-drafts.mjs"
 import {
   parseDuplicateDraftRecoveryCliArguments,
   readCandidateControllerMarker,
@@ -569,6 +570,89 @@ test("preflights directory fsync before capture credential or reader constructio
   assert.equal(readerConstructed, false)
 })
 
+test("classifies reservation setup cleanup after an ambiguously created temporary file", async (t) => {
+  for (const { fault, expectedCode, expectedTemporaryFiles } of [
+    {
+      fault: { failTempOpenAfterCreate: true, failTempUnlinkOnce: true },
+      expectedCode: 1,
+      expectedTemporaryFiles: 0,
+    },
+    {
+      fault: { failTempOpenAfterCreate: true, failTempUnlink: true },
+      expectedCode: 3,
+      expectedTemporaryFiles: 1,
+    },
+  ]) {
+    const root = await createPrivateRepository(t)
+    const stderr = sink()
+    const result = await runDuplicateDraftRecoveryCli({
+      argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
+      cwd: root,
+      environment: { GITHUB_TOKEN: "secret" },
+      stdout: sink(),
+      stderr,
+      dependencies: {
+        fileSystem: faultingFileSystem(fault),
+        randomUUID: () => UUID,
+      },
+    })
+    assert.equal(result, expectedCode)
+    assert.equal(
+      stderr.text,
+      expectedCode === 3
+        ? "Duplicate draft recovery output cleanup uncertain.\n"
+        : "Duplicate draft recovery failed.\n",
+    )
+    assert.equal((await temporaryFiles(root)).length, expectedTemporaryFiles)
+    await assert.rejects(lstat(path.join(root, CAPTURE_PATH)), { code: "ENOENT" })
+  }
+})
+
+test("never removes a preexisting randomized temporary-path collision", async (t) => {
+  const root = await createPrivateRepository(t)
+  const temporary = path.join(
+    root,
+    ".dawn/release-recovery/.v0.8.22-capture-01.json.12345678-1234-1234-9234-123456789abc.tmp",
+  )
+  await writeFile(temporary, Buffer.alloc(0), { flag: "wx", mode: 0o600 })
+  const stderr = sink()
+  const result = await runDuplicateDraftRecoveryCli({
+    argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
+    cwd: root,
+    environment: { GITHUB_TOKEN: "secret" },
+    stdout: sink(),
+    stderr,
+    dependencies: { randomUUID: () => UUID },
+  })
+  assert.equal(result, 3)
+  assert.equal(stderr.text, "Duplicate draft recovery output cleanup uncertain.\n")
+  assert.equal((await lstat(temporary)).isFile(), true)
+})
+
+test("retries directory close independently without misclassifying clean output state", async (t) => {
+  for (const phase of ["setup", "abort"]) {
+    for (const failDirectoryCloseTimes of [1, 99]) {
+      const root = await createPrivateRepository(t)
+      await writePrivateEvidence(root, Buffer.from("{}\n"))
+      let directoryCloseCalls = 0
+      const result = await successfulApply(root, {
+        fileSystem: faultingFileSystem({
+          failSyncAt: phase === "setup" ? 1 : 2,
+          failDirectoryCloseTimes,
+          onDirectoryClose: () => {
+            directoryCloseCalls += 1
+          },
+        }),
+      })
+      assert.equal(result.code, 1)
+      assert.equal(result.stderr, "Duplicate draft recovery failed.\n")
+      assert.equal(directoryCloseCalls, 2)
+      await assert.rejects(lstat(path.join(root, APPLY_PATH)), { code: "ENOENT" })
+      assert.deepEqual(await temporaryFiles(root), [])
+    }
+  }
+})
+
 test("reports a distinct terminal state if output rollback cannot restore a clean directory", async (t) => {
   const root = await createPrivateRepository(t)
   await writePrivateEvidence(root, Buffer.from("{}\n"))
@@ -606,6 +690,34 @@ test("a broken stdout never changes durable success into failure", async (t) => 
     assert.equal(result.code, 0)
     assert.equal((await lstat(path.join(root, APPLY_PATH))).isFile(), true)
   }
+})
+
+test("success output listeners are scoped across repeated imported runner calls", async (t) => {
+  const root = await createPrivateRepository(t)
+  await writePrivateEvidence(root, Buffer.from("{}\n"))
+  const stdout = Object.assign(new EventEmitter(), {
+    write(_value, callback) {
+      queueMicrotask(() => callback?.())
+      return true
+    },
+  })
+  for (const output of [APPLY_PATH, ".dawn/release-recovery/v0.8.22-apply-02.json"]) {
+    const result = await successfulApply(root, { output, stdout })
+    assert.equal(result.code, 0)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(stdout.listenerCount("error"), 0)
+  }
+  assert.throws(() => stdout.emit("error", new Error("unrelated later error")), /unrelated/u)
+})
+
+test("uses fixed POSIX Git isolation and fails closed on Windows", () => {
+  for (const platform of ["darwin", "linux"]) {
+    assert.deepEqual(recoveryCliModule.recoveryGitExecutionPolicy(platform), {
+      executable: "/usr/bin/git",
+      nullDevice: "/dev/null",
+    })
+  }
+  assert.throws(() => recoveryCliModule.recoveryGitExecutionPolicy("win32"), /unavailable/iu)
 })
 
 test("rechecks the reviewed gitignore immediately before publication and rolls back on race", async (t) => {
@@ -682,11 +794,11 @@ test("requires owned non-writable directory parents and exact recovery mode 0700
 
 async function successfulApply(
   root,
-  { fileSystem: injectedFileSystem, onApply, runGit, stdout = sink() } = {},
+  { fileSystem: injectedFileSystem, onApply, output = APPLY_PATH, runGit, stdout = sink() } = {},
 ) {
   const stderr = sink()
   const code = await runDuplicateDraftRecoveryCli({
-    argv: ["apply", "--evidence", CAPTURE_PATH, ACKNOWLEDGEMENT_FLAG, "--output", APPLY_PATH],
+    argv: ["apply", "--evidence", CAPTURE_PATH, ACKNOWLEDGEMENT_FLAG, "--output", output],
     cwd: root,
     environment: { GITHUB_TOKEN: "secret" },
     stdout,
@@ -774,11 +886,15 @@ function reviewedCommit(root) {
 }
 
 function faultingFileSystem({
+  failDirectoryCloseTimes = 0,
   failLink,
   failLinkAfterPublication,
   failSyncAt,
   failTargetUnlink,
+  failTempOpenAfterCreate,
+  failTempUnlink,
   failTempUnlinkOnce,
+  onDirectoryClose,
 } = {}) {
   let syncCount = 0
   let tempUnlinkFailed = false
@@ -796,6 +912,9 @@ function faultingFileSystem({
       if (target === failTargetUnlink) {
         throw Object.assign(new Error("unlink fault"), { code: "EIO" })
       }
+      if (failTempUnlink && target.endsWith(".tmp")) {
+        throw Object.assign(new Error("temp unlink fault"), { code: "EIO" })
+      }
       if (failTempUnlinkOnce && target.endsWith(".tmp") && !tempUnlinkFailed) {
         tempUnlinkFailed = true
         throw Object.assign(new Error("temp unlink fault"), { code: "EIO" })
@@ -804,11 +923,27 @@ function faultingFileSystem({
     },
     open: async (...args) => {
       const handle = await fileSystem.open(...args)
+      const isDirectory = (args[1] & fsConstants.O_DIRECTORY) !== 0
+      if (failTempOpenAfterCreate && String(args[0]).endsWith(".tmp")) {
+        await handle.close()
+        throw Object.assign(new Error("ambiguous temp open fault"), { code: "EIO" })
+      }
+      let directoryCloseAttempts = 0
       return Object.freeze({
         read: handle.read.bind(handle),
         writeFile: handle.writeFile.bind(handle),
         stat: handle.stat.bind(handle),
-        close: handle.close.bind(handle),
+        async close() {
+          if (isDirectory) {
+            directoryCloseAttempts += 1
+            onDirectoryClose?.()
+            if (directoryCloseAttempts <= failDirectoryCloseTimes) {
+              await handle.close()
+              throw Object.assign(new Error("directory close fault"), { code: "EIO" })
+            }
+          }
+          return handle.close()
+        },
         async sync() {
           syncCount += 1
           if (syncCount === failSyncAt) {

@@ -38,14 +38,6 @@ const MAX_PATH_BYTES = 4_096
 const MAX_EVIDENCE_BYTES = 512 * 1024
 const MAX_RECEIPT_BYTES = 512 * 1024
 const MAX_GIT_OUTPUT_BYTES = 8 * 1024
-const TRUSTED_GIT_EXECUTABLE = process.platform === "win32" ? "git.exe" : "/usr/bin/git"
-const GIT_CONFIG_PREFIX = Object.freeze([
-  "-c",
-  "core.excludesFile=/dev/null",
-  "-c",
-  "credential.helper=",
-  "--no-pager",
-])
 const DEPENDENCY_FIELDS = Object.freeze([
   "applyDuplicateDraftRecovery",
   "canonicalDuplicateDraftEvidence",
@@ -215,12 +207,14 @@ export async function runDuplicateDraftRecoveryCli({
     writeSuccessBestEffort(runtime.stdout, "Duplicate draft recovery authorization recorded.\n")
     return 0
   } catch (error) {
-    let cleanupUncertain = false
+    let cleanupUncertain = error instanceof RecoveryOutputCleanupUncertainError
     if (outputReservation !== null) {
       try {
         await outputReservation.abort()
-      } catch {
-        cleanupUncertain = true
+      } catch (cleanupError) {
+        if (cleanupError instanceof RecoveryOutputCleanupUncertainError) {
+          cleanupUncertain = true
+        }
       }
     }
     const input = error instanceof RecoveryInputError
@@ -466,18 +460,37 @@ function hasReviewedRecoveryIgnoreRule(source) {
 
 function createScrubbedGitRunner(executor) {
   if (typeof executor !== "function") throw new RecoveryInputError()
+  const policy = recoveryGitExecutionPolicy()
   const safeEnvironment = safeGitEnvironment()
   return (command, args, options = {}) => {
     if (command !== "git" || !Array.isArray(args)) {
       throw new Error("Recovery Git invocation is invalid")
     }
-    return executor(TRUSTED_GIT_EXECUTABLE, [...GIT_CONFIG_PREFIX, ...args], {
-      ...options,
-      shell: false,
-      env: { ...safeEnvironment },
-      windowsHide: true,
-    })
+    return executor(
+      policy.executable,
+      [
+        "-c",
+        `core.excludesFile=${policy.nullDevice}`,
+        "-c",
+        "credential.helper=",
+        "--no-pager",
+        ...args,
+      ],
+      {
+        ...options,
+        shell: false,
+        env: { ...safeEnvironment },
+        windowsHide: true,
+      },
+    )
   }
+}
+
+export function recoveryGitExecutionPolicy(platform = process.platform) {
+  if (platform !== "darwin" && platform !== "linux") {
+    throw new Error("Recovery trusted Git execution is unavailable on this platform")
+  }
+  return Object.freeze({ executable: "/usr/bin/git", nullDevice: "/dev/null" })
 }
 
 function safeGitEnvironment() {
@@ -492,9 +505,8 @@ function safeGitEnvironment() {
   }
   return Object.freeze({
     PATH: executablePath,
-    HOME: process.platform === "win32" ? "C:\\Windows\\Temp\\dawn-no-home" : "/nonexistent",
-    XDG_CONFIG_HOME:
-      process.platform === "win32" ? "C:\\Windows\\Temp\\dawn-no-xdg" : "/nonexistent",
+    HOME: "/nonexistent",
+    XDG_CONFIG_HOME: "/nonexistent",
     LANG: "C",
     LC_ALL: "C",
     GCM_INTERACTIVE: "never",
@@ -610,10 +622,15 @@ async function reserveExclusiveOutput(runtime, target) {
     directory,
     fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
   )
-  let temporaryHandle
-  let temporary
+  let directoryIdentity = null
+  let temporaryHandle = null
+  let temporary = null
+  let temporaryIdentity = null
+  let temporaryCreationAttempted = false
+  let temporaryOpenCompleted = false
+  let temporaryPathCollision = false
   try {
-    const directoryIdentity = await directoryHandle.stat({ bigint: true })
+    directoryIdentity = await directoryHandle.stat({ bigint: true })
     if (!directoryIdentity.isDirectory()) throw new Error("Recovery output directory is invalid")
     await assertDirectoryIdentity(operations, directory, directoryIdentity)
     // Prove directory fsync works before any production mutation is possible.
@@ -623,11 +640,15 @@ async function reserveExclusiveOutput(runtime, target) {
       throw new Error("Recovery temporary output identity is invalid")
     }
     temporary = path.join(directory, `.${path.basename(target)}.${identifier}.tmp`)
+    temporaryCreationAttempted = true
     temporaryHandle = await operations.open(
       temporary,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
       0o600,
     )
+    temporaryOpenCompleted = true
+    temporaryIdentity = await temporaryHandle.stat({ bigint: true })
+    assertReservedTemporaryIdentity(temporaryIdentity)
 
     let settled = false
     let publicationAttempted = false
@@ -668,8 +689,10 @@ async function reserveExclusiveOutput(runtime, target) {
         }
         await directoryHandle.sync()
         await operations.unlink(temporary)
-        temporary = null
         await directoryHandle.sync()
+        temporary = null
+        temporaryCreationAttempted = false
+        temporaryIdentity = null
         const final = await operations.lstat(target, { bigint: true })
         if (
           final.isSymbolicLink() ||
@@ -686,37 +709,39 @@ async function reserveExclusiveOutput(runtime, target) {
       },
       async abort() {
         if (settled) return
-        const failures = []
+        const cleanupFailures = []
+        let handleCloseFailure = null
+        if (temporaryHandle !== null) {
+          handleCloseFailure = await closeHandleWithRetries(temporaryHandle)
+          if (handleCloseFailure === null) temporaryHandle = null
+        }
         let cleanupComplete = false
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
             await cleanupReservationFiles()
             cleanupComplete = true
-            failures.length = 0
+            cleanupFailures.length = 0
             break
           } catch (error) {
-            failures.push(error)
+            cleanupFailures.push(error)
           }
         }
-        try {
-          await directoryHandle.close()
-        } catch (error) {
-          failures.push(error)
-        }
+        const directoryCloseFailure = await closeHandleWithRetries(directoryHandle)
         if (!cleanupComplete || publicationAttempted || targetPublished || temporary !== null) {
-          throw new AggregateError(failures, "Recovery output cleanup is uncertain")
-        }
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "Recovery output handle cleanup is uncertain")
+          throw new RecoveryOutputCleanupUncertainError(cleanupFailures)
         }
         settled = true
+        const closeFailures = [handleCloseFailure, directoryCloseFailure].filter(
+          (failure) => failure !== null,
+        )
+        if (closeFailures.length > 0) {
+          throw new AggregateError(closeFailures, "Recovery output handle cleanup failed")
+        }
       },
     })
 
     async function cleanupReservationFiles() {
       if (settled) return
-      await temporaryHandle?.close()
-      temporaryHandle = null
       if (publicationAttempted) {
         let targetState = null
         try {
@@ -735,28 +760,152 @@ async function reserveExclusiveOutput(runtime, target) {
           }
           await operations.unlink(target)
         }
-        await directoryHandle.sync()
-        publicationAttempted = false
-        targetPublished = false
-        publishedIdentity = null
       }
       if (temporary !== null) {
-        const temporaryPath = temporary
-        try {
-          await operations.unlink(temporaryPath)
-        } catch (error) {
-          if (error?.code !== "ENOENT") throw error
+        const state = await optionalLstat(operations, temporary)
+        if (state !== null) {
+          if (
+            temporaryIdentity === null ||
+            state.isSymbolicLink() ||
+            !sameDeviceAndInode(state, temporaryIdentity)
+          ) {
+            throw new Error("Recovery temporary output identity is uncertain")
+          }
+          await operations.unlink(temporary)
         }
-        await directoryHandle.sync()
-        temporary = null
       }
+      await proveOutputPathsAbsent({ directoryHandle, operations, target, temporary })
+      publicationAttempted = false
+      targetPublished = false
+      publishedIdentity = null
+      temporary = null
+      temporaryCreationAttempted = false
+      temporaryIdentity = null
     }
   } catch (error) {
-    await temporaryHandle?.close().catch(() => {})
-    if (temporary !== undefined) await operations.unlink(temporary).catch(() => {})
-    await directoryHandle.close().catch(() => {})
+    temporaryPathCollision =
+      temporaryCreationAttempted && !temporaryOpenCompleted && error?.code === "EEXIST"
+    const handleCloseFailure =
+      temporaryHandle === null ? null : await closeHandleWithRetries(temporaryHandle)
+    if (handleCloseFailure === null) temporaryHandle = null
+    const cleanupFailures = []
+    let cleanupComplete = false
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await cleanupReservationSetupFiles()
+        cleanupComplete = true
+        cleanupFailures.length = 0
+        break
+      } catch (cleanupError) {
+        cleanupFailures.push(cleanupError)
+      }
+    }
+    const directoryCloseFailure = await closeHandleWithRetries(directoryHandle)
+    if (!cleanupComplete || temporary !== null) {
+      throw new RecoveryOutputCleanupUncertainError(cleanupFailures)
+    }
+    const closeFailures = [handleCloseFailure, directoryCloseFailure].filter(
+      (failure) => failure !== null,
+    )
+    if (closeFailures.length > 0) {
+      throw new AggregateError(
+        [error, ...closeFailures],
+        "Recovery output setup handle cleanup failed",
+      )
+    }
     throw error
   }
+
+  async function cleanupReservationSetupFiles() {
+    if (temporaryCreationAttempted && temporary !== null) {
+      const state = await optionalLstat(operations, temporary)
+      if (state !== null) {
+        if (temporaryPathCollision) {
+          throw new Error("Recovery temporary output path is already occupied")
+        }
+        if (temporaryIdentity !== null) {
+          if (state.isSymbolicLink() || !sameDeviceAndInode(state, temporaryIdentity)) {
+            throw new Error("Recovery setup temporary identity is uncertain")
+          }
+        } else {
+          assertAmbiguousSetupTemporaryIdentity(state)
+        }
+        await operations.unlink(temporary)
+      }
+    }
+    await proveOutputPathsAbsent({ directoryHandle, operations, target, temporary })
+    temporary = null
+    temporaryCreationAttempted = false
+    temporaryPathCollision = false
+    temporaryIdentity = null
+  }
+}
+
+function assertReservedTemporaryIdentity(identity) {
+  if (
+    !identity.isFile() ||
+    identity.isSymbolicLink() ||
+    identity.nlink !== 1n ||
+    identity.size !== 0n ||
+    (identity.mode & 0o777n) !== 0o600n
+  ) {
+    throw new Error("Recovery temporary output reservation is unsafe")
+  }
+}
+
+function assertAmbiguousSetupTemporaryIdentity(identity) {
+  const currentUid = typeof process.getuid === "function" ? BigInt(process.getuid()) : null
+  if (
+    !identity.isFile() ||
+    identity.isSymbolicLink() ||
+    identity.nlink !== 1n ||
+    identity.size !== 0n ||
+    (identity.mode & 0o777n) !== 0o600n ||
+    (currentUid !== null && identity.uid !== currentUid)
+  ) {
+    throw new Error("Recovery ambiguous setup temporary identity is unsafe")
+  }
+}
+
+async function proveOutputPathsAbsent({ directoryHandle, operations, target, temporary }) {
+  await directoryHandle.sync()
+  await assertPathAbsent(operations, target)
+  if (temporary !== null) await assertPathAbsent(operations, temporary)
+  await directoryHandle.sync()
+  await assertPathAbsent(operations, target)
+  if (temporary !== null) await assertPathAbsent(operations, temporary)
+}
+
+async function assertPathAbsent(operations, target) {
+  if ((await optionalLstat(operations, target)) !== null) {
+    throw new Error("Recovery output path absence is uncertain")
+  }
+}
+
+async function optionalLstat(operations, target) {
+  try {
+    return await operations.lstat(target, { bigint: true })
+  } catch (error) {
+    if (error?.code === "ENOENT") return null
+    throw error
+  }
+}
+
+async function closeHandleWithRetries(handle) {
+  let lastError = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await handle.close()
+      return null
+    } catch (error) {
+      lastError = error
+    }
+  }
+  return lastError
+}
+
+function sameDeviceAndInode(left, right) {
+  return left.dev === right.dev && left.ino === right.ino
 }
 
 function normalizeOutputBytes(value, maximumBytes) {
@@ -1188,14 +1337,38 @@ function hasControlCharacters(value) {
 }
 
 function writeSuccessBestEffort(stream, message) {
-  const ignore = () => {}
+  let cleanupScheduled = false
+  const removeErrorListener = () => {
+    if (typeof stream.removeListener === "function") stream.removeListener("error", onError)
+  }
+  const scheduleCleanup = () => {
+    if (cleanupScheduled) return
+    cleanupScheduled = true
+    setImmediate(removeErrorListener)
+  }
+  const onError = () => {
+    removeErrorListener()
+  }
   try {
-    if (typeof stream.on === "function") stream.on("error", ignore)
-    const result = stream.write(message)
-    if (result !== null && typeof result === "object" && typeof result.then === "function") {
-      void result.catch(ignore)
+    if (typeof stream.once === "function" && typeof stream.removeListener === "function") {
+      stream.once("error", onError)
     }
-  } catch {}
+    const result = stream.write(message, scheduleCleanup)
+    if (result !== null && typeof result === "object" && typeof result.then === "function") {
+      void result.then(scheduleCleanup, scheduleCleanup)
+    }
+    scheduleCleanup()
+  } catch {
+    scheduleCleanup()
+  }
+}
+
+class RecoveryOutputCleanupUncertainError extends Error {
+  constructor(errors = []) {
+    super("Recovery output cleanup is uncertain")
+    this.name = "RecoveryOutputCleanupUncertainError"
+    this.errors = errors
+  }
 }
 
 class RecoveryInputError extends Error {
