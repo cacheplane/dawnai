@@ -86,6 +86,11 @@ export async function inspectEquivalentRemainingDrafts(input) {
   return inspectManagedDraftSet(context, orderedIds)
 }
 
+export async function inspectFinalSurvivor(input) {
+  const context = snapshotInspectionInput(input)
+  return inspectManagedDraftSet(context, [context.survivorId])
+}
+
 async function inspectManagedDraftSet(context, orderedIds) {
   const managed = candidateReleases(context.releases, context.candidate)
   if (managed.published.length !== 0) {

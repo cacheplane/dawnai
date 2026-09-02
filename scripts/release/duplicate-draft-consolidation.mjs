@@ -80,6 +80,157 @@ const WORKFLOW_QUERY = deepFreeze({
   perPage: 100,
   maximumPages: 100,
 })
+const HISTORICAL_PARITY_REPORT =
+  "Historical duplicate payload parity is supported by embedded pre-delete evidence plus the currently reverified survivor; deleted bytes were not independently re-downloaded."
+
+export async function verifyDuplicateDraftConsolidation(input, dependencies) {
+  try {
+    const context = await normalizeVerifyInvocation(input, dependencies)
+    assertCompleteVerificationReceipt(context.receipt)
+    const sourceAdapters = await context.createAdapters()
+    const adapters = bindAdapters(sourceAdapters)
+
+    for (const releaseId of DUPLICATES) {
+      const direct = exactPlain(
+        await adapters.github.getRelease({ releaseId }),
+        ["status", "operation", "httpStatus", "code"],
+        "deleted Release direct read",
+      )
+      if (
+        direct.status !== "AMBIGUOUS" ||
+        direct.operation !== "release" ||
+        direct.httpStatus !== 404 ||
+        direct.code !== "NOT_FOUND"
+      ) {
+        throw new Error("Deleted Release direct absence is not proven")
+      }
+    }
+
+    const enumerated = await readReleaseEnumeration({ adapters })
+    classifyConsolidationReleases(
+      enumerated,
+      context.receipt.record.proposedEnvelope.record,
+      "final",
+    )
+    const current = await captureConsolidationAuthority({
+      stage: "final",
+      proposal: context.receipt.record.proposedEnvelope.record,
+      targetReleaseId: null,
+      adapters: sourceAdapters,
+    })
+    assertFreshFinalAuthority(
+      current.authority,
+      context.receipt.record.finalAuthority,
+      context.receipt.record.proposedEnvelope.record,
+    )
+
+    return deepFreeze({
+      status: "verified",
+      survivor: SURVIVOR,
+      deleted: [...DUPLICATES],
+      receipt: RECEIPT_OUTPUT,
+      receiptSha256: context.receipt.recordSha256,
+      historicalParity: HISTORICAL_PARITY_REPORT,
+    })
+  } catch {
+    throw new Error("Duplicate-draft verify failed.")
+  }
+}
+
+async function normalizeVerifyInvocation(input, dependencies) {
+  const value = exactPlain(input, ["receipt"], "verify input")
+  if (value.receipt !== RECEIPT_OUTPUT) {
+    throw new TypeError("Verify input does not identify the approved receipt")
+  }
+  const runtime = exactOptionalFields(
+    dependencies,
+    ["repositoryRoot", "createAdapters"],
+    [],
+    "verify dependencies",
+  )
+  if (
+    typeof runtime.repositoryRoot !== "string" ||
+    !path.isAbsolute(runtime.repositoryRoot) ||
+    path.normalize(runtime.repositoryRoot) !== runtime.repositoryRoot ||
+    (await realpath(runtime.repositoryRoot)) !== runtime.repositoryRoot
+  ) {
+    throw new TypeError("Verify repository root is invalid")
+  }
+  const receiptPath = approvedPerformPath(runtime.repositoryRoot, value.receipt, RECEIPT_OUTPUT)
+  const receipt = parseConsolidationEnvelope(
+    "final",
+    await readTrackedReceipt(receiptPath, DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes),
+  )
+  return Object.freeze({
+    repositoryRoot: runtime.repositoryRoot,
+    receiptPath,
+    receipt,
+    createAdapters: safeFunction(runtime.createAdapters, "verify adapter factory"),
+  })
+}
+
+function assertCompleteVerificationReceipt(receipt) {
+  const proposal = receipt.record.proposedEnvelope
+  const journal = parseConsolidationJournal(receipt.record.journalEnvelope)
+  const expectedConfirmation = exactConfirmation(proposal)
+  const expectedConfirmationSha256 = createHash("sha256")
+    .update(expectedConfirmation, "utf8")
+    .digest("hex")
+  if (
+    !isDeepStrictEqual(proposal.record.repository, REPOSITORY) ||
+    !isDeepStrictEqual(proposal.record.candidate, CANDIDATE) ||
+    proposal.record.roles.survivor !== SURVIVOR ||
+    !safeArrayEquals(proposal.record.roles.duplicates, DUPLICATES) ||
+    !isDeepStrictEqual(proposal.record.confirmation, {
+      version: CANDIDATE.version,
+      commitSha: CANDIDATE.commitSha,
+      survivor: SURVIVOR,
+      duplicates: [...DUPLICATES],
+      template: "<64-lowercase-hex-digest>",
+    }) ||
+    proposal.record.releases.length !== 3 ||
+    !isDeepStrictEqual(
+      proposal.record.releases.map(({ id }) => id),
+      [SURVIVOR, ...DUPLICATES],
+    ) ||
+    !isDeepStrictEqual(journal.record.repository, REPOSITORY) ||
+    !isDeepStrictEqual(journal.record.candidate, CANDIDATE) ||
+    journal.record.proposedRecordSha256 !== proposal.recordSha256 ||
+    journal.record.confirmationSha256 !== expectedConfirmationSha256 ||
+    !safeArrayEquals(journal.record.deletionOrder, DUPLICATES)
+  ) {
+    throw new Error("Receipt does not bind the approved consolidation identity")
+  }
+  if (
+    proposal.record.controller.headSha !== proposal.record.controller.originMainSha ||
+    proposal.record.controller.headSha !== proposal.record.controller.githubMainSha ||
+    proposal.record.controller.headSha === CANDIDATE.commitSha
+  ) {
+    throw new Error("Receipt controller identity is invalid")
+  }
+  assertMandatoryPerformHistory(journal, proposal)
+  const state = deriveConsolidationState(journal)
+  if (
+    state.phase !== "final-authority-observed" ||
+    !safeArrayEquals(state.completedTargets, DUPLICATES) ||
+    !isDeepStrictEqual(state.lastAuthority, receipt.record.finalAuthority)
+  ) {
+    throw new Error("Receipt journal is not a complete consolidation history")
+  }
+  const reconstructed = createFinalConsolidationReceipt({
+    proposedEnvelope: proposal,
+    journalEnvelope: journal,
+    finalAuthority: receipt.record.finalAuthority,
+    completedAt: receipt.record.completedAt,
+  })
+  if (
+    !canonicalConsolidationEnvelopeBytes("final", reconstructed).equals(
+      canonicalConsolidationEnvelopeBytes("final", receipt),
+    )
+  ) {
+    throw new Error("Receipt is not the exact canonical terminal result")
+  }
+}
 
 export async function performDuplicateDraftConsolidation(input, dependencies) {
   try {

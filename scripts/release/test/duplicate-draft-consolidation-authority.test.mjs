@@ -1473,7 +1473,16 @@ test("captures pre-delete-2 and final authority with their exact remaining-set r
   assert.equal(secondCapture.authority.targetRead.evidence.id, DUPLICATE_DRAFT_IDS[1])
   assert.equal(second.networkOperations.filter((entry) => entry.startsWith("download:")).length, 90)
 
-  const final = await authorityFixture({ stage: "final" })
+  let finalAttestationCalls = 0
+  let finalAttestationInput
+  const final = await authorityFixture({
+    stage: "final",
+    attestationVerify(input) {
+      finalAttestationCalls += 1
+      finalAttestationInput = structuredClone(input)
+      return { status: "VERIFIED", subjects: structuredClone(input.subjects) }
+    },
+  })
   const finalCapture = await captureConsolidationAuthority(final.input)
   assert.deepEqual(
     finalCapture.authority.releases.map(({ id }) => id),
@@ -1481,7 +1490,53 @@ test("captures pre-delete-2 and final authority with their exact remaining-set r
   )
   assert.equal(finalCapture.authority.targetRead, null)
   assert.equal(final.networkOperations.filter((entry) => entry.startsWith("download:")).length, 45)
+  assert.equal(finalAttestationCalls, 1)
+  assert.deepEqual(Object.keys(finalAttestationInput), [
+    "source",
+    "record",
+    "subjects",
+    "files",
+    "bundles",
+  ])
+  assert.equal(finalAttestationInput.source, "escrow")
+  assert.equal(finalAttestationInput.subjects.length, 22)
+  assert.deepEqual(
+    finalAttestationInput.files.map(({ name }) => name),
+    finalAttestationInput.subjects.map(({ name }) => name),
+  )
+  assert.deepEqual(
+    finalAttestationInput.bundles.map(({ name }) => name),
+    finalAttestationInput.subjects.map(({ name }) => `${name}.intoto.jsonl`),
+  )
   assert.equal(final.networkOperations.at(-1).startsWith("download:"), true)
+})
+
+test("final authority rejects failed or wrong-subject production attestation after 45 bounded downloads", async (t) => {
+  for (const [name, attestationVerify] of [
+    ["invalid", () => ({ status: "INVALID", subjects: [] })],
+    [
+      "wrong subjects",
+      (input) => ({
+        status: "VERIFIED",
+        subjects: input.subjects.map((subject, index) =>
+          index === 0 ? { ...subject, sha256: "f".repeat(64) } : { ...subject },
+        ),
+      }),
+    ],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = await authorityFixture({ stage: "final", attestationVerify })
+      await assert.rejects(captureConsolidationAuthority(fixture.input), /authority|attestation/iu)
+      assert.equal(
+        fixture.networkOperations.filter((entry) => entry.startsWith("download:")).length,
+        45,
+      )
+      assert.equal(
+        fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+        false,
+      )
+    })
+  }
 })
 
 test("writer freshness accepts exactly 120000ms and rejects 120001ms, future evidence, and noncanonical clocks", async () => {

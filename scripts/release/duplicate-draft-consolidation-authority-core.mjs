@@ -5,6 +5,7 @@ import {
   assertEvidenceEqualsProposal,
   captureDirectTargetRead,
   inspectEquivalentDrafts,
+  inspectFinalSurvivor,
 } from "./duplicate-draft-consolidation-evidence.mjs"
 import {
   readPrivateEnvelope,
@@ -481,6 +482,27 @@ async function hydrateListedEvidence({
       throw new Error("Current production payload proof differs from the proposal")
     }
     return inspected
+  }
+  if (stage === "final") {
+    const inspected = await inspectFinalSurvivor({
+      candidate: proposal.candidate,
+      survivorId: proposal.roles.survivor,
+      duplicateIds: proposal.roles.duplicates,
+      releases: selectedRaw,
+      github: github.source,
+      attestations: attestations.source,
+    })
+    if (
+      !isDeepStrictEqual(inspected.payloadProof.baseAssetSet, proposal.payloadProof.baseAssetSet) ||
+      inspected.payloadProof.baseAssetSetSha256 !== proposal.payloadProof.baseAssetSetSha256 ||
+      !isDeepStrictEqual(
+        inspected.payloadProof.attestationVerification,
+        proposal.payloadProof.attestationVerification,
+      )
+    ) {
+      throw new Error("Current final survivor payload proof differs from the proposal")
+    }
+    return deepFreeze({ releases: inspected.releases, payloadProof: proposal.payloadProof })
   }
   const releases = []
   for (const raw of selectedRaw) {

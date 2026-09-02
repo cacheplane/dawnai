@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { mkdirSync, renameSync } from "node:fs"
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -19,6 +20,7 @@ import {
   inspectDuplicateDrafts,
   performDuplicateDraftConsolidation,
   performOneDuplicateDeletion,
+  verifyDuplicateDraftConsolidation,
 } from "../duplicate-draft-consolidation.mjs"
 import { createDuplicateDraftConsolidationAdapters } from "../duplicate-draft-consolidation-adapters.mjs"
 import { runDuplicateDraftConsolidationCli } from "../duplicate-draft-consolidation-cli.mjs"
@@ -37,6 +39,7 @@ import {
 } from "../duplicate-draft-consolidation-journal.mjs"
 import {
   canonicalConsolidationEnvelopeBytes,
+  canonicalEventEnvelope,
   canonicalRecordSha256,
   createConsolidationEnvelope,
   DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
@@ -54,6 +57,258 @@ const OUTPUT = ".dawn/release/duplicate-draft-consolidation.proposed.json"
 const BASE_TIME = Date.parse("2026-09-01T12:00:00.000Z")
 const CONTROLLER_SHA = "b".repeat(40)
 const CONVERGENCE_BACKOFFS = Object.freeze([1_000, 5_000, 15_000, 30_000, 30_000])
+
+function rehashTestEnvelope(envelope) {
+  envelope.recordSha256 = canonicalRecordSha256(envelope.record)
+}
+
+function rechainTestJournal(journalEnvelope) {
+  let previous = null
+  journalEnvelope.record.events = journalEnvelope.record.events.map(({ event }, index) => {
+    const next = canonicalEventEnvelope(
+      {
+        ...event,
+        sequence: index + 1,
+        previousEventSha256: previous,
+      },
+      previous,
+    )
+    previous = next.eventSha256
+    return next
+  })
+  journalEnvelope.record.updatedAt = journalEnvelope.record.events.at(-1).event.recordedAt
+  rehashTestEnvelope(journalEnvelope)
+}
+
+function rebindTestProposal(receipt) {
+  const proposal = receipt.record.proposedEnvelope
+  const journal = receipt.record.journalEnvelope
+  rehashTestEnvelope(proposal)
+  journal.record.proposedRecordSha256 = proposal.recordSha256
+  journal.record.events[0].event.payload.proposedRecordSha256 = proposal.recordSha256
+  rechainTestJournal(journal)
+  rehashTestEnvelope(receipt)
+}
+
+test("verify independently replays the receipt and revalidates the exact live survivor read-only", async (t) => {
+  const harness = await verificationFixture(t)
+  const result = await verifyDuplicateDraftConsolidation(
+    { receipt: "scripts/release/duplicate-draft-consolidation.json" },
+    harness.dependencies,
+  )
+
+  assert.deepEqual(result, {
+    status: "verified",
+    survivor: DUPLICATE_DRAFT_SURVIVOR_ID,
+    deleted: [...DUPLICATE_DRAFT_IDS],
+    receipt: "scripts/release/duplicate-draft-consolidation.json",
+    receiptSha256: harness.receipt.recordSha256,
+    historicalParity:
+      "Historical duplicate payload parity is supported by embedded pre-delete evidence plus the currently reverified survivor; deleted bytes were not independently re-downloaded.",
+  })
+  assert.deepEqual(harness.calls, [
+    `direct:${DUPLICATE_DRAFT_IDS[0]}`,
+    `direct:${DUPLICATE_DRAFT_IDS[1]}`,
+    "releases",
+    "final-authority",
+  ])
+  assert.equal(harness.writerCalls, 0)
+  assert.equal((await stat(harness.receiptPath)).mode & 0o777, 0o644)
+})
+
+test("verify rejects every receipt, embedded-envelope, event-chain, evidence, and identity tamper before claims", async (t) => {
+  const cases = [
+    [
+      "outer digest",
+      (receipt) => {
+        receipt.recordSha256 = "f".repeat(64)
+      },
+    ],
+    [
+      "embedded proposal digest",
+      (receipt) => {
+        receipt.record.proposedEnvelope.recordSha256 = "f".repeat(64)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+    [
+      "embedded journal digest",
+      (receipt) => {
+        receipt.record.journalEnvelope.recordSha256 = "f".repeat(64)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+    [
+      "event digest",
+      (receipt) => {
+        receipt.record.journalEnvelope.record.events[1].eventSha256 = "f".repeat(64)
+        rehashTestEnvelope(receipt.record.journalEnvelope)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+    [
+      "event previous link",
+      (receipt) => {
+        const events = receipt.record.journalEnvelope.record.events
+        events[1] = canonicalEventEnvelope(
+          { ...events[1].event, previousEventSha256: "f".repeat(64) },
+          "f".repeat(64),
+        )
+        rehashTestEnvelope(receipt.record.journalEnvelope)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+    [
+      "journal truncation",
+      (receipt) => {
+        receipt.record.journalEnvelope.record.events.pop()
+        receipt.record.journalEnvelope.record.updatedAt =
+          receipt.record.journalEnvelope.record.events.at(-1).event.recordedAt
+        rehashTestEnvelope(receipt.record.journalEnvelope)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+    [
+      "proposal evidence",
+      (receipt) => {
+        receipt.record.proposedEnvelope.record.releases[0].semantic.name = "tampered survivor"
+        rebindTestProposal(receipt)
+      },
+    ],
+    [
+      "final authority evidence",
+      (receipt) => {
+        const authority = receipt.record.finalAuthority
+        authority.releases[0].assets[0].label = "tampered"
+        receipt.record.finalSurvivor = structuredClone(authority.releases[0])
+        receipt.record.journalEnvelope.record.events.at(-1).event.payload.authority =
+          structuredClone(authority)
+        rechainTestJournal(receipt.record.journalEnvelope)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+    [
+      "intermediate authority evidence",
+      (receipt) => {
+        const event = receipt.record.journalEnvelope.record.events.find(
+          ({ event: candidate }) => candidate.type === "delete-authority-observed",
+        ).event
+        event.payload.authority.releases[0].semantic.name = "tampered intermediate survivor"
+        rechainTestJournal(receipt.record.journalEnvelope)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+    [
+      "intermediate asset identity",
+      (receipt) => {
+        const event = receipt.record.journalEnvelope.record.events.find(
+          ({ event: candidate }) => candidate.type === "delete-authority-observed",
+        ).event
+        event.payload.authority.releases[0].assets[0].id = "999999999"
+        rechainTestJournal(receipt.record.journalEnvelope)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+    [
+      "controller identity",
+      (receipt) => {
+        receipt.record.proposedEnvelope.record.controller = {
+          headSha: "c".repeat(40),
+          originMainSha: "c".repeat(40),
+          githubMainSha: "c".repeat(40),
+        }
+        receipt.record.journalEnvelope.record.events[0].event.payload.controllerSha = "c".repeat(40)
+        rebindTestProposal(receipt)
+      },
+    ],
+    [
+      "repository identity",
+      (receipt) => {
+        receipt.record.proposedEnvelope.record.repository.name = "other/repo"
+        receipt.record.journalEnvelope.record.repository.name = "other/repo"
+        rebindTestProposal(receipt)
+      },
+    ],
+    [
+      "confirmation binding",
+      (receipt) => {
+        receipt.record.journalEnvelope.record.confirmationSha256 = "f".repeat(64)
+        receipt.record.journalEnvelope.record.events[0].event.payload.confirmationSha256 =
+          "f".repeat(64)
+        rechainTestJournal(receipt.record.journalEnvelope)
+        rehashTestEnvelope(receipt)
+      },
+    ],
+  ]
+
+  for (const [name, mutate] of cases) {
+    await t.test(name, async (t) => {
+      const harness = await verificationFixture(t)
+      const tampered = structuredClone(harness.receipt)
+      mutate(tampered)
+      await writeFile(harness.receiptPath, `${JSON.stringify(tampered)}\n`)
+      await assert.rejects(
+        verifyDuplicateDraftConsolidation(
+          { receipt: "scripts/release/duplicate-draft-consolidation.json" },
+          harness.dependencies,
+        ),
+        /failed/iu,
+      )
+      assert.deepEqual(harness.calls, [])
+      assert.equal(harness.writerCalls, 0)
+    })
+  }
+})
+
+test("verify stops on deleted-ID presence, list disagreement, survivor drift, or final authority drift without mutation", async (t) => {
+  for (const drift of [
+    "deleted-present",
+    "deleted-listed",
+    "extra-managed",
+    "survivor",
+    "asset",
+    "main",
+    "workflow",
+    "run",
+    "tag",
+    "npm",
+  ]) {
+    await t.test(drift, async (t) => {
+      const harness = await verificationFixture(t, { drift })
+      await assert.rejects(
+        verifyDuplicateDraftConsolidation(
+          { receipt: "scripts/release/duplicate-draft-consolidation.json" },
+          harness.dependencies,
+        ),
+        /failed/iu,
+      )
+      assert.equal(harness.writerCalls, 0)
+    })
+  }
+})
+
+test("verify applies the tracked-receipt nofollow and non-writable source-file policy before adapters", async (t) => {
+  for (const kind of ["symlink", "group-writable"]) {
+    await t.test(kind, async (t) => {
+      const harness = await verificationFixture(t)
+      if (kind === "symlink") {
+        await rm(harness.receiptPath)
+        await symlink(path.join(harness.dependencies.repositoryRoot, OUTPUT), harness.receiptPath)
+      } else {
+        await chmod(harness.receiptPath, 0o664)
+      }
+      await assert.rejects(
+        verifyDuplicateDraftConsolidation(
+          { receipt: "scripts/release/duplicate-draft-consolidation.json" },
+          harness.dependencies,
+        ),
+        /failed/iu,
+      )
+      assert.deepEqual(harness.calls, [])
+      assert.equal(harness.writerCalls, 0)
+    })
+  }
+})
 
 test("perform durably completes both targets in order and writes the canonical final receipt", async (t) => {
   const harness = await performFixture(t)
@@ -297,6 +552,42 @@ test("CLI performs the complete production-composed consolidation using only ext
     deleted: [...DUPLICATE_DRAFT_IDS],
     receipt: "scripts/release/duplicate-draft-consolidation.json",
     receiptSha256: receipt.recordSha256,
+  })
+
+  const beforeVerify = harness.events.length
+  const deletesBeforeVerify = [...harness.deleteIds]
+  harness.stdout.value = ""
+  harness.options.argv = [
+    "verify",
+    "--receipt",
+    "scripts/release/duplicate-draft-consolidation.json",
+  ]
+  assert.equal(await runDuplicateDraftConsolidationCli(harness.options), 0, harness.stderr.value)
+  assert.deepEqual(harness.deleteIds, deletesBeforeVerify)
+  const verifyEvents = harness.events.slice(beforeVerify)
+  assert.equal(
+    verifyEvents.filter((entry) => entry === `get-release:${DUPLICATE_DRAFT_IDS[0]}`).length,
+    1,
+  )
+  assert.equal(
+    verifyEvents.filter((entry) => entry === `get-release:${DUPLICATE_DRAFT_IDS[1]}`).length,
+    1,
+  )
+  assert.equal(
+    verifyEvents.filter((entry) => entry.startsWith(`download:${DUPLICATE_DRAFT_SURVIVOR_ID}:`))
+      .length,
+    45,
+  )
+  assert.equal(verifyEvents.filter((entry) => entry === "npm").length, 21)
+  assert.equal(verifyEvents.filter((entry) => entry === "attestations").length, 1)
+  assert.deepEqual(JSON.parse(harness.stdout.value), {
+    status: "verified",
+    survivor: DUPLICATE_DRAFT_SURVIVOR_ID,
+    deleted: [...DUPLICATE_DRAFT_IDS],
+    receipt: "scripts/release/duplicate-draft-consolidation.json",
+    receiptSha256: receipt.recordSha256,
+    historicalParity:
+      "Historical duplicate payload parity is supported by embedded pre-delete evidence plus the currently reverified survivor; deleted bytes were not independently re-downloaded.",
   })
 })
 
@@ -2022,6 +2313,7 @@ async function productionPerformRehearsalFixture(t, options = {}) {
       return present("releases", releases)
     },
     async getRelease({ releaseId }) {
+      events.push(`get-release:${releaseId}`)
       const release = currentReleases().find(({ id }) => String(id) === String(releaseId))
       if (release === undefined) {
         return {
@@ -2405,6 +2697,148 @@ async function performFixture(t, options = {}) {
           failAfterReceiptRename = false
           throw new Error("simulated post-rename receipt durability ambiguity")
         }
+      },
+    }),
+  }
+}
+
+async function verificationFixture(t, options = {}) {
+  const performed = await performFixture(t)
+  await performDuplicateDraftConsolidation(performed.input, performed.dependencies)
+  const receipt = parseConsolidationEnvelope(
+    "final",
+    await readTrackedReceipt(
+      performed.receiptPath,
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes,
+    ),
+  )
+  const releaseFixture = createDuplicateDraftConsolidationFixture()
+  const calls = []
+  let writerCalls = 0
+  const drift = options.drift
+  const survivorRaw = structuredClone(releaseFixture.releases[0])
+  const listed = [survivorRaw]
+  if (drift === "deleted-listed") listed.push(structuredClone(releaseFixture.releases[1]))
+  if (drift === "extra-managed") {
+    const extra = structuredClone(releaseFixture.releases[1])
+    extra.id = 400_000_001
+    extra.node_id = "RE_extra_managed"
+    extra.tag_name = "untagged-extra-managed"
+    listed.push(extra)
+  }
+  const currentAuthority = structuredClone(receipt.record.finalAuthority)
+  if (drift === "survivor") currentAuthority.releases[0].semantic.name = "changed survivor"
+  if (drift === "asset") currentAuthority.releases[0].assets[0].label = "changed asset"
+  if (drift === "main") currentAuthority.controller.headSha = "c".repeat(40)
+  if (drift === "workflow") currentAuthority.workflowAuthority.state = "active"
+  if (drift === "run") {
+    currentAuthority.workflowAuthority.nonterminalRuns.push({
+      id: "1",
+      runAttempt: 1,
+      status: "queued",
+      event: "workflow_dispatch",
+      headSha: currentAuthority.controller.headSha,
+      headBranch: "main",
+    })
+  }
+  if (drift === "tag") currentAuthority.annotatedTag.targetSha = "d".repeat(40)
+  if (drift === "npm") {
+    currentAuthority.npmInventory.packages[0].status = "PRESENT"
+    currentAuthority.npmInventory.packages[0].httpStatus = 200
+    currentAuthority.npmInventory.packages[0].code = null
+  }
+
+  const uncalled = async () => {
+    throw new Error("unexpected verification adapter call")
+  }
+  const adapters = {
+    local: Object.freeze({ readState: uncalled }),
+    github: Object.freeze({
+      getRepository: uncalled,
+      getAuthenticatedUser: uncalled,
+      getDefaultBranchSha: uncalled,
+      getWorkflowState: uncalled,
+      listNonterminalWorkflowRuns: uncalled,
+      getAnnotatedTag: uncalled,
+      async listReleases() {
+        calls.push("releases")
+        return {
+          status: "PRESENT",
+          operation: "releases",
+          httpStatus: 200,
+          code: null,
+          value: structuredClone(listed),
+        }
+      },
+      async getRelease({ releaseId }) {
+        calls.push(`direct:${releaseId}`)
+        if (drift === "deleted-present" && releaseId === DUPLICATE_DRAFT_IDS[0]) {
+          return {
+            status: "PRESENT",
+            operation: "release",
+            httpStatus: 200,
+            code: null,
+            value: structuredClone(releaseFixture.releases[1]),
+          }
+        }
+        return {
+          status: "AMBIGUOUS",
+          operation: "release",
+          httpStatus: 404,
+          code: "NOT_FOUND",
+        }
+      },
+      listReleaseAssets: uncalled,
+      downloadReleaseAsset: uncalled,
+    }),
+    npm: Object.freeze({ observePackageVersion: uncalled }),
+    attestations: Object.freeze({ verify: uncalled }),
+    writer: Object.freeze({
+      async deleteDuplicate() {
+        writerCalls += 1
+        throw new Error("verify must never mutate")
+      },
+    }),
+  }
+  Object.defineProperties(adapters, {
+    captureConsolidationAuthority: {
+      value: Object.freeze(async function captureConsolidationAuthority(input) {
+        calls.push("final-authority")
+        assert.equal(input.stage, "final")
+        assert.equal(input.targetReleaseId, null)
+        return Object.freeze({ authority: structuredClone(currentAuthority) })
+      }),
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    },
+    captureInspectionTerminal: {
+      value: Object.freeze(uncalled),
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    },
+    assertInspectionTerminalSealed: {
+      value: Object.freeze(function assertInspectionTerminalSealed() {
+        throw new Error("verify must not use inspection terminal state")
+      }),
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    },
+  })
+  Object.freeze(adapters)
+  return {
+    receipt,
+    receiptPath: performed.receiptPath,
+    calls,
+    get writerCalls() {
+      return writerCalls
+    },
+    dependencies: Object.freeze({
+      repositoryRoot: performed.dependencies.repositoryRoot,
+      async createAdapters() {
+        return adapters
       },
     }),
   }

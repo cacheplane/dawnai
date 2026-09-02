@@ -12,6 +12,7 @@ import { types as utilTypes } from "node:util"
 import {
   inspectDuplicateDrafts,
   performDuplicateDraftConsolidation,
+  verifyDuplicateDraftConsolidation,
 } from "./duplicate-draft-consolidation.mjs"
 import { createDuplicateDraftConsolidationAdapters } from "./duplicate-draft-consolidation-adapters.mjs"
 
@@ -40,6 +41,11 @@ const PERFORM_PREFIX = Object.freeze([
 ])
 const CONFIRMATION_PATTERN =
   /^CONSOLIDATE v0\.8\.22 2a80deece2ff958fe7fde8fddeb4f99bed70a1c8 SURVIVOR 379991871 DELETE 379982100,379986168 PROPOSAL ([0-9a-f]{64})$/u
+const VERIFY_EXPECTED = Object.freeze([
+  "verify",
+  "--receipt",
+  "scripts/release/duplicate-draft-consolidation.json",
+])
 
 export async function runDuplicateDraftConsolidationCli(options = {}) {
   let invocation
@@ -54,37 +60,54 @@ export async function runDuplicateDraftConsolidationCli(options = {}) {
       invocation.dependencies.createAdapters ?? createDuplicateDraftConsolidationAdapters
     const inspect = invocation.dependencies.inspect ?? inspectDuplicateDrafts
     const perform = invocation.dependencies.perform ?? performDuplicateDraftConsolidation
-    for (const operation of [now, wait, createAdapters, inspect, perform]) {
+    const verify = invocation.dependencies.verify ?? verifyDuplicateDraftConsolidation
+    for (const operation of [now, wait, createAdapters, inspect, perform, verify]) {
       if (typeof operation !== "function" || utilTypes.isProxy(operation))
         throw new InvocationError()
     }
     const repositoryRootIdentity = await inspectionRootCapture()(invocation.cwd)
-    const result =
-      input.mode === "inspect"
-        ? await inspect(input.value, {
-            repositoryRoot: invocation.cwd,
-            adapters: await createAdapters({
-              cwd: invocation.cwd,
-              environment: invocation.environment,
-              dependencies: { now },
-            }),
-            now,
-            wait,
-            repositoryRootIdentity,
-          })
-        : await perform(input.value, {
-            repositoryRoot: invocation.cwd,
-            createAdapters: () =>
-              createAdapters({
-                cwd: invocation.cwd,
-                environment: invocation.environment,
-                dependencies: { now },
-              }),
-            now,
-            wait,
-          })
+    let result
+    if (input.mode === "inspect") {
+      result = await inspect(input.value, {
+        repositoryRoot: invocation.cwd,
+        adapters: await createAdapters({
+          cwd: invocation.cwd,
+          environment: invocation.environment,
+          dependencies: { now },
+        }),
+        now,
+        wait,
+        repositoryRootIdentity,
+      })
+    } else if (input.mode === "perform") {
+      result = await perform(input.value, {
+        repositoryRoot: invocation.cwd,
+        createAdapters: () =>
+          createAdapters({
+            cwd: invocation.cwd,
+            environment: invocation.environment,
+            dependencies: { now },
+          }),
+        now,
+        wait,
+      })
+    } else {
+      result = await verify(input.value, {
+        repositoryRoot: invocation.cwd,
+        createAdapters: () =>
+          createAdapters({
+            cwd: invocation.cwd,
+            environment: invocation.environment,
+            dependencies: { now },
+          }),
+      })
+    }
     const summary =
-      input.mode === "inspect" ? safeSummary(result, input.value) : safePerformSummary(result)
+      input.mode === "inspect"
+        ? safeSummary(result, input.value)
+        : input.mode === "perform"
+          ? safePerformSummary(result)
+          : safeVerifySummary(result)
     if (!(await writeSink(invocation.stdout, `${JSON.stringify(summary)}\n`))) {
       await writeSink(invocation.stderr, `Duplicate-draft ${operationLabel(input.mode)} failed.\n`)
       return 1
@@ -175,11 +198,21 @@ function parseArguments(argv) {
       },
     }
   }
+  if (snapshot.length === VERIFY_EXPECTED.length) {
+    for (const [index, expected] of VERIFY_EXPECTED.entries()) {
+      if (snapshot[index] !== expected) throw new InvocationError()
+    }
+    return {
+      mode: "verify",
+      value: { receipt: VERIFY_EXPECTED[2] },
+    }
+  }
   throw new InvocationError()
 }
 
 function operationLabel(mode) {
-  return mode === "perform" ? "perform" : "inspection"
+  if (mode === "perform") return "perform"
+  return mode === "verify" ? "verify" : "inspection"
 }
 
 function snapshotArguments(argv) {
@@ -217,6 +250,7 @@ function normalizeOptions(options) {
     "createAdapters",
     "inspect",
     "perform",
+    "verify",
     "now",
     "wait",
   ])
@@ -382,6 +416,34 @@ function safePerformSummary(value) {
     deleted: [...value.deleted],
     receipt: value.receipt,
     receiptSha256: value.receiptSha256,
+  }
+}
+
+function safeVerifySummary(value) {
+  const historicalParity =
+    "Historical duplicate payload parity is supported by embedded pre-delete evidence plus the currently reverified survivor; deleted bytes were not independently re-downloaded."
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    value.status !== "verified" ||
+    value.survivor !== "379991871" ||
+    value.receipt !== "scripts/release/duplicate-draft-consolidation.json" ||
+    value.historicalParity !== historicalParity ||
+    !/^[0-9a-f]{64}$/u.test(value.receiptSha256) ||
+    !Array.isArray(value.deleted) ||
+    value.deleted.length !== 2 ||
+    value.deleted[0] !== "379982100" ||
+    value.deleted[1] !== "379986168"
+  ) {
+    throw new Error("Verify summary is invalid")
+  }
+  return {
+    status: value.status,
+    survivor: value.survivor,
+    deleted: [...value.deleted],
+    receipt: value.receipt,
+    receiptSha256: value.receiptSha256,
+    historicalParity,
   }
 }
 

@@ -5,6 +5,7 @@ import {
   assertEvidenceEqualsProposal,
   captureDirectTargetRead,
   inspectEquivalentDrafts,
+  inspectFinalSurvivor,
   parseReleaseEvidence,
   semanticAssetProjection,
   semanticReleaseProjection,
@@ -24,6 +25,104 @@ const INPUT = (fixture) => ({
   releases: fixture.releases,
   github: fixture.github,
   attestations: fixture.attestations,
+})
+
+const FINAL_INPUT = (fixture, attestations = fixture.attestations) => ({
+  candidate: fixture.candidate,
+  survivorId: fixture.survivorId,
+  duplicateIds: fixture.duplicateIds,
+  releases: [fixture.releases[0]],
+  github: fixture.github,
+  attestations,
+})
+
+test("final survivor hydration verifies exactly one survivor, 45 assets, and production attestations", async () => {
+  const fixture = createDuplicateDraftConsolidationFixture()
+  let attestationCalls = 0
+  const attestations = Object.freeze({
+    async verify(input) {
+      attestationCalls += 1
+      return fixture.attestations.verify(input)
+    },
+  })
+  const result = await inspectFinalSurvivor(FINAL_INPUT(fixture, attestations))
+  assert.deepEqual(
+    result.releases.map(({ role, id }) => ({ role, id })),
+    [{ role: "survivor", id: DUPLICATE_DRAFT_SURVIVOR_ID }],
+  )
+  assert.equal(result.releases[0].assets.length, 45)
+  assert.deepEqual(result.payloadProof.baseAssetSet, fixture.expectedBaseAssetSet)
+  assert.equal(result.payloadProof.attestationVerification.status, "VERIFIED")
+  assert.equal(result.payloadProof.attestationVerification.subjects.length, 22)
+  assert.equal(fixture.downloadCount, 45)
+  assert.equal(attestationCalls, 1)
+})
+
+test("final survivor hydration rejects attestation, subject/digest, release-set, and asset-set drift", async (t) => {
+  await t.test("failed production attestation", async () => {
+    const fixture = createDuplicateDraftConsolidationFixture()
+    fixture.failVerification()
+    await assert.rejects(inspectFinalSurvivor(FINAL_INPUT(fixture)), /attestation|verified/iu)
+    assert.equal(fixture.downloadCount, 45)
+  })
+  await t.test("wrong verified subjects", async () => {
+    const fixture = createDuplicateDraftConsolidationFixture()
+    const attestations = Object.freeze({
+      async verify(input) {
+        const result = await fixture.attestations.verify(input)
+        return {
+          status: result.status,
+          subjects: result.subjects.map((subject, index) =>
+            index === 0 ? { ...subject, sha256: "f".repeat(64) } : { ...subject },
+          ),
+        }
+      },
+    })
+    await assert.rejects(
+      inspectFinalSurvivor(FINAL_INPUT(fixture, attestations)),
+      /attestation|subject|verified/iu,
+    )
+  })
+  await t.test("wrong asset digest", async () => {
+    const fixture = createDuplicateDraftConsolidationFixture()
+    fixture.releases[0].assets[0].digest = `sha256:${"f".repeat(64)}`
+    await assert.rejects(inspectFinalSurvivor(FINAL_INPUT(fixture)), /digest|bytes/iu)
+  })
+  for (const [name, releases] of [
+    ["missing survivor", []],
+    ["extra managed Release", null],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = createDuplicateDraftConsolidationFixture()
+      const input = FINAL_INPUT(fixture)
+      input.releases = releases ?? [fixture.releases[0], structuredClone(fixture.releases[1])]
+      await assert.rejects(inspectFinalSurvivor(input), /exactly|Release|survivor|managed/iu)
+      assert.equal(fixture.downloadCount, 0)
+    })
+  }
+  for (const [name, mutate] of [
+    ["missing asset", (assets) => assets.pop()],
+    [
+      "extra asset",
+      (assets) => {
+        const extra = structuredClone(assets[0])
+        extra.id = 999_999_999
+        extra.node_id = "RA_extra"
+        extra.name = "extra.bin"
+        assets.push(extra)
+      },
+    ],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = createDuplicateDraftConsolidationFixture()
+      mutate(fixture.releases[0].assets)
+      await assert.rejects(
+        inspectFinalSurvivor(FINAL_INPUT(fixture)),
+        /asset|namespace|exact|missing/iu,
+      )
+      assert.equal(fixture.downloadCount, 0)
+    })
+  }
 })
 
 test("proves three ordered mutable drafts have the exact production 45-asset escrow", async () => {

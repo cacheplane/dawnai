@@ -709,7 +709,7 @@ function appendExpectedPayloadTrace(steps, proposal, stage, rawReleases, exact, 
     if (release === undefined || rawRelease === undefined) {
       throw new Error("Authority proposal is missing a required Release")
     }
-    const orderedAssets = stage === "pre-delete-1" ? rawRelease.assets : release.assets
+    const orderedAssets = stage === "pre-delete-2" ? release.assets : rawRelease.assets
     for (const rawAsset of orderedAssets) {
       const asset = release.assets.find(({ id }) => id === String(rawAsset.id))
       if (asset === undefined) {
@@ -735,7 +735,7 @@ function appendExpectedPayloadTrace(steps, proposal, stage, rawReleases, exact, 
         ),
       )
     }
-    if (stage === "pre-delete-1") {
+    if (stage === "pre-delete-1" || stage === "final") {
       steps.push(
         exact(
           "attestation verifier",

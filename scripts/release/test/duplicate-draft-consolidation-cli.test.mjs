@@ -33,6 +33,87 @@ const PERFORM_COMMAND = [
   "--confirmation",
   CONFIRMATION,
 ]
+const VERIFY_COMMAND = ["verify", "--receipt", "scripts/release/duplicate-draft-consolidation.json"]
+
+test("CLI accepts only the exact read-only verify shape and prints its bounded historical-parity report", async () => {
+  const stdout = sink()
+  const stderr = sink()
+  let received
+  const code = await runDuplicateDraftConsolidationCli({
+    argv: VERIFY_COMMAND,
+    cwd: process.cwd(),
+    environment: {},
+    stdout,
+    stderr,
+    dependencies: {
+      async createAdapters() {
+        return Object.freeze({})
+      },
+      async verify(input, dependencies) {
+        received = { input, dependencies }
+        return Object.freeze({
+          status: "verified",
+          survivor: "379991871",
+          deleted: Object.freeze(["379982100", "379986168"]),
+          receipt: "scripts/release/duplicate-draft-consolidation.json",
+          receiptSha256: "c".repeat(64),
+          historicalParity:
+            "Historical duplicate payload parity is supported by embedded pre-delete evidence plus the currently reverified survivor; deleted bytes were not independently re-downloaded.",
+        })
+      },
+      now: () => "2026-09-01T12:00:00.000Z",
+      async wait() {},
+    },
+  })
+  assert.equal(code, 0)
+  assert.equal(stderr.value, "")
+  assert.deepEqual(JSON.parse(stdout.value), {
+    status: "verified",
+    survivor: "379991871",
+    deleted: ["379982100", "379986168"],
+    receipt: "scripts/release/duplicate-draft-consolidation.json",
+    receiptSha256: "c".repeat(64),
+    historicalParity:
+      "Historical duplicate payload parity is supported by embedded pre-delete evidence plus the currently reverified survivor; deleted bytes were not independently re-downloaded.",
+  })
+  assert.deepEqual(received.input, {
+    receipt: "scripts/release/duplicate-draft-consolidation.json",
+  })
+  assert.equal(received.dependencies.repositoryRoot, process.cwd())
+})
+
+test("CLI verify rejects every override, mutation, alternate path, and malformed shape before composition", async () => {
+  for (const argv of [
+    [],
+    VERIFY_COMMAND.slice(0, -1),
+    [...VERIFY_COMMAND, "--force"],
+    [...VERIFY_COMMAND, "--override", "main"],
+    [...VERIFY_COMMAND, "--delete", "379982100"],
+    VERIFY_COMMAND.with(2, ".dawn/release/duplicate-draft-consolidation.json"),
+    VERIFY_COMMAND.with(2, "/tmp/receipt.json"),
+  ]) {
+    let composeCalls = 0
+    const stderr = sink()
+    assert.equal(
+      await runDuplicateDraftConsolidationCli({
+        argv,
+        cwd: process.cwd(),
+        environment: {},
+        stdout: sink(),
+        stderr,
+        dependencies: {
+          async createAdapters() {
+            composeCalls += 1
+            return Object.freeze({})
+          },
+        },
+      }),
+      2,
+    )
+    assert.equal(composeCalls, 0)
+    assert.equal(stderr.value, "Invalid duplicate-draft consolidation invocation.\n")
+  }
+})
 
 test("CLI accepts only the exact perform shape and prints a bounded completion summary", async () => {
   const stdout = sink()
