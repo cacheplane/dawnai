@@ -519,6 +519,21 @@ test("recovery writer snapshots only exact intrinsic byte containers without inv
   const customPrototype = Uint8Array.from(fixture.archiveBytes)
   Object.setPrototypeOf(customPrototype, Object.create(Uint8Array.prototype))
   const proxy = new Proxy(Uint8Array.from(fixture.archiveBytes), {})
+  let proxyTrapCalls = 0
+  const trappedProxy = new Proxy(Uint8Array.from(fixture.archiveBytes), {
+    getPrototypeOf() {
+      proxyTrapCalls += 1
+      throw new Error("getPrototypeOf trap must not run")
+    },
+    ownKeys() {
+      proxyTrapCalls += 1
+      throw new Error("ownKeys trap must not run")
+    },
+    get() {
+      proxyTrapCalls += 1
+      throw new Error("get trap must not run")
+    },
+  })
   const oversized = new Uint8Array(64 * 1024 + 1)
   for (const bytes of [
     ownByteLength,
@@ -527,6 +542,7 @@ test("recovery writer snapshots only exact intrinsic byte containers without inv
     iterator,
     customPrototype,
     proxy,
+    trappedProxy,
     oversized,
     [],
     { 0: 1, length: 1 },
@@ -534,6 +550,7 @@ test("recovery writer snapshots only exact intrinsic byte containers without inv
     await assert.rejects(writer.uploadEvidenceAssetIfAbsentAndEqual(inputFor(bytes)))
   }
   assert.equal(getterCalls, 0)
+  assert.equal(proxyTrapCalls, 0)
   assert.equal(networkCalls, 0)
 })
 
@@ -618,6 +635,32 @@ test("recovery writer bounds response streams by deadline, progress, chunks, and
     assert.equal(getterCalls, 0)
   })
 
+  await t.test("a proxied chunk is rejected before invoking any proxy trap", async () => {
+    let proxyTrapCalls = 0
+    const chunk = new Proxy(new Uint8Array(1), {
+      getPrototypeOf() {
+        proxyTrapCalls += 1
+        throw new Error("getPrototypeOf trap must not run")
+      },
+      ownKeys() {
+        proxyTrapCalls += 1
+        throw new Error("ownKeys trap must not run")
+      },
+      get() {
+        proxyTrapCalls += 1
+        throw new Error("get trap must not run")
+      },
+    })
+    const harness = uploadStreamHarness(fixture, {
+      response: streamResponse(async () => ({ done: false, value: chunk })),
+    })
+    await assert.rejects(
+      harness.writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture)),
+      (error) => error.code === "MUTATION_OUTCOME_AMBIGUOUS",
+    )
+    assert.equal(proxyTrapCalls, 0)
+  })
+
   await t.test("a normally chunked bounded JSON response succeeds", async () => {
     const responseBytes = Buffer.from(
       JSON.stringify({
@@ -641,6 +684,92 @@ test("recovery writer bounds response streams by deadline, progress, chunks, and
       (await harness.writer.uploadEvidenceAssetIfAbsentAndEqual(uploadInput(fixture))).status,
       "uploaded",
     )
+  })
+})
+
+test("recovery writer applies bounded response controls to every remote read", async (t) => {
+  const fixture = writerFixture()
+
+  await t.test("500k zero-length chunks on the initial Release GET stop promptly", async () => {
+    let reads = 0
+    const harness = writerReadStreamHarness(fixture, {
+      location: "release",
+      timeoutMs: 20,
+      response: streamResponse(async () => {
+        reads += 1
+        return reads <= 500_000
+          ? { done: false, value: new Uint8Array(0) }
+          : { done: true, value: undefined }
+      }, 200),
+    })
+    await assert.rejects(
+      boundedForTest(harness.operation(), 300),
+      (error) => error.code === "RELEASE_SNAPSHOT_UNAVAILABLE",
+    )
+    assert.ok(reads < 500_000)
+    assert.equal(harness.writeCalls(), 0)
+  })
+
+  for (const location of ["assets", "tag", "download"]) {
+    await t.test(`${location} stream stalls are time-bounded`, async () => {
+      let reads = 0
+      const harness = writerReadStreamHarness(fixture, {
+        location,
+        timeoutMs: 20,
+        response: streamResponse(
+          async () => {
+            reads += 1
+            if (reads === 1) return { done: false, value: Buffer.from("{") }
+            return new Promise(() => {})
+          },
+          200,
+          location === "download" ? { "content-type": "application/octet-stream" } : undefined,
+        ),
+      })
+      await assert.rejects(boundedForTest(harness.operation(), 300))
+      assert.equal(harness.writeCalls(), 0)
+    })
+  }
+
+  await t.test("read response chunk count is capped", async () => {
+    let reads = 0
+    const harness = writerReadStreamHarness(fixture, {
+      location: "release",
+      response: streamResponse(async () => {
+        reads += 1
+        return reads <= 5_000
+          ? { done: false, value: Uint8Array.of(32) }
+          : { done: true, value: undefined }
+      }, 200),
+    })
+    await assert.rejects(harness.operation())
+    assert.ok(reads < 5_000)
+    assert.equal(harness.writeCalls(), 0)
+  })
+
+  await t.test("read response chunks share one cumulative wall-clock deadline", async () => {
+    const releaseBytes = Buffer.from(JSON.stringify(writerRelease(fixture.body)))
+    let offset = 0
+    const harness = writerReadStreamHarness(fixture, {
+      location: "release",
+      timeoutMs: 20,
+      response: streamResponse(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 8))
+        const value = releaseBytes.subarray(offset, offset + 1)
+        offset += value.byteLength
+        return { done: false, value }
+      }, 200),
+    })
+    await assert.rejects(boundedForTest(harness.operation(), 300))
+    assert.ok(offset < releaseBytes.byteLength)
+    assert.equal(harness.writeCalls(), 0)
+  })
+
+  await t.test("normally chunked Release, assets, tag, and download reads succeed", async () => {
+    const harness = writerReadStreamHarness(fixture, { location: "normal" })
+    const receipt = await harness.operation()
+    assert.equal(receipt.status, "existing")
+    assert.equal(harness.writeCalls(), 0)
   })
 })
 
@@ -740,9 +869,10 @@ test("recovery writer rejects post-upload snapshot or candidate-tag drift", asyn
       let uploaded = false
       let tagReads = 0
       let posts = 0
+      const calls = []
       const writer = createDuplicateDraftRecoveryWriter({
         token: "secret-token",
-        fetchImpl: async (url, init) => {
+        fetchImpl: routingFetch(calls, async (url, init) => {
           if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) {
             tagReads += 1
             if (drift === "candidate tag" && tagReads === 2) {
@@ -788,7 +918,7 @@ test("recovery writer rejects post-upload snapshot or candidate-tag drift", asyn
             )
           }
           assert.fail(`unexpected URL ${url}`)
-        },
+        }),
       })
 
       await assert.rejects(
@@ -799,9 +929,21 @@ test("recovery writer rejects post-upload snapshot or candidate-tag drift", asyn
           sha256: fixture.archiveSha256,
         }),
         (error) =>
-          ["RELEASE_SNAPSHOT_CONFLICT", "POST_WRITE_TAG_FENCE_CONFLICT"].includes(error.code),
+          ["MUTATION_OUTCOME_AMBIGUOUS", "POST_WRITE_TAG_FENCE_CONFLICT"].includes(error.code),
       )
       assert.equal(posts, 1)
+      assert.deepEqual(calls.map(callKind), [
+        "release",
+        "assets",
+        "tag-ref",
+        "tag-object",
+        "POST",
+        "tag-ref",
+        "tag-object",
+        "release",
+        "assets",
+        ...(drift === "candidate tag" ? ["asset-download"] : []),
+      ])
     })
   }
 })
@@ -809,13 +951,18 @@ test("recovery writer rejects post-upload snapshot or candidate-tag drift", asyn
 test("recovery writer preserves immediate post-write tag fences on failure paths", async (t) => {
   const fixture = writerFixture()
   for (const method of ["POST", "PATCH"]) {
-    for (const failure of ["response", "post-snapshot"]) {
+    for (const failure of [
+      "network",
+      "malformed-json",
+      "invalid-status",
+      "content-type",
+      "post-read",
+    ]) {
       await t.test(`${method} ${failure}`, async () => {
         const harness = mutationFenceHarness(fixture, { method, failure })
-        await assert.rejects(harness.operation(), (error) =>
-          failure === "response"
-            ? error.code === "MUTATION_OUTCOME_AMBIGUOUS"
-            : ["RELEASE_TITLE_CONFLICT", "RELEASE_SNAPSHOT_CONFLICT"].includes(error.code),
+        await assert.rejects(
+          harness.operation(),
+          (error) => error.code === "MUTATION_OUTCOME_AMBIGUOUS",
         )
         const pre =
           method === "POST"
@@ -833,7 +980,13 @@ test("recovery writer preserves immediate post-write tag fences on failure paths
           ...pre,
           "tag-ref",
           "tag-object",
-          ...(failure === "post-snapshot" ? ["release"] : []),
+          "release",
+          "assets",
+          ...(failure === "post-read"
+            ? []
+            : method === "POST"
+              ? ["asset-download"]
+              : ["asset-download", "asset-download"]),
         ])
       })
     }
@@ -2199,7 +2352,7 @@ function routingFetch(calls, route) {
 function callKind({ url, init }) {
   if (init.method !== "GET") return init.method
   if (url.includes("/git/ref/tags%2Fv0.8.22")) return "tag-ref"
-  if (url.includes(`/git/tags/${TAG_OBJECT}`)) return "tag-object"
+  if (url.includes("/git/tags/")) return "tag-object"
   if (url.includes("/releases/assets/")) return "asset-download"
   if (url.includes("/assets?per_page=100")) return "assets"
   if (url === `${BASE}/releases/${DUPLICATE_ID}`) return "release"
@@ -2249,6 +2402,50 @@ function uploadStreamHarness(
   return { writer, calls }
 }
 
+function writerReadStreamHarness(fixture, { location, response, timeoutMs = 1_000 }) {
+  const calls = []
+  const routeResponse = (kind, value, contentType = "application/json") => {
+    if (location === kind) return response
+    if (location === "normal") {
+      const bytes = contentType === "application/json" ? Buffer.from(JSON.stringify(value)) : value
+      return chunkedResponse(bytes, 200, { "content-type": contentType })
+    }
+    return contentType === "application/json" ? jsonResponse(value) : binaryResponse(value)
+  }
+  const writer = createDuplicateDraftRecoveryWriter({
+    token: "secret-token",
+    timeoutMs,
+    fetchImpl: routingFetch(calls, (url) => {
+      if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
+        return routeResponse("release", writerRelease(fixture.body))
+      }
+      if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+        return routeResponse("assets", [...fixture.rawAssets, fixture.archiveRawAsset])
+      }
+      if (url === `${BASE}/releases/assets/${fixture.archiveRawAsset.id}`) {
+        return routeResponse("download", fixture.archiveBytes, "application/octet-stream")
+      }
+      if (url === `${BASE}/git/ref/tags%2Fv0.8.22`) {
+        return routeResponse("tag", candidateTagRef())
+      }
+      if (url === `${BASE}/git/tags/${TAG_OBJECT}`) {
+        return routeResponse("tag-object", candidateTagObject())
+      }
+      assert.fail(`unexpected URL ${url}`)
+    }),
+  })
+  return {
+    operation: () =>
+      writer.uploadEvidenceAssetIfAbsentAndEqual({
+        expectedSnapshot: fixture.bodyArchivedSnapshot,
+        name: fixture.archiveName,
+        bytes: fixture.archiveBytes,
+        sha256: fixture.archiveSha256,
+      }),
+    writeCalls: () => calls.filter(({ init }) => init.method !== "GET").length,
+  }
+}
+
 function mutationFenceHarness(fixture, { method, failure }) {
   let mutated = false
   const calls = []
@@ -2259,17 +2456,15 @@ function mutationFenceHarness(fixture, { method, failure }) {
       if (url === `${BASE}/git/tags/${TAG_OBJECT}`) return jsonResponse(candidateTagObject())
       if (url === `${BASE}/releases/${DUPLICATE_ID}` && init.method === "PATCH") {
         mutated = true
-        return failure === "response"
-          ? binaryResponse(Buffer.from("not-json"), 200, { "content-type": "application/json" })
-          : jsonResponse(writerRelease(fixture.notice), 200)
+        return failedMutationResponse(failure, writerRelease(fixture.notice), 200)
       }
       if (url === `${BASE}/releases/${DUPLICATE_ID}`) {
-        return jsonResponse({
-          ...writerRelease(mutated && method === "PATCH" ? fixture.notice : fixture.body),
-          ...(mutated && failure === "post-snapshot" ? { name: "concurrent title" } : {}),
-        })
+        return jsonResponse(
+          writerRelease(mutated && method === "PATCH" ? fixture.notice : fixture.body),
+        )
       }
       if (url === `${BASE}/releases/${DUPLICATE_ID}/assets?per_page=100`) {
+        if (mutated && failure === "post-read") throw new Error("post snapshot unavailable")
         if (method === "PATCH") {
           return jsonResponse([
             ...fixture.rawAssets,
@@ -2289,18 +2484,17 @@ function mutationFenceHarness(fixture, { method, failure }) {
       }
       if (url.startsWith(`${UPLOAD_BASE}/releases/${DUPLICATE_ID}/assets?name=`)) {
         mutated = true
-        return failure === "response"
-          ? binaryResponse(Buffer.from("not-json"), 201, { "content-type": "application/json" })
-          : jsonResponse(
-              {
-                id: fixture.archiveRawAsset.id,
-                name: fixture.archiveName,
-                digest: `sha256:${fixture.archiveSha256}`,
-                size: fixture.archiveBytes.byteLength,
-                state: "uploaded",
-              },
-              201,
-            )
+        return failedMutationResponse(
+          failure,
+          {
+            id: fixture.archiveRawAsset.id,
+            name: fixture.archiveName,
+            digest: `sha256:${fixture.archiveSha256}`,
+            size: fixture.archiveBytes.byteLength,
+            state: "uploaded",
+          },
+          201,
+        )
       }
       assert.fail(`unexpected URL ${url}`)
     }),
@@ -2318,16 +2512,46 @@ function mutationFenceHarness(fixture, { method, failure }) {
   }
 }
 
-function streamResponse(read, status = 201) {
+function failedMutationResponse(failure, value, successStatus) {
+  if (failure === "network") throw new Error("write response lost")
+  if (failure === "malformed-json") {
+    return binaryResponse(Buffer.from("not-json"), successStatus, {
+      "content-type": "application/json",
+    })
+  }
+  if (failure === "invalid-status") return jsonResponse(value, 500)
+  if (failure === "content-type") {
+    return binaryResponse(Buffer.from(JSON.stringify(value)), successStatus, {
+      "content-type": "text/plain",
+    })
+  }
+  return jsonResponse(value, successStatus)
+}
+
+function streamResponse(read, status = 201, headers = {}) {
   return {
     status,
-    headers: new Headers({ "content-type": "application/json" }),
+    headers: new Headers({ "content-type": "application/json", ...headers }),
     body: {
       getReader() {
-        return { read, cancel: async () => {} }
+        return { read, cancel: async () => {}, releaseLock() {} }
       },
     },
   }
+}
+
+function chunkedResponse(bytes, status = 200, headers = {}) {
+  let offset = 0
+  return streamResponse(
+    async () => {
+      if (offset === bytes.byteLength) return { done: true, value: undefined }
+      const value = bytes.subarray(offset, offset + 257)
+      offset += value.byteLength
+      return { done: false, value }
+    },
+    status,
+    headers,
+  )
 }
 
 async function boundedForTest(operation, milliseconds) {
