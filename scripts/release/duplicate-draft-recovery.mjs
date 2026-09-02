@@ -35,6 +35,7 @@ export function classifyDuplicateDraft(value, expected) {
       "canonicalMarker",
       "originalBodySha256",
       "originalAssets",
+      "recoveryReceipt",
       "recoveryNotice",
     ],
     "duplicate Release expectations",
@@ -45,14 +46,20 @@ export function classifyDuplicateDraft(value, expected) {
   if (!Array.isArray(requirements.originalAssets) || requirements.originalAssets.length !== 45) {
     throw new TypeError("Duplicate Release expectations require exactly 45 original assets")
   }
-  const originalAssets = normalizeAssets(requirements.originalAssets, "original Release assets")
-  const assets = normalizeAssets(snapshot.assets, "duplicate Release assets")
+  const originalAssets = normalizeAssets(
+    requirements.originalAssets,
+    "original Release assets",
+    false,
+  )
+  const assets = normalizeAssets(snapshot.assets, "duplicate Release assets", true)
   const evidenceKinds = normalizeEvidenceKinds(snapshot.evidenceAssets)
   const bodyAssetName = originalBodyAssetName(
     requirements.releaseId,
     requirements.originalBodySha256,
   )
   const receiptAssetName = recoveryReceiptAssetName(requirements.releaseId)
+  const recoveryReceiptBytes = canonicalRecoveryReceipt(requirements.recoveryReceipt)
+  const recoveryReceiptSha256 = sha256Bytes(recoveryReceiptBytes)
   const expectedAssetNames = new Set(originalAssets.map((asset) => asset.name))
   for (const asset of assets) {
     if (
@@ -73,7 +80,7 @@ export function classifyDuplicateDraft(value, expected) {
   const evidence = assets.slice(originalAssets.length)
   const notice =
     evidenceKinds.length === 2 && snapshot.marker === null
-      ? parseCanonicalNotice(snapshot.body)
+      ? parseCanonicalNotice(snapshot.body, requirements.releaseId)
       : null
   for (const [index, asset] of evidence.entries()) {
     const kind = evidenceKinds[index]
@@ -83,7 +90,9 @@ export function classifyDuplicateDraft(value, expected) {
       }
     } else if (
       asset.name !== receiptAssetName ||
-      !SHA256_PATTERN.test(asset.sha256) ||
+      asset.sha256 !== recoveryReceiptSha256 ||
+      typeof asset.bytes !== "string" ||
+      asset.bytes !== recoveryReceiptBytes.toString("utf8") ||
       (notice !== null && asset.sha256 !== notice.receiptSha256)
     ) {
       throw new Error("Duplicate Release recovery receipt asset is not exact")
@@ -247,7 +256,15 @@ function assertPolicyIdentity(source) {
 
 function assertDuplicateIdentity(releaseId, tagName, expected) {
   assertDuplicateReleaseId(releaseId)
-  if (releaseId !== expected.releaseId || tagName !== expected.tagName) {
+  const configured = DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.find(
+    (duplicate) => duplicate.releaseId === releaseId,
+  )
+  if (
+    configured === undefined ||
+    releaseId !== expected.releaseId ||
+    tagName !== expected.tagName ||
+    tagName !== configured.tagName
+  ) {
     throw new Error("Duplicate Release identity is not exact")
   }
   if (tagName === `v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}`) {
@@ -300,15 +317,25 @@ function normalizeEvidenceKinds(value) {
   return result
 }
 
-function normalizeAssets(value, label) {
+function normalizeAssets(value, label, allowBytes) {
   if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`)
   return value.map((asset, index) => {
-    const normalized = exactObject(asset, ["id", "name", "sha256"], `${label}[${index}]`)
+    const source = snapshotJson(asset)
+    const normalized = exactObject(
+      source,
+      allowBytes && Object.hasOwn(source, "bytes")
+        ? ["id", "name", "sha256", "bytes"]
+        : ["id", "name", "sha256"],
+      `${label}[${index}]`,
+    )
     assertReleaseId(normalized.id, `${label}[${index}] id`)
     if (typeof normalized.name !== "string" || !ASSET_NAME_PATTERN.test(normalized.name)) {
       throw new TypeError(`${label}[${index}] name is invalid`)
     }
     assertSha256(normalized.sha256, `${label}[${index}] SHA-256`)
+    if (Object.hasOwn(normalized, "bytes") && typeof normalized.bytes !== "string") {
+      throw new TypeError(`${label}[${index}] bytes are invalid`)
+    }
     return normalized
   })
 }
@@ -335,7 +362,7 @@ function isCanonicalNotice(value) {
   }
 }
 
-function parseCanonicalNotice(value) {
+function parseCanonicalNotice(value, expectedDuplicateReleaseId) {
   if (!isCanonicalNotice(value)) throw new Error("Duplicate Release recovery notice is malformed")
   const notice = snapshotJson(JSON.parse(value))
   if (
@@ -360,12 +387,12 @@ function parseCanonicalNotice(value) {
     notice.version !== DUPLICATE_DRAFT_RECOVERY_POLICY.version ||
     notice.candidateSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha ||
     notice.canonicalReleaseId !== DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ||
-    !DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.some(
-      (duplicate) => duplicate.releaseId === notice.duplicateReleaseId,
-    ) ||
+    notice.duplicateReleaseId !== expectedDuplicateReleaseId ||
     notice.archiveAssetName !==
       originalBodyAssetName(notice.duplicateReleaseId, notice.originalBodySha256) ||
-    notice.receiptAssetName !== recoveryReceiptAssetName(notice.duplicateReleaseId)
+    notice.receiptAssetName !== recoveryReceiptAssetName(notice.duplicateReleaseId) ||
+    notice.schemaVersion !== 1 ||
+    notice.type !== "DAWN_DUPLICATE_DRAFT_RECOVERY"
   ) {
     throw new Error("Duplicate Release recovery notice identity is not exact")
   }
@@ -400,6 +427,10 @@ function compareText(left, right) {
 
 function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex")
+}
+
+function sha256Bytes(value) {
+  return createHash("sha256").update(value).digest("hex")
 }
 
 function deepFreeze(value) {
