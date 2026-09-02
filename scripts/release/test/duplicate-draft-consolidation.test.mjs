@@ -2554,11 +2554,11 @@ test("rejects an unsafe existing output and a symlinked release directory", asyn
 
 test("redacts remote diagnostics and never returns raw evidence", async (t) => {
   const fixture = await inspectionFixture(t, {
-    remoteError: "token ghp_secret response body",
+    remoteError: "token fixture_secret response body",
   })
   await assert.rejects(inspectDuplicateDrafts(exactInput(), fixture.dependencies), (error) => {
     assert.equal(error.message, "Duplicate-draft inspection failed.")
-    assert.doesNotMatch(String(error), /ghp_secret|response body/iu)
+    assert.doesNotMatch(String(error), /fixture_secret|response body/iu)
     return true
   })
 })
@@ -3017,7 +3017,7 @@ async function productionPerformRehearsalFixture(t, options = {}) {
   const createAdapters = () =>
     createDuplicateDraftConsolidationAdapters({
       cwd: inspection.root,
-      token: "ghp_fixture_token_1234567890",
+      token: "fixture_token_value",
       environment: { HOME: inspection.root, PATH: "/tools" },
       dependencies: {
         fetchImpl,

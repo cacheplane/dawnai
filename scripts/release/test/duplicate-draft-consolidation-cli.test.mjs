@@ -344,12 +344,12 @@ test("CLI maps evidence failures to one redacted line and exit code 1", async ()
   const code = await runDuplicateDraftConsolidationCli({
     argv: COMMAND,
     cwd: process.cwd(),
-    environment: { GH_TOKEN: "ghp_secret" },
+    environment: { GH_TOKEN: "fixture_secret" },
     stdout,
     stderr,
     dependencies: {
       async createAdapters() {
-        throw new Error("ghp_secret remote response body bytes")
+        throw new Error("fixture_secret remote response body bytes")
       },
     },
   })
@@ -361,8 +361,8 @@ test("CLI maps evidence failures to one redacted line and exit code 1", async ()
 
 test("CLI contains synchronous and asynchronous stdout failures without leaking diagnostics", async () => {
   for (const stdout of [
-    throwingSink("stdout ghp_sync_secret body"),
-    rejectingSink("stdout ghp_async_secret body"),
+    throwingSink("stdout fixture_sync_secret body"),
+    rejectingSink("stdout fixture_async_secret body"),
   ]) {
     const stderr = sink()
     const code = await runDuplicateDraftConsolidationCli({
@@ -381,8 +381,8 @@ test("CLI contains synchronous and asynchronous stdout failures without leaking 
 
 test("CLI preserves invocation and evidence classifications when stderr rejects", async () => {
   for (const stderr of [
-    throwingSink("stderr ghp_sync_secret body"),
-    rejectingSink("stderr ghp_async_secret body"),
+    throwingSink("stderr fixture_sync_secret body"),
+    rejectingSink("stderr fixture_async_secret body"),
   ]) {
     assert.equal(
       await runDuplicateDraftConsolidationCli({
@@ -403,7 +403,7 @@ test("CLI preserves invocation and evidence classifications when stderr rejects"
         stderr,
         dependencies: {
           async createAdapters() {
-            throw new Error("remote ghp_secret response body")
+            throw new Error("remote fixture_secret response body")
           },
         },
       }),
@@ -418,7 +418,7 @@ test("CLI contains a real Writable asynchronous stdout error without process-lev
     argv: COMMAND,
     cwd: process.cwd(),
     environment: {},
-    stdout: failingWritable("stdout ghp_writable_secret response body"),
+    stdout: failingWritable("stdout fixture_writable_secret response body"),
     stderr,
     dependencies: successfulDependencies(),
   })
@@ -434,7 +434,7 @@ test("CLI preserves invocation classification when a real stderr Writable fails 
     cwd: process.cwd(),
     environment: {},
     stdout: sink(),
-    stderr: failingWritable("stderr ghp_writable_secret response body"),
+    stderr: failingWritable("stderr fixture_writable_secret response body"),
   })
   await immediate()
   assert.equal(code, 2)
@@ -499,7 +499,7 @@ test("CLI never invokes an accessor-backed stderr method while reporting invocat
   Object.defineProperty(unsafeStderr, "write", {
     get() {
       accessorCalls += 1
-      throw new Error("ghp_secret accessor body")
+      throw new Error("fixture_secret accessor body")
     },
   })
   const processStderr = sink()

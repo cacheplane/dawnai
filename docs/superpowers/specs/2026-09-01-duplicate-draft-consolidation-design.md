@@ -145,8 +145,9 @@ writer.
 
 Use bounded, paginated production readers for Releases, assets, annotated tags,
 workflow states, workflow runs, and asset downloads. Authentication remains in
-the environment or the existing `gh` session; tokens never appear in argv,
-receipts, logs, or source files.
+the environment or the existing `gh` session; live credentials never appear in
+argv, receipts, logs, or source files. Tests use only neutral synthetic secret
+values that do not resemble provider-issued credentials.
 
 Release, asset, and workflow-run enumeration uses `per_page=100`, follows only
 validated GitHub Link relations, accepts at most 100 pages and 10,000 raw

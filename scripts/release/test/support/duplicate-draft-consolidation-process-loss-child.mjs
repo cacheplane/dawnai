@@ -157,7 +157,7 @@ const run = async (_command, args) => {
 const createAdapters = ({ cwd }) =>
   createDuplicateDraftConsolidationAdapters({
     cwd,
-    token: "ghp_fixture_token_1234567890",
+    token: "fixture_token_value",
     environment: { HOME: root, PATH: "/tools" },
     dependencies: {
       fetchImpl,
