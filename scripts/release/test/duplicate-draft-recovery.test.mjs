@@ -729,6 +729,24 @@ test("verifies fresh evidence against an exact current observation and rejects t
     }),
     { schemaVersion: 1, status: "PASS" },
   )
+  assert.throws(
+    () =>
+      verifyDuplicateDraftEvidence({
+        evidence,
+        current: recoveryObservation({ capturedAt: "2026-08-31T23:44:59.999Z" }),
+        now: () => RECOVERY_NOW,
+      }),
+    /current.*expired|expired.*current/iu,
+  )
+  assert.throws(
+    () =>
+      verifyDuplicateDraftEvidence({
+        evidence,
+        current: recoveryObservation({ capturedAt: "2026-09-01T00:10:00.001Z" }),
+        now: () => RECOVERY_NOW,
+      }),
+    /current.*future|future.*current/iu,
+  )
 
   assert.throws(
     () =>

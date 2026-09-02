@@ -106,7 +106,8 @@ export function verifyDuplicateDraftEvidence({ evidence, current, now = Date.now
   if (nowMs - capturedAtMs > MAX_DUPLICATE_EVIDENCE_AGE_MS) {
     throw new Error("Duplicate draft evidence has expired and must be recaptured")
   }
-  const fresh = normalizeDuplicateDraftObservation(current, sealed.capturedAt)
+  const currentObservation = validateCurrentObservationTimestamp(current, nowMs)
+  const fresh = normalizeDuplicateDraftObservation(currentObservation, sealed.capturedAt)
   if (!canonicalDuplicateDraftEvidence(fresh).equals(canonicalDuplicateDraftEvidence(sealed))) {
     throw new Error("Duplicate draft evidence drifted from the fresh observation")
   }
@@ -453,6 +454,26 @@ function normalizeDuplicateDraftObservation(value, capturedAtOverride) {
     releaseRuns,
     releases,
   }
+}
+
+function validateCurrentObservationTimestamp(value, nowMs) {
+  const source = exactObject(
+    value,
+    DUPLICATE_OBSERVATION_FIELDS,
+    "current duplicate draft observation",
+  )
+  const capturedAt = normalizeCanonicalTimestamp(
+    source.capturedAt,
+    "Current duplicate draft observation capture time",
+  )
+  const capturedAtMs = Date.parse(capturedAt)
+  if (capturedAtMs > nowMs) {
+    throw new Error("Current duplicate draft observation capture time is in the future")
+  }
+  if (nowMs - capturedAtMs > MAX_DUPLICATE_EVIDENCE_AGE_MS) {
+    throw new Error("Current duplicate draft observation has expired and must be recaptured")
+  }
+  return source
 }
 
 function normalizeReviewedAuthority(value) {
