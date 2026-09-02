@@ -213,6 +213,214 @@ remain empty, and the aggregate abandonment mode must remain disabled. If `main`
 moves, evidence expires, a workflow state differs, or a candidate draft exists
 before Immutable Releases was enabled, stop the cutover.
 
+## v0.8.22 duplicate-draft recovery (one time)
+
+Use this candidate-specific procedure only for the reviewed v0.8.22 recovery.
+It preserves the canonical draft at Release `379991871` and quarantines the two
+duplicate controller identities without deleting either draft or any asset:
+
+| Role | Release ID | Required temporary `tag_name` |
+| --- | ---: | --- |
+| Canonical candidate | `379991871` | `untagged-be0ff4bee4ba43b521a9` |
+| Duplicate | `379982100` | `untagged-a13939767dd2419ade01` |
+| Duplicate | `379986168` | `untagged-20706099efa3c38335a8` |
+
+The exact candidate is version `0.8.22` at commit
+`2a80deece2ff958fe7fde8fddeb4f99bed70a1c8`. The recovery command cannot
+delete drafts, enable or dispatch Release, or publish npm. GitHub does not
+provide an atomic conditional `PATCH` for the Release update endpoint. The
+body-only update therefore depends on an explicit operator edit freeze plus a
+final compare-before-write fence; do not describe it as compare-and-swap or
+atomic.
+
+### Prerequisites and reviewed authority
+
+Keep `.github/workflows/release.yml` in `disabled_manually` throughout this
+procedure. Before establishing the freeze, independently require Immutable
+Releases to be enabled, no Release workflow run to be nonterminal, annotated
+tag `v0.8.22` to peel to the exact candidate commit, no published Release to
+use `v0.8.22`, and exact npm version `0.8.22` to remain absent for all 21
+packages. Require the canonical and duplicate numeric IDs, temporary tag names,
+draft metadata, bodies, and complete 45-base-asset inventories to match the
+reviewed recovery policy. Stop on a fourth marker-backed or exact-tag candidate,
+an unavailable read, or any mismatch.
+
+Run only from an isolated checkout of the merged recovery commit. Let
+`RECOVERY_SHA` be the 40-character lowercase merge SHA, not the pull-request
+branch head, a later `main`, or the candidate commit. Fetch `main`, then require
+local `HEAD`, `origin/main`, and `RECOVERY_SHA` to be identical. The `capture`
+command additionally verifies that this SHA is the merge commit of exactly one
+merged pull request targeting `main`, that `CI / validate` succeeded at its
+reviewed head, and that the merge commit tree equals the reviewed head tree.
+Do not continue if any identity or tree check differs.
+
+### Establish the operator edit freeze and private directory
+
+Resolve the authenticated GitHub operator identity read-only. In the operator
+freeze record, enter that identity, the UTC establishment time, exact scope
+`[379982100, 379986168]`, the workflow-disabled observation, and the explicit
+non-atomic time-of-check/time-of-use limitation. From that point until the
+freeze is deliberately released, no human, bot, workflow, or other process may
+edit either duplicate Release.
+
+Create both private directories as the authenticated local operator. Every
+directory from the repository root through `.dawn` must be owned by that
+operator and not group- or world-writable; the final recovery directory must be
+exactly mode `0700`. The CLI fails closed before credential or writer
+construction if these conditions do not hold.
+
+```bash
+umask 077
+install -d -m 0700 .dawn
+install -d -m 0700 .dawn/release-recovery
+chmod go-w .dawn
+chmod 0700 .dawn/release-recovery
+```
+
+The directory must remain ignored by the reviewed Git policy. Capture and apply
+use distinct, unused, regular-file paths below exactly
+`.dawn/release-recovery/`. They refuse symlinks, hard links, clobbering,
+traversal, absolute paths, alternate `.dawn` directories, and unsafe file
+modes. A resumed attempt always uses the next unused matching sequence number;
+never replace or reuse a path.
+
+### Capture and inspect fresh evidence
+
+With the edit freeze active and all prerequisites still exact, run:
+
+```bash
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  node scripts/release/recover-v0.8.22-duplicate-drafts.mjs capture \
+  --reviewed-commit "$RECOVERY_SHA" \
+  --output .dawn/release-recovery/v0.8.22-capture-01.json
+```
+
+Capture is read-only and writes one credential-free, canonical evidence file
+with mode `0600`. It is valid for at most 15 minutes. Hash it and inspect its
+JSON before apply:
+
+```bash
+shasum -a 256 .dawn/release-recovery/v0.8.22-capture-01.json
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  node -e 'const fs=require("node:fs");const p=process.argv[1];process.stdout.write(`${JSON.stringify(JSON.parse(fs.readFileSync(p,"utf8")),null,2)}\n`)' \
+  .dawn/release-recovery/v0.8.22-capture-01.json | less
+```
+
+Require the repository/recovery/candidate identities, tag object and peel,
+workflow and Immutable Releases states, empty nonterminal-run inventory,
+package-level npm absence, all three Release snapshots, body and asset
+digests, and the expected notice/asset bytes to be exact. Each duplicate must
+classify into exactly one of these states:
+
+| State | Exact recognized contents | Next resumable transition |
+| --- | --- | --- |
+| `untouched` | Original marker body and exactly 45 original base assets | Upload the original-body archive asset. |
+| `body-archived` | Original body, 45 base assets, and the exact original-body archive asset | Upload the duplicate recovery receipt asset. |
+| `receipt-archived` | Original body, 45 base assets, and both exact recovery evidence assets | Replace only the live body with the exact non-marker notice. |
+| `quarantined` | Exact recovery notice, 45 base assets, and both exact recovery evidence assets | No mutation; verify the state. |
+
+The command processes the duplicates only in ascending ID order. It cannot
+start Release `379986168` until Release `379982100` is exactly quarantined.
+Anything outside these four states is a conflict, not a repair opportunity.
+
+### Apply once and handle partial outcomes
+
+Apply the inspected evidence exactly once with the literal acknowledgement
+flag and a distinct unused output path:
+
+```bash
+PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH" \
+  node scripts/release/recover-v0.8.22-duplicate-drafts.mjs apply \
+  --evidence .dawn/release-recovery/v0.8.22-capture-01.json \
+  --acknowledge-non-atomic-release-edit-freeze \
+  --output .dawn/release-recovery/v0.8.22-apply-01.json
+```
+
+The acknowledgement accepts no value, alias, reordered form, environment
+fallback, or configuration substitute. `apply` reauthorizes every mutation
+against fresh production reads, uploads only absent byte-identical recovery
+assets, performs at most one body-only `PATCH` per duplicate, never retries an
+ambiguous write, and emits the local write-once final authorization receipt
+only after both duplicates and the final normal-controller observation pass.
+
+On any nonzero exit, preserve every capture, output, temporary file, GitHub
+asset, and the operator freeze. Record the exit, UTC time, and the exact known
+or ambiguous state. Exit code `3` specifically means output cleanup is
+uncertain: do not delete, rename, reuse, or infer the contents of that apply
+path. Do not rerun `apply` blindly after a timeout, transport error, retryable
+HTTP response, malformed response, or otherwise ambiguous outcome.
+
+Instead, use read-only `capture` at the next unused path, such as
+`v0.8.22-capture-02.json`, while the freeze remains active. If it proves one of
+the four exact states, inspect and hash it, record that state, and deliberately
+resume only the missing transition with the matching unused
+`v0.8.22-apply-02.json` path and the exact acknowledgement. A resumed final
+authorization receipt may report a freshly verified
+`preexisting-quarantined` duplicate with `priorFenceObservations: null`; never
+invent an earlier invocation's pre/post fence observations. If fresh capture
+cannot classify the live state exactly, keep the workflow disabled and the
+edit freeze active, preserve all evidence, and escalate for review.
+
+### Independent verification and freeze release
+
+After successful apply, independently enumerate Releases with pagination and
+read all three objects and their assets by numeric ID; do not rely on a
+published-only tag lookup or solely on the recovery command's success line.
+Download and hash both evidence assets on each duplicate. Require all of the
+following before releasing the edit freeze:
+
+- canonical Release `379991871` still has its exact original body, temporary
+  tag, mutable draft metadata, and original 45-member asset namespace;
+- both duplicate Releases retain their exact opaque temporary tags and all 45
+  original assets, have the exact non-marker recovery notice, and have no
+  `v0.8.22` tag name;
+- each original-body archive downloads byte-for-byte to the canonical original
+  body, and each duplicate recovery receipt asset is canonical with the
+  recorded Release ID, asset ID, size, and SHA-256;
+- the local final authorization receipt is canonical, credential-free,
+  `atomic: false`, and scope-exact; each duplicate is honestly either
+  `performed`, with this invocation's pre-write and post-write fence times and
+  outcomes, or `preexisting-quarantined`, with a fresh `verifiedAt`, projection
+  SHA-256, and `priorFenceObservations: null`; and
+- its normal-controller observer is exactly `state: CANDIDATE_ESCROWED`,
+  `disposition: would-transition`, `nextTransition: publish-npm-packages`,
+  `releaseId: 379991871`, `conflicts: []`, and `diagnostics: []`.
+
+Hash the final authorization receipt and enter the direct-read results in the
+live receipt. Only after every successful verification above may the operator
+freeze record receive its successful outcome and UTC release time and the edit
+freeze be released.
+
+If apply failed or was ambiguous, release the edit freeze only after a fresh
+read-only capture proves and records one exact recognized state. A partial state
+may be preserved for a later reviewed resume, but Release must remain disabled.
+If the state remains ambiguous, do not release the freeze. Under no failure
+condition may an operator restore a marker body, delete a draft or asset,
+enable Release, dispatch the workflow, or publish npm manually.
+
+### Resume the exact-tag release
+
+Only after both duplicates are independently verified as quarantined, the final
+observer is exact, and the edit freeze is released may an owner enable
+`.github/workflows/release.yml`. Re-read it as `active`, then dispatch only:
+
+```bash
+gh workflow run release.yml --repo cacheplane/dawnai \
+  --ref v0.8.22 \
+  -f version=0.8.22 \
+  -f commitSha=2a80deece2ff958fe7fde8fddeb4f99bed70a1c8 \
+  -f operation=reconcile
+```
+
+Record the direct dispatch/run identity. Do not cancel, generically rerun, or
+substitute `main`. Require serial trusted publication of all 21 packages,
+package-level npm integrity and provenance, all five smoke lanes, the
+independent audit, and immutable publication of Release `379991871`. Stop at
+the first failed transition and preserve its evidence. Only after v0.8.22 is
+terminal may Version Packages PR #525 advance the fixed group to the
+README-bearing v0.8.23 release; after that release is terminal, remove the
+one-time recovery surface in its separately reviewed cleanup pull request.
+
 ## First live patch release
 
 The first controller-owned release is a patch release. For this cutover the
@@ -435,10 +643,38 @@ stop, preserve the candidate, and escalate; the live workflow cannot abandon it.
 ## Live receipt
 
 Append only credential-free facts after the live release. Do not mark the
-cutover complete while any field is missing.
+cutover complete while any field is missing. The recovery-specific rows are
+also the operator freeze record: preserve exact observations and use `none`
+only when a field was independently proved inapplicable. Do not backfill prior
+fence observations for a `preexisting-quarantined` outcome.
 
 | Receipt | Value |
 | --- | --- |
+| Recovery PR number / reviewed head SHA / merge SHA | pending |
+| Operator freeze record: authenticated operator | pending |
+| Operator freeze record: established UTC | pending |
+| Operator freeze record: released UTC | pending |
+| Operator freeze record: scope Release IDs | pending (`379982100`, `379986168`) |
+| Operator freeze record: workflow-disabled observation and non-atomic limitation | pending |
+| Recovery evidence capture path / UTC / SHA-256 | pending |
+| Release `379982100` pre-write fence UTC/outcome | pending |
+| Release `379982100` post-write fence UTC/outcome | pending |
+| Release `379986168` pre-write fence UTC/outcome | pending |
+| Release `379986168` post-write fence UTC/outcome | pending |
+| Operator freeze record: exact partial or ambiguous state | pending |
+| Release `379982100` original-body archive asset ID/SHA-256 | pending |
+| Release `379982100` duplicate recovery receipt asset ID/SHA-256 | pending |
+| Release `379986168` original-body archive asset ID/SHA-256 | pending |
+| Release `379986168` duplicate recovery receipt asset ID/SHA-256 | pending |
+| Post-quarantine body SHA-256 for both duplicates | pending |
+| Final authorization receipt path / SHA-256 | pending |
+| Final authorization receipt per-duplicate `performed` or `preexisting-quarantined` outcomes | pending |
+| Final observer state/disposition/next transition/release ID | pending |
+| v0.8.22 Release run/attempt | pending |
+| v0.8.22 npm integrity/provenance conclusions | pending |
+| v0.8.22 immutable Release ID and re-read | pending (`379991871`) |
+| v0.8.23 Version Packages PR / Release run/attempt | pending |
+| Recovery cleanup PR / merge SHA | pending |
 | Atomic switch SHA | pending |
 | Pre-enable evidence digest/time | pending |
 | Post-enable evidence digest/time | pending |
