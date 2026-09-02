@@ -724,6 +724,26 @@ test("verifies fresh evidence against an exact current observation and rejects t
   assert.deepEqual(
     verifyDuplicateDraftEvidence({
       evidence,
+      current: recoveryObservation({
+        states: ["body-archived", "quarantined"],
+        capturedAt: evidence.capturedAt,
+      }),
+      now: () => RECOVERY_NOW,
+    }),
+    { schemaVersion: 1, status: "PASS" },
+  )
+  assert.throws(
+    () =>
+      verifyDuplicateDraftEvidence({
+        evidence,
+        current: recoveryObservation({ capturedAt: "2026-08-31T23:59:59.999Z" }),
+        now: () => RECOVERY_NOW,
+      }),
+    /predates/u,
+  )
+  assert.deepEqual(
+    verifyDuplicateDraftEvidence({
+      evidence,
       current: observation,
       now: () => Date.parse("2026-09-01T00:15:00.000Z"),
     }),
@@ -810,6 +830,29 @@ test("retains immutable expired partial-state evidence while allowing a distinct
   ])
   assert.equal(writeOnceValues.size, 2)
   assert.equal(writeOnceValues.get("duplicate-draft-evidence-20260831T234459999Z.json"), expired)
+})
+
+test("rejects arbitrary bytes on original and body-archive assets before sealing evidence", () => {
+  const bodyArchive = recoveryObservation({ states: ["body-archived", "untouched"] })
+  bodyArchive.releases.duplicates[0].assets.at(-1).bytes = "body archive secret"
+  assert.throws(() => canonicalDuplicateDraftEvidence(bodyArchive), /asset|field/u)
+
+  const originalAsset = recoveryObservation()
+  originalAsset.releases.duplicates[0].assets[0] = {
+    ...originalAsset.releases.duplicates[0].assets[0],
+    bytes: "original asset secret",
+  }
+  assert.throws(() => canonicalDuplicateDraftEvidence(originalAsset), /asset|field/u)
+
+  const evidence = parseDuplicateDraftEvidence(
+    canonicalDuplicateDraftEvidence(
+      recoveryObservation({ states: ["body-archived", "untouched"] }),
+    ),
+  )
+  assert.equal(
+    evidence.releases.duplicates[0].assets.some((asset) => Object.hasOwn(asset, "bytes")),
+    false,
+  )
 })
 
 function reverseObjectOrder(value) {

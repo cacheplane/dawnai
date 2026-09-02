@@ -106,7 +106,10 @@ export function verifyDuplicateDraftEvidence({ evidence, current, now = Date.now
   if (nowMs - capturedAtMs > MAX_DUPLICATE_EVIDENCE_AGE_MS) {
     throw new Error("Duplicate draft evidence has expired and must be recaptured")
   }
-  const currentObservation = validateCurrentObservationTimestamp(current, nowMs)
+  const currentObservation = validateCurrentObservationTimestamp(current, {
+    evidenceCapturedAtMs: capturedAtMs,
+    nowMs,
+  })
   const fresh = normalizeDuplicateDraftObservation(currentObservation, sealed.capturedAt)
   if (!canonicalDuplicateDraftEvidence(fresh).equals(canonicalDuplicateDraftEvidence(sealed))) {
     throw new Error("Duplicate draft evidence drifted from the fresh observation")
@@ -456,7 +459,7 @@ function normalizeDuplicateDraftObservation(value, capturedAtOverride) {
   }
 }
 
-function validateCurrentObservationTimestamp(value, nowMs) {
+function validateCurrentObservationTimestamp(value, { evidenceCapturedAtMs, nowMs }) {
   const source = exactObject(
     value,
     DUPLICATE_OBSERVATION_FIELDS,
@@ -472,6 +475,9 @@ function validateCurrentObservationTimestamp(value, nowMs) {
   }
   if (nowMs - capturedAtMs > MAX_DUPLICATE_EVIDENCE_AGE_MS) {
     throw new Error("Current duplicate draft observation has expired and must be recaptured")
+  }
+  if (capturedAtMs < evidenceCapturedAtMs) {
+    throw new Error("Current duplicate draft observation predates the sealed evidence")
   }
   return source
 }
@@ -591,7 +597,7 @@ function normalizeRecoveryReleases(value, { reviewedAuthority, candidate }) {
   }))
   const baseAssetSetSha256 = assetSetSha256(canonical.assets)
   const duplicates = source.duplicates.map((value, index) => {
-    const raw = exactObject(value, DUPLICATE_SOURCE_FIELDS, "recovery duplicate Release")
+    const raw = normalizeRecoveryDuplicateSource(value, canonical.assets)
     const configured = DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates[index]
     if (raw.releaseId !== configured.releaseId || raw.tagName !== configured.tagName) {
       throw new TypeError("Recovery duplicate Release order or identity is not exact")
@@ -647,6 +653,40 @@ function normalizeRecoveryReleases(value, { reviewedAuthority, candidate }) {
     }
   })
   return { canonical, duplicates }
+}
+
+function normalizeRecoveryDuplicateSource(value, originalAssets) {
+  const source = exactObject(value, DUPLICATE_SOURCE_FIELDS, "recovery duplicate Release")
+  const evidenceKinds = normalizeEvidenceKinds(source.evidenceAssets)
+  if (
+    !Array.isArray(source.assets) ||
+    source.assets.length !== originalAssets.length + evidenceKinds.length
+  ) {
+    throw new TypeError("Recovery duplicate Release asset inventory is invalid")
+  }
+  const original = normalizeAssets(
+    source.assets.slice(0, originalAssets.length),
+    "recovery duplicate original assets",
+    false,
+  )
+  const evidence = source.assets
+    .slice(originalAssets.length)
+    .map(
+      (asset, index) =>
+        normalizeAssets(
+          [asset],
+          "recovery duplicate evidence asset",
+          evidenceKinds[index] === "receipt",
+        )[0],
+    )
+  return {
+    releaseId: source.releaseId,
+    tagName: source.tagName,
+    body: source.body,
+    marker: source.marker,
+    assets: [...original, ...evidence],
+    evidenceAssets: evidenceKinds,
+  }
 }
 
 function normalizeCanonicalRecoveryRelease(value, candidate) {
