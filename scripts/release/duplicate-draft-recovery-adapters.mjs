@@ -2165,7 +2165,11 @@ async function normalizeReleaseSnapshot({
 
 function recoveryEvidenceKind(name, releaseId) {
   const prefix = `dawn-v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}-duplicate-${releaseId}-`
-  if (new RegExp(`^${prefix}original-body-[0-9a-f]{64}\\.txt$`, "u").test(name)) return "body"
+  // The prefix embeds the version, so its dots must be escaped: an unescaped "."
+  // would classify a near-miss asset name as the original-body archive.
+  if (new RegExp(`^${escapeRegExp(prefix)}original-body-[0-9a-f]{64}\\.txt$`, "u").test(name)) {
+    return "body"
+  }
   if (name === `${prefix}recovery-receipt.json`) return "receipt"
   return null
 }

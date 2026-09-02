@@ -36,6 +36,9 @@ const POLICY = {
 const CANONICAL_OPAQUE_TAG = "untagged-be0ff4bee4ba43b521a9"
 const RELEASE_TITLE = "Dawn v0.8.22"
 const GITHUB_BASE = "https://api.github.com/repos/cacheplane/dawnai"
+// Escape before interpolating into a RegExp: an unescaped "." in the hostname
+// would let these matchers accept more hosts than the exact API origin.
+const GITHUB_BASE_PATTERN = GITHUB_BASE.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 
 const ORIGINAL_ASSETS = Array.from({ length: 45 }, (_, index) => ({
   id: 101 + index,
@@ -961,7 +964,7 @@ test("apply composes with the real Task 4 writer over an in-memory quarantine tr
         })),
       )
     }
-    const download = new RegExp(`^${GITHUB_BASE}/releases/assets/(\\d+)$`, "u").exec(url)
+    const download = new RegExp(`^${GITHUB_BASE_PATTERN}/releases/assets/(\\d+)$`, "u").exec(url)
     if (download !== null) {
       const asset = currentSnapshot().assets.find(({ id }) => id === Number(download[1]))
       assert.ok(asset)
@@ -1644,7 +1647,7 @@ test("adapter canonical and duplicate snapshots compose directly into capture", 
     run: async () => `${MERGE_COMMIT_SHA}\n`,
     fetchImpl: async (url) => {
       const match = new RegExp(
-        `^${GITHUB_BASE}/releases/(\\d+)(/assets\\?per_page=100)?$`,
+        `^${GITHUB_BASE_PATTERN}/releases/(\\d+)(/assets\\?per_page=100)?$`,
         "u",
       ).exec(url)
       assert.ok(match, `unexpected URL ${url}`)
