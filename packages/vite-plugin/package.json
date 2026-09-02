@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Vite integration for Dawn route discovery and generated TypeScript types.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "vite",
+    "langgraph",
+    "type-generation",
+    "developer-tools"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/vite-plugin#readme",
   "repository": {
     "type": "git",

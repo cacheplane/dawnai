@@ -27,6 +27,11 @@ import {
   manifestArtifactEntries,
   readPublicSourceInventory,
 } from "./lib/docs-api-inventory.mjs"
+import {
+  resolvePublicPackageTiers,
+  validatePackageReadme,
+  validateRootReadme,
+} from "./lib/readme-contracts.mjs"
 
 const repoRoot = resolve(import.meta.dirname, "..")
 
@@ -4314,6 +4319,40 @@ if (firstNavRegistryMismatch !== undefined) {
   )
 }
 
+const { readPublicPackages } = await import("./lib/published-artifacts.mjs")
+const publicPackages = await readPublicPackages(repoRoot)
+const publicPackageNames = publicPackages.map(({ packageJson }) => packageJson.name)
+let publicPackageTiers
+try {
+  publicPackageTiers = resolvePublicPackageTiers(publicPackageNames)
+} catch (error) {
+  failures.push(`Public package README inventory: ${error.message}`)
+}
+
+failures.push(
+  ...validateRootReadme(readFileSync(resolve(repoRoot, "README.md"), "utf8")).map(
+    (failure) => `README.md: ${failure}`,
+  ),
+)
+
+if (publicPackageTiers) {
+  for (const { dir, packageJson } of publicPackages) {
+    const readmePath = relative(repoRoot, resolve(dir, "README.md"))
+    try {
+      const readme = readFileSync(resolve(dir, "README.md"), "utf8")
+      failures.push(
+        ...validatePackageReadme({
+          tier: publicPackageTiers[packageJson.name],
+          manifest: packageJson,
+          readme,
+        }).map((failure) => `${readmePath}: ${failure}`),
+      )
+    } catch (error) {
+      failures.push(`${readmePath}: unable to validate README (${error.message})`)
+    }
+  }
+}
+
 if (apiReferenceRegistry) {
   const { API_REFERENCE_PAGES, ARTIFACT_REGISTRY, PACKAGE_CATALOG } = apiReferenceRegistry
   failures.push(
@@ -4427,15 +4466,12 @@ if (apiReferenceRegistry) {
     failures.push(`API reference registries violate their closed schemas (${error.message})`)
   }
 
-  const { readPublicPackages } = await import("./lib/published-artifacts.mjs")
-  const publicPackages = await readPublicPackages(repoRoot)
   failures.push(
     ...analyzeApiReferenceManifests({
       manifests: publicPackages.map(({ packageJson }) => packageJson),
       artifacts: ARTIFACT_REGISTRY,
     }).failures,
   )
-  const publicPackageNames = publicPackages.map(({ packageJson }) => packageJson.name)
   const catalogPackageNames = PACKAGE_CATALOG.map(({ packageName }) => packageName)
   if (
     catalogPackageNames.length !== 21 ||

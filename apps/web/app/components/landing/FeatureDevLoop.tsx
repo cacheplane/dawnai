@@ -1,5 +1,8 @@
+import { demoMedia } from "../../lib/demo-media"
+import { ClipPlayer } from "../ui/ClipPlayer"
 import { DevLoopAnimation } from "./DevLoopAnimation"
 import { FeatureBlock } from "./FeatureBlock"
+import { MediaSwitcher } from "./MediaSwitcher"
 
 export function FeatureDevLoop() {
   return (
@@ -15,7 +18,29 @@ export function FeatureDevLoop() {
       ]}
       link={{ href: "/docs/dev-server", label: "See dev server docs" }}
       imageSide="left"
-      visual={<DevLoopAnimation />}
+      visual={
+        <MediaSwitcher
+          videoLabel="Video"
+          codeLabel="Dev loop"
+          ariaLabel="Dawn deterministic test"
+          video={
+            <figure>
+              <ClipPlayer clip={demoMedia.test} className="border border-divider shadow-sm" />
+              <figcaption className="mt-3 text-sm leading-6 text-ink-muted">
+                {demoMedia.test.caption}{" "}
+                <a
+                  href={demoMedia.test.transcript}
+                  className="font-medium text-ink underline underline-offset-4"
+                >
+                  Read the transcript
+                </a>
+                .
+              </figcaption>
+            </figure>
+          }
+          code={<DevLoopAnimation />}
+        />
+      }
     />
   )
 }

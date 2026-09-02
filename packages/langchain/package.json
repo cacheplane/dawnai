@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "LangChain adapters for Dawn agents, chains, tools, streaming, embeddings, and retry.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langchain",
+    "langgraph",
+    "ai-agents",
+    "streaming"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/langchain#readme",
   "repository": {
     "type": "git",

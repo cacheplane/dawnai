@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Command-line development, testing, build, and runtime tools for Dawn applications.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langgraph",
+    "cli",
+    "ai-agents",
+    "developer-tools"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/cli#readme",
   "repository": {
     "type": "git",

@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Filesystem and shell workspace contracts and tools for Dawn agent applications.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "ai-agents",
+    "filesystem",
+    "shell",
+    "developer-tools"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/workspace#readme",
   "repository": {
     "type": "git",

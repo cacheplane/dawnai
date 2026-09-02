@@ -1,257 +1,175 @@
-# README hero video — recording guide
+# Dawn product-loop recording guide
 
-Step-by-step shot list and post-production guide for re-shooting [hero.mp4](./hero.mp4). Keep this open on a second monitor while recording.
+This guide rebuilds the silent flagship product-loop video, its three proof
+clips, the GitHub/npm GIF, and four poster fallbacks from the current local Dawn
+source tree.
 
-**Tool:** Screen Studio
-**Output:** `docs/brand/hero.mp4`, ~24 seconds, MP4 1080p 60fps, target ≤ 4MB
+## Prerequisites
 
-Full design rationale: [docs/superpowers/specs/2026-05-11-readme-hero-video-design.md](../superpowers/specs/2026-05-11-readme-hero-video-design.md)
+- Node.js 24 or newer. The capture summary records the exact version.
+- Corepack with the repository's exact pnpm 10.33.0.
+- Playwright Chromium installed for `@playwright/test` 1.62.1.
+- ffmpeg and ffprobe with `libx264` and `libvpx-vp9`; these assets are tested
+  with version 8.1.1. The checked-in `sharp` development dependency encodes the
+  WebP poster after ffmpeg extracts its exact source frame.
+- Repository dependencies installed and enough temporary disk space for a local
+  generated research workspace and raw recording.
 
----
+Run every command from the repository root.
 
-## Pre-shoot setup (20 min, do once)
+## Capture and encode
 
-### Mac
-
-- [ ] Hide Dock: `Cmd-Opt-D`
-- [ ] Enable macOS Focus mode (no notifications)
-- [ ] Close every app you don't need
-- [ ] Plug in (recording is CPU-heavy)
-- [ ] Make sure you have ~5 minutes of uninterrupted time per take
-
-### VS Code
-
-- [ ] Theme: **Tokyo Night** or **GitHub Dark Default** (Settings → Color Theme)
-- [ ] Font: **JetBrains Mono** or **Fira Code**, size **16**
-- [ ] Disable minimap: `Cmd-Shift-P` → "Toggle Minimap"
-- [ ] Disable breadcrumbs: View → Appearance → Breadcrumbs
-- [ ] Keep file Explorer visible (left sidebar)
-- [ ] Zoom level reset: `Cmd-0`
-- [ ] Activity Bar: keep visible only if uncluttered; otherwise hide
-
-### iTerm (or your terminal)
-
-- [ ] Theme: dark, matched to VS Code palette. Suggested: **Tokyo Night** or **Dracula Pro**
-- [ ] Font: same as VS Code, size **18–20** (larger than editor — terminal text reads at fullscreen)
-- [ ] Set a clean prompt. Open `~/.zshrc` or `~/.bashrc` and temporarily set:
-  ```bash
-  export PS1='my-app $ '
-  ```
-  (revert after recording)
-- [ ] Disable any verbose prompt plugins (starship, powerlevel10k status, etc.)
-- [ ] Window: full screen (not maximized — true fullscreen, `Cmd-Ctrl-F`)
-
-### Two project directories
-
-You'll record from two states. Set up both before recording.
-
-**Directory 1 — Empty (for scene 1):**
 ```bash
-mkdir -p /tmp/dawn-hero-scene1
-cd /tmp/dawn-hero-scene1
+pnpm media:readme:capture
 ```
-This is where you'll run `pnpm create dawn-ai-app my-app` during the take.
 
-**Directory 2 — Scaffolded (for scenes 2 and 3):**
+The command checks Node and pnpm before it builds the repository, creates the
+current research starter in a temporary directory with `--mode internal`,
+installs it, and runs the generated root `npm test` command. It then starts
+aimock, the Dawn server, and the generated Workbench on assigned loopback ports
+and records at 1440×810. ffmpeg is exercised when encoding begins; ffprobe is
+exercised by the local checker, so a missing executable, encoder, or probe fails
+at that boundary with the command's diagnostic.
+
+Aimock is the only model endpoint. Provider credentials are excluded from child
+environments and capture fails if the model base URL is not loopback. The
+generated Workbench has no demo or fixture mode and receives no marketing-only
+runtime branch.
+
+The browser compositor reads all five generated paths and the real test log. Its
+normalization is deliberately narrow: it strips ANSI, replaces the temporary
+workspace root with `<workspace>`, and replaces durations such as `143ms` or
+`1.27s` with `<time>`. Test names, PASS/FAIL text, commands, counts, ports, and
+all other numeric output remain untouched.
+
+After Playwright finalizes its recording and the capture summary is published,
+ffmpeg creates four timelines:
+
+1. `product-loop` — **Author** source → **Prove** test → **Run** Workbench →
+   Close, 24 seconds.
+2. `author` — **Author**, the generated route and shared tool, 9 seconds.
+3. `test` — **Prove**, the real offline passing result, 9 seconds.
+4. `run` — **Run**, completed Workbench run → browser reload → restored
+   transcript, 10 seconds.
+
+Sharp renders the three short label chips as transparent PNGs inside the
+gitignored run artifacts. ffmpeg overlays each chip only on its matching
+timeline segment; this needs neither ffmpeg `drawtext` nor a WebP encoder.
+Posters are extracted from the labeled MP4 output so the fallback and video
+always identify the same act.
+
+The raw scenes are shorter than their delivery windows. The encoder uses only
+frozen-frame holds around actual captured frames to make source, terminal, and
+restored transcript text legible. It does not synthesize product events. The Run
+clip demonstrates browser-reload restoration while the same Dawn server remains
+running; it does not claim a server restart.
+
+## Validate
+
 ```bash
-mkdir -p /tmp/dawn-hero-scene23
-cd /tmp/dawn-hero-scene23
-pnpm create dawn-ai-app my-app
-cd my-app
-pnpm install
+pnpm media:readme:check -- --local
 ```
-Open this directory in VS Code: `code /tmp/dawn-hero-scene23/my-app`. Pre-open the file `src/app/(public)/hello/[tenant]/index.ts` in the editor so it's ready for scene 2.
 
-### Pre-warm pnpm
+The checker invokes ffprobe with JSON output and verifies:
 
-- [ ] Run `pnpm create dawn-ai-app /tmp/dawn-hero-warmup` once to warm the registry cache, then `rm -rf /tmp/dawn-hero-warmup`. The real take will be fast.
+- exact 1440×810 16:9 geometry and 30 fps;
+- a 20–30 second flagship and 8–12 second derivatives;
+- H.264 MP4 and VP9 WebM for all four clips;
+- no MP4 or WebM above 2,000,000 bytes and no GIF above 4,000,000 bytes;
+- all four WebP posters and the Markdown transcript;
+- captions that describe the existing workspace footage without claiming the
+  scaffold command is shown.
 
-### Environment
+It prints one `PASS` line for each contract group and exits nonzero if any
+contract fails.
 
-- [ ] Verify `OPENAI_API_KEY` is set in your shell. Source `/Users/blove/repos/dawn/.env` if needed.
-- [ ] Dry-run scene 3 once to confirm the LLM call works end-to-end and produces an acceptable response.
+## Generated files
 
----
+The latest run has its own roots under:
 
-## Scene 1 — Scaffold (fullscreen terminal)
+```text
+docs/brand/demo/raw-recordings/runs/<run-id>/
+docs/brand/demo/artifacts/runs/<run-id>/
+```
 
-**Goal:** Show `pnpm create dawn-ai-app my-app` running from scratch.
+Its local MP4 and WebM files are in the run's `output/` directory. A gitignored
+`docs/brand/demo/artifacts/latest-media.json` pointer lets the local checker find
+the most recent successful encode. Posters and the GIF are first completed and
+validated in that run's `publication/` directory, then published together with
+the pointer using rollback backups. The checker requires exact run-scoped paths
+and verifies that the fixed poster/GIF hashes match the selected run. Raw
+recordings, logs, MP4, and WebM files are not committed.
 
-**Real recording time:** ~30s. Will be speed-ramped to ~8s in post.
+## Authorized publication convergence
 
-### Steps
+Preview the publication plan without credentials or remote I/O:
 
-1. Open iTerm, fullscreen.
-2. `cd /tmp/dawn-hero-scene1`
-3. Clear: `clear`
-4. **Start Screen Studio recording.**
-5. Wait 1 beat. Type at human pace:
-   ```
-   pnpm create dawn-ai-app my-app
-   ```
-6. Press Enter. Don't touch the keyboard while scaffold streams.
-7. When "Next steps:" block appears, wait 2 seconds. Don't touch the keyboard.
-8. **Stop Screen Studio recording.**
+```bash
+pnpm media:readme:upload -- --dry-run
+```
 
-### What good looks like
+The local checker records a SHA-256 digest for each validated MP4/WebM alongside
+its ffprobe and byte-size facts. An authorized `--apply` re-reads all eight
+run-scoped files and requires each in-memory body's size and SHA-256 digest to
+match those validation-time facts. No upload starts unless the entire preflight
+succeeds. Every upload then uses its stable `demo/*.mp4` or `demo/*.webm` path
+with overwrites enabled and random suffixes disabled.
 
-- Clean prompt visible at top (`my-app $ ` or your equivalent)
-- Scaffold output is the entire visible content
-- No notifications, no other windows, no Dock peek
-- "Next steps:" block visible at the end
+If an upload fails or returns a mismatched URL, the command reports three exact
+sets: the prior stable paths whose upload calls are confirmed complete, the
+current stable path as potentially completed or mutated, and the later stable
+paths as definitely pending. The media catalog is withheld. The command does
+not claim or attempt remote rollback.
 
-### Reshoot if
+If a `HEAD` check fails after all eight upload calls return, all eight remote
+paths may have changed while the verification outcome for the current public
+URL remains uncertain; the catalog is again withheld. Use exactly one
+credential mode: the preferred short-lived `VERCEL_OIDC_TOKEN` together with
+`BLOB_STORE_ID`, or the legacy `BLOB_READ_WRITE_TOKEN`. The OIDC store ID and
+the store ID encoded in a canonical legacy token must both match the authorized
+Dawn media store. In either mode, `DAWN_MEDIA_PUBLIC_BASE_URL` is pinned to that
+store's exact public origin. Credential values with surrounding whitespace are
+rejected before local validation or remote I/O.
 
-- A notification flashes
-- You typo'd and used backspace (jarring in the gif)
-- Scaffold takes > 45s real time (network issue — wait and retry)
+Vercel issues local OIDC tokens only for the development environment through
+`vercel env pull`, even when another environment was previously pulled. The
+Dawn Blob store connection must therefore include the development environment
+for local publication. Pull the token into an untracked or temporary environment
+file, export it without printing it, and remove that file after the command. The
+preferred invocation is:
 
----
+```bash
+VERCEL_OIDC_TOKEN='<short-lived OIDC token>' \
+BLOB_STORE_ID='store_9RQ8eZyGheVy0wOp' \
+DAWN_MEDIA_PUBLIC_BASE_URL='https://9rq8ezyghevy0wop.public.blob.vercel-storage.com' \
+pnpm media:readme:upload -- --apply
+```
 
-## Scene 2 — Editor reveal (fullscreen VS Code)
+With that correct credential/base/store pairing, rerunning the same authorized
+command is the safe convergence path: it performs a fresh complete preflight,
+overwrites all eight stable paths idempotently, verifies every public URL with
+`HEAD`, and only then atomically publishes the catalog. Equivalently, an
+operator may re-verify all eight public URLs before publishing the catalog
+through the same atomic path.
 
-**Goal:** Show the scaffolded `index.ts` with the 8-line `agent({...})` block. Eye lands on the code; cursor highlights the agent block.
+Committed outputs are:
 
-**Real recording time:** ~7s.
+```text
+docs/brand/product-loop.gif
+apps/web/public/demo/product-loop-poster.webp
+apps/web/public/demo/author-poster.webp
+apps/web/public/demo/test-poster.webp
+apps/web/public/demo/run-poster.webp
+apps/web/app/lib/demo-media.json
+docs/brand/demo/transcript.md
+```
 
-### Steps
+## Visual inspection
 
-1. Open VS Code on `/tmp/dawn-hero-scene23/my-app`. File `src/app/(public)/hello/[tenant]/index.ts` should already be open.
-2. Hide any panels except the editor and left file tree (`Cmd-J` to close terminal, `Cmd-B` only if file tree is closed).
-3. **Start Screen Studio recording.**
-4. Wait 1 second (let the viewer see the scene).
-5. Click anywhere in the editor to ensure focus.
-6. Triple-click the `agent(` line, then drag down to select through the closing `})`. Or `Cmd-A` to select all then `Cmd-D` then `Cmd-Shift-K` — whatever produces a clean selection of just the `agent({...})` block.
-7. Hold the selection visible for 2 seconds.
-8. **Stop Screen Studio recording.**
-
-### What good looks like
-
-- File tree (left) shows `src/app/(public)/hello/[tenant]/` expanded with `index.ts`, `tools/`, `state.ts`, `middleware.ts` visible
-- File content (right) shows the full `agent({...})` block in the upper portion
-- Selection highlight is clean (no partial-line selections, no extra whitespace selected)
-
-### Reshoot if
-
-- File tree shows your home directory or any path leak
-- Selection is jittery or includes random whitespace lines
-- Any VS Code popups (extensions update, etc.) appear
-
----
-
-## Scene 3 — Run (fullscreen terminal)
-
-**Goal:** Show `dawn run` invoking the route, real LLM response streams.
-
-**Real recording time:** ~7s.
-
-### Steps
-
-1. Open iTerm, fullscreen.
-2. `cd /tmp/dawn-hero-scene23/my-app`
-3. Clear: `clear`
-4. **Start Screen Studio recording.**
-5. Wait 1 beat. Type at human pace:
-   ```
-   echo '{"tenant":"acme"}' | pnpm exec dawn run "/hello/[tenant]"
-   ```
-6. Press Enter. Don't touch the keyboard while response streams.
-7. When response is fully streamed, wait 2 seconds. Don't touch the keyboard.
-8. **Stop Screen Studio recording.**
-
-### What good looks like
-
-- Streaming response, not a single chunk — the eye sees tokens arriving
-- Response is well-formed (greets the tenant, sounds natural)
-- Final response is no longer than ~3 lines (long responses don't fit)
-
-### Reshoot if
-
-- LLM responds with > 3 lines or refuses
-- Response is bland ("Hello, Acme!" alone is too thin)
-- Any error output appears
-
-### Tip
-
-If the response is bland, edit `src/app/(public)/hello/[tenant]/index.ts` in your scaffolded copy and tighten the `systemPrompt` (e.g. add "Be warm and specific. Mention one thing the {tenant} organization might care about. Under 30 words."). Re-record.
-
----
-
-## Post-production — Screen Studio timeline
-
-Once all three clips are recorded:
-
-1. **New Screen Studio project.** Drop all three clips on the timeline in order: scaffold, editor, run.
-2. **Background preset.** Select all three clips → apply **Dark Gradient** background, **40px padding**, **soft shadow**. Same preset on all three for visual continuity.
-3. **Scene 1 speed ramp.** Select scene 1 → split at the moment scaffold output starts → set the middle section to **2× speed** → re-split before "Next steps:" appears → leave that final 1.5s at 1× speed.
-4. **Zoom keyframes:**
-   - Scene 1: subtle zoom (1.1×) into the line where `pnpm create dawn-ai-app my-app` is typed, hold ~1s, then zoom out.
-   - Scene 2: smooth zoom (1.3×) into the `agent({...})` block when the selection appears. Hold until cut.
-   - Scene 3: subtle zoom (1.15×) on the first streamed tokens of the response. Hold until cut.
-5. **Transitions.** Cross-dissolve **0.3s** between scenes 1→2 and 2→3.
-6. **Closing text overlay.** On the last 2 seconds of scene 3:
-   - Text: **"8 lines of code → a real LangGraph agent"**
-   - Position: lower third of the frame, centered
-   - Font: system default sans (Inter / SF Pro), bold, white with subtle drop shadow
-   - Animation: fade in **0.3s**, hold **1.5s**, fade out **0.3s**
-
-### Alternative closing lines (pick whichever feels right at this step)
-
-- "8 lines of code → a real LangGraph agent"
-- "From zero to LLM in 24 seconds"
-- "No graph wiring. No deploy config. Just `agent({...})`."
-
----
-
-## Export
-
-Screen Studio → Export:
-
-- Format: **MP4**
-- Resolution: **1080p**
-- Frame rate: **60 fps**
-- Quality: **Web (recommended)** preset
-
-Save to: `~/Desktop/dawn-hero.mp4` before moving it into the repo.
-
-### Check before saving
-
-- [ ] File size < 4MB (ideal) or < 8MB (hard ceiling). If over, drop to 30fps or use Web Compressed.
-- [ ] Total duration is **22–26 seconds**.
-- [ ] No artifacts at scene transitions.
-- [ ] Closing text overlay reads cleanly at 1080p.
-- [ ] Plays clean in QuickTime preview.
-
----
-
-## Hand-off
-
-When the MP4 is ready, use this note:
-
-> `dawn-hero.mp4 is at /Users/blove/Desktop/dawn-hero.mp4`
-
-Next steps:
-1. Move the file into `docs/brand/hero.mp4`
-2. Delete the obsolete VHS infra (stub, capture script, .tape, fixture, gif, build-gif.sh)
-3. Update [README.md](../../README.md) to embed via `<video>` tag
-4. Update [CONTRIBUTORS.md](../../CONTRIBUTORS.md) and [docs/brand/README.md](./README.md)
-5. Commit, push, open the PR, watch CI, merge on green
-
----
-
-## Troubleshooting
-
-**LLM response is too long / weird.**
-Edit the scaffolded `index.ts`'s `systemPrompt` to constrain the output (e.g. "Reply in one warm sentence under 25 words."). Re-record scene 3.
-
-**Screen Studio export file is huge.**
-Drop to 30fps or use the Web Compressed preset. If still > 8MB, reduce scene 1's real time by trimming more of the install output before speed-ramping.
-
-**iTerm prompt shows your full path on first line.**
-Reset `PS1` temporarily as noted in setup. After recording revert your shell config.
-
-**File tree in scene 2 leaks your home path.**
-Open the project as its own workspace (`File → Open Workspace`, pick `/tmp/dawn-hero-scene23/my-app`) so the tree root is `my-app/`.
-
-**Scaffold step takes 60+ seconds.**
-Pre-warm pnpm cache. If still slow, you can record once, then in Screen Studio split out the slow chunk and apply 4× speed to just that segment.
+Inspect every poster and representative frames from every local MP4/WebM at full
+1440×810 size and at reduced README/mobile widths. Confirm that file paths, the
+`npm test` result, `searchCorpus`, `readDoc`, the cited answer, browser reload,
+restored transcript, and the **Author**, **Prove**, and **Run** labels correspond
+exactly to
+[the transcript](./demo/transcript.md). No remote upload or store mutation is
+part of regeneration or local validation.

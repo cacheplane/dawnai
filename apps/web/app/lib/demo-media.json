@@ -1,0 +1,34 @@
+{
+  "productLoop": {
+    "mp4": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/product-loop.mp4",
+    "webm": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/product-loop.webm",
+    "poster": "/demo/product-loop-poster.webp",
+    "caption": "Author a file-system route, prove it with npm test, run it in the Dawn Workbench, then restore the same thread after a browser reload.",
+    "ariaLabel": "Dawn product loop: author, prove, run, reload, and restore",
+    "transcript": "https://github.com/cacheplane/dawnai/blob/main/docs/brand/demo/transcript.md#product-loop-24-seconds"
+  },
+  "author": {
+    "mp4": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/author.mp4",
+    "webm": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/author.webm",
+    "poster": "/demo/author-poster.webp",
+    "caption": "Inspect the generated research route, co-located route files, shared searchCorpus tool, and offline test harness.",
+    "ariaLabel": "Dawn Author clip: inspect a generated route and shared tool",
+    "transcript": "https://github.com/cacheplane/dawnai/blob/main/docs/brand/demo/transcript.md#author-clip-9-seconds"
+  },
+  "test": {
+    "mp4": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/test.mp4",
+    "webm": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/test.webm",
+    "poster": "/demo/test-poster.webp",
+    "caption": "Run npm test and see the deterministic research scenario pass without a provider key.",
+    "ariaLabel": "Dawn Prove clip: run the deterministic offline test",
+    "transcript": "https://github.com/cacheplane/dawnai/blob/main/docs/brand/demo/transcript.md#test-clip-9-seconds"
+  },
+  "run": {
+    "mp4": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/run.mp4",
+    "webm": "https://9rq8ezyghevy0wop.public.blob.vercel-storage.com/demo/run.webm",
+    "poster": "/demo/run-poster.webp",
+    "caption": "Complete a fixture-backed Workbench run, then use a browser reload to reopen the same thread and restore its checkpoint-backed transcript.",
+    "ariaLabel": "Dawn Run clip: reload and restore the same Workbench thread",
+    "transcript": "https://github.com/cacheplane/dawnai/blob/main/docs/brand/demo/transcript.md#run-clip-10-seconds"
+  }
+}

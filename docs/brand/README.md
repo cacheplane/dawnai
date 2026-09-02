@@ -1,6 +1,6 @@
 # Brand assets
 
-The Dawn logos and the README demo gif live here.
+The Dawn logos and reproducible product-loop media live here.
 
 ## Logos
 
@@ -8,49 +8,55 @@ The Dawn logos and the README demo gif live here.
 - `dawn-logo-horizontal-white-on-black.png` — inverted, dark background.
 - `dawn-social-avatar-white-on-black-1024.png` — square social/avatar.
 
-## README demo gif
+## Product-loop media
 
-- `quickstart.gif` — the embedded gif in the root README.
-- `quickstart.tape` — the [VHS](https://github.com/charmbracelet/vhs) script that produces it.
-- `quickstart-fixture.json` — a captured `POST /v1/chat/completions` response replayed by the stub so the gif is fully deterministic.
-- `stub-openai.mjs` — minimal Node HTTP server (no deps) that replays the fixture on a configurable port.
-- `capture-fixture.mjs` — one-shot script that scaffolds a temp Dawn app, calls real OpenAI through a recording proxy, and rewrites `quickstart-fixture.json`.
-- `build-gif.sh` — convenience driver that scaffolds a temp app, starts the stub, runs `vhs`, and cleans up.
+- `product-loop.gif` — committed 1440×810, 30 fps GitHub/npm animation.
+- `demo/transcript.md` — exact static walkthrough for the flagship and three
+  derivative clips.
+- `demo/scenario.mjs` — the canonical prompt and deterministic aimock fixture.
+- `demo/capture.mjs` — real internal scaffold, test, Workbench, and Playwright
+  capture orchestration.
+- `demo/encode.mjs` — product-loop, Author, Test, and Run timeline encoder.
+- `demo/check-media.mjs` — local codec, geometry, duration, size, poster,
+  transcript, and caption contract checker.
+- `../../apps/web/public/demo/*-poster.webp` — committed poster fallbacks.
 
-### Rebuild the gif
+MP4, WebM, raw Playwright recordings, test logs, summaries, and media manifests
+are generated under the gitignored `demo/artifacts/` and
+`demo/raw-recordings/` directories. Only the flagship GIF, four posters,
+transcript, and capture sources are committed.
 
-Requires `brew install vhs`.
+## Regenerate and validate
 
-```bash
-./docs/brand/build-gif.sh
-```
-
-That script:
-
-1. Builds `create-dawn-ai-app` if needed and scaffolds a fresh `basic` app into a temp dir.
-2. Symlinks it to `/tmp/dawn-demo-app` (the path the `.tape` references).
-3. Starts `stub-openai.mjs` on `127.0.0.1:4317` serving `quickstart-fixture.json`.
-4. Runs `vhs docs/brand/quickstart.tape`, which writes `docs/brand/quickstart.gif`.
-5. Cleans up the temp app, symlink, and stub.
-
-### Recapture the fixture
-
-Only needed if the captured response should change (different model output, new prompt). Requires `OPENAI_API_KEY` in the repo's `.env`.
+From the repository root:
 
 ```bash
-node docs/brand/capture-fixture.mjs
+pnpm media:readme:capture
+pnpm media:readme:check -- --local
 ```
 
-The capture script:
+See [recording-guide.md](./recording-guide.md) for prerequisites, the four
+timelines, deterministic capture boundaries, and asset inspection guidance.
+These commands create local assets only. They do not upload media or create a
+remote store.
 
-- Reads `OPENAI_API_KEY` from `.env`.
-- Starts a local recording proxy on `127.0.0.1:4318` that forwards `/v1/chat/completions` to `api.openai.com` and saves the response body.
-- Scaffolds a temp `basic` app, installs deps, points `OPENAI_BASE_URL` at the proxy, and runs `pnpm exec dawn run "/hello/[tenant]"` with a JSON input on stdin.
-- Writes `{ contentType, body }` to `docs/brand/quickstart-fixture.json`.
-- Cleans up the temp app.
+## Determinism and truthfulness
 
-The fixture preserves the upstream `Content-Type`, so SSE streaming replays correctly through the stub.
+The capture creates the current local research starter in internal mode, runs
+its real `npm test` path, and drives the generated Workbench against aimock on a
+loopback URL. Provider credentials are removed from child environments. The
+Workbench has no demo or fixture mode; only its model endpoint is redirected by
+the capture process to the deterministic fixture service.
 
-### Determinism mechanism
+The Author and Test compositors display generated source and real command output.
+Normalization strips ANSI, replaces the temporary workspace root with
+`<workspace>`, and replaces duration fields with `<time>`; it preserves test
+names, PASS/FAIL text, commands, counts, ports, and other numeric output.
 
-`@dawn-ai/langchain`'s `ChatOpenAI` honors `OPENAI_BASE_URL`. The `.tape` sets that env var to `http://127.0.0.1:4317`, so every recording reads the same fixture instead of calling OpenAI. No flaky live LLM responses; no API key needed to rebuild the gif.
+Because the raw captured scenes are intentionally brief, encoding uses honest
+frozen-frame holds around those same frames for legibility. It never fabricates
+a source file, test result, tool call, response, reload, or restored state.
+Sharp renders deterministic **Author**, **Prove**, and **Run** label chips into
+the ignored run artifacts; ffmpeg composites them over the matching captured
+segments. Posters are extracted from the labeled MP4 output, so their act and
+footage remain in sync without changing Dawn runtime behavior.

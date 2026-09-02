@@ -69,6 +69,10 @@ const {
 
 const tempRoots = []
 const workflowExpression = (value) => `\${{ ${value} }}`
+const validDiscoveryMetadata = {
+  description: "A complete public package used to validate publication metadata.",
+  keywords: ["dawn", "typescript", "testing"],
+}
 const typescriptPackagePath = fileURLToPath(import.meta.resolve("typescript/package.json"))
 const typescriptPackage = JSON.parse(readFileSync(typescriptPackagePath, "utf8"))
 const typescriptCompilerPath = resolvePackageBinPath(
@@ -2480,6 +2484,7 @@ describe("validatePackageMetadata", () => {
     const failures = validatePackageMetadata("@dawn-ai/demo", {
       name: "@dawn-ai/demo",
       version: "1.0.0",
+      ...validDiscoveryMetadata,
       license: "MIT",
       repository: {
         type: "git",
@@ -2496,12 +2501,36 @@ describe("validatePackageMetadata", () => {
     assert.deepEqual(failures, [])
   })
 
+  it("requires npm discovery metadata", () => {
+    const failures = validatePackageMetadata("@dawn-ai/demo", {
+      name: "@dawn-ai/demo",
+      version: "1.0.0",
+      license: "MIT",
+      repository: {
+        type: "git",
+        url: "git+https://github.com/cacheplane/dawnai.git",
+      },
+      homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/demo#readme",
+      bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
+      engines: { node: ">=22.13.0" },
+      publishConfig: { access: "public" },
+      exports: { ".": "./dist/index.js" },
+      types: "./dist/index.d.ts",
+    })
+
+    assert.deepEqual(failures, [
+      "@dawn-ai/demo: package.json description must be a string of 30-180 characters",
+      "@dawn-ai/demo: package.json keywords must contain 3-8 values",
+    ])
+  })
+
   it("rejects package metadata with mismatched name or version", () => {
     const failures = validatePackageMetadata(
       "@dawn-ai/demo",
       {
         name: "@dawn-ai/other",
         version: "1.0.1",
+        ...validDiscoveryMetadata,
         license: "MIT",
         repository: {
           type: "git",
@@ -2527,6 +2556,7 @@ describe("validatePackageMetadata", () => {
     const failures = validatePackageMetadata("@dawn-ai/config-biome", {
       name: "@dawn-ai/config-biome",
       version: "1.0.0",
+      ...validDiscoveryMetadata,
       license: "MIT",
       repository: {
         type: "git",
@@ -2553,6 +2583,7 @@ describe("validatePackageMetadata", () => {
     const failures = validatePackageMetadata("@dawn-ai/inspector", {
       name: "@dawn-ai/inspector",
       version: "1.0.0",
+      ...validDiscoveryMetadata,
       license: "MIT",
       repository: {
         type: "git",
@@ -2574,6 +2605,7 @@ describe("validatePackageMetadata", () => {
     const failures = validatePackageMetadata("@dawn-ai/nothing", {
       name: "@dawn-ai/nothing",
       version: "1.0.0",
+      ...validDiscoveryMetadata,
       license: "MIT",
       repository: {
         type: "git",
@@ -2594,6 +2626,7 @@ describe("validatePackageMetadata", () => {
     const failures = validatePackageMetadata("@dawn-ai/inspector", {
       name: "@dawn-ai/inspector",
       version: "1.0.0",
+      ...validDiscoveryMetadata,
       license: "MIT",
       repository: {
         type: "git",

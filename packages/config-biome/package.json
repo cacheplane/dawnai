@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Shared Biome configuration for Dawn TypeScript workspace packages.",
+  "keywords": [
+    "dawn",
+    "biome",
+    "linting",
+    "formatting",
+    "typescript",
+    "configuration"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/config-biome#readme",
   "repository": {
     "type": "git",

@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Postgres persistence for Dawn checkpoints, threads, and permission decisions.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "langgraph",
+    "postgres",
+    "persistence",
+    "ai-agents"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/postgres-storage#readme",
   "repository": {
     "type": "git",

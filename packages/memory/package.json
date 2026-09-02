@@ -4,6 +4,15 @@
   "private": false,
   "type": "module",
   "license": "MIT",
+  "description": "Long-term memory storage, ranking, recall, and distillation primitives for Dawn agents.",
+  "keywords": [
+    "dawn",
+    "typescript",
+    "ai-agents",
+    "memory",
+    "retrieval",
+    "llm"
+  ],
   "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/memory#readme",
   "repository": {
     "type": "git",

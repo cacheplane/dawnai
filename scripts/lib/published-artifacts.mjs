@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { NPM_AUDIT_VERIFIER } from "../release/npm-audit.mjs"
+import { validatePackageDiscoveryMetadata } from "./readme-contracts.mjs"
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 export const PUBLISHED_RELEASE_WORKFLOW = ".github/workflows/release.yml"
@@ -211,7 +212,7 @@ export function assertCleanDependencySpecs(packageName, packageJson) {
 }
 
 export function validatePackageMetadata(packageName, packageJson, expectedVersion) {
-  const failures = []
+  const failures = validatePackageDiscoveryMetadata(packageJson)
 
   for (const field of [
     "name",
