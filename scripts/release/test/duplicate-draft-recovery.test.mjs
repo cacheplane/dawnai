@@ -886,6 +886,92 @@ test("capture treats completed publish jobs without start timestamps as malforme
   )
 })
 
+test("capture requires calendar-valid run and job timestamps while accepting canonical boundaries", async () => {
+  for (const timestamp of [
+    "2026-02-31T00:00:00Z",
+    "2025-02-29T12:00:00.000Z",
+    "2026-01-01T24:00:00Z",
+  ]) {
+    const { reader } = captureReader({
+      candidateRuns: [
+        {
+          id: 700,
+          runAttempt: 1,
+          status: "completed",
+          conclusion: "failure",
+          headSha: POLICY.candidateSha,
+          createdAt: timestamp,
+          startedAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+    })
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => error.code === "RELEASE_RUNS_MALFORMED",
+    )
+
+    const { reader: jobReader } = captureReader({
+      jobs: [
+        {
+          id: 701,
+          runId: 700,
+          runAttempt: 1,
+          name: "publish-npm",
+          status: "completed",
+          conclusion: "failure",
+          startedAt: timestamp,
+          completedAt: timestamp,
+        },
+      ],
+    })
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader: jobReader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
+    )
+  }
+
+  const boundaryRun = {
+    id: 700,
+    runAttempt: 1,
+    status: "completed",
+    conclusion: "failure",
+    headSha: POLICY.candidateSha,
+    createdAt: "2024-02-29T23:59:59Z",
+    startedAt: "2024-02-29T23:59:59.001Z",
+    updatedAt: "2024-02-29T23:59:59.123Z",
+  }
+  const { reader } = captureReader({
+    candidateRuns: [boundaryRun],
+    jobs: [
+      {
+        id: 701,
+        runId: 700,
+        runAttempt: 1,
+        name: "publish-npm",
+        status: "queued",
+        conclusion: null,
+        startedAt: null,
+        completedAt: null,
+      },
+    ],
+  })
+  const evidence = await captureDuplicateDraftRecoveryEvidence({
+    reviewedCommit: MERGE_COMMIT_SHA,
+    reader,
+    now: () => Date.parse(RECOVERY_CAPTURED_AT),
+  })
+  assert.deepEqual(evidence.releaseRuns, [])
+})
+
 test("capture requires exact run identity, attempt coverage, and one publisher per attempt", async () => {
   const candidateRuns = [
     {

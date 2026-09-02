@@ -134,6 +134,10 @@ test("reviewed authority rejects ambiguity, later main, unmerged PRs, tree drift
     ["later main", { mainSha: "e".repeat(40) }],
     ["unequal trees", { headTree: "e".repeat(40) }],
     ["failed validate", { checkConclusion: "failure" }],
+    [
+      "calendar-invalid merge timestamp",
+      { pulls: [{ ...reviewedPull(), merged_at: "2026-02-31T00:00:00Z" }] },
+    ],
     ["duplicate check ID", { duplicateCheckId: true }],
     ["duplicate CI run ID", { duplicateCiRunId: true }],
   ]
@@ -315,6 +319,110 @@ test("Release and job observations reject malformed rows and incoherent terminal
     malformedRunReader.readReleaseRuns(),
     (error) => error.code === "RELEASE_RUNS_MALFORMED",
   )
+})
+
+test("remote timestamps require calendar-valid canonical ISO forms", async () => {
+  for (const timestamp of [
+    "2026-02-31T00:00:00Z",
+    "2025-02-29T12:00:00.000Z",
+    "2026-01-01T24:00:00Z",
+  ]) {
+    const reader = createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: async () =>
+        jsonResponse({
+          total_count: 1,
+          jobs: [job(11, "publish-npm", { started_at: timestamp, completed_at: timestamp })],
+        }),
+    })
+    await assert.rejects(
+      reader.readCandidatePublishJobs(10, 1),
+      (error) => error.code === "CANDIDATE_JOBS_MALFORMED",
+    )
+  }
+
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse({
+        total_count: 1,
+        jobs: [
+          job(11, "publish-npm", {
+            started_at: "2024-02-29T23:59:59Z",
+            completed_at: "2024-02-29T23:59:59.123Z",
+          }),
+        ],
+      }),
+  })
+  assert.equal(
+    (await reader.readCandidatePublishJobs(10, 1))[0].completedAt,
+    "2024-02-29T23:59:59.123Z",
+  )
+})
+
+test("GitHub responses cannot echo configured credentials through values or keys", async () => {
+  const token = "secret-token"
+  const jobsReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    token,
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse({
+        total_count: 2,
+        jobs: [
+          job(11, "publish-npm", {
+            status: "queued",
+            conclusion: null,
+            started_at: null,
+            completed_at: null,
+          }),
+          job(12, `prepare-${token}`),
+        ],
+      }),
+  })
+  const jobs = await jobsReader.readCandidatePublishJobs(10, 1)
+  assert.equal(JSON.stringify(jobs).includes(token), false)
+  assert.equal(jobs[1].name, "prepare-[REDACTED]")
+
+  const anonymousReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse({
+        total_count: 2,
+        jobs: [
+          job(11, "publish-npm", {
+            status: "queued",
+            conclusion: null,
+            started_at: null,
+            completed_at: null,
+          }),
+          job(12, `prepare-${token}`),
+        ],
+      }),
+  })
+  assert.equal((await anonymousReader.readCandidatePublishJobs(10, 1))[1].name, `prepare-${token}`)
+
+  const bodyReader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    token,
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse({
+        id: 260503756,
+        path: ".github/workflows/release.yml",
+        state: "disabled_manually",
+        [token]: "echo",
+      }),
+  })
+  await assert.rejects(bodyReader.readWorkflowState(), (error) => {
+    assert.equal(error.code, "RELEASE_WORKFLOW_MALFORMED")
+    assert.equal(JSON.stringify(error).includes(token), false)
+    assert.equal(error.message.includes(token), false)
+    return true
+  })
 })
 
 test("candidate jobs bind the run and exhaust every attempt through the current attempt", async () => {

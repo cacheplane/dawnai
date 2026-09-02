@@ -44,6 +44,7 @@ const TERMINAL_CONCLUSIONS = new Set([
 ])
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 const ASSET_NAME_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$/u
+const UNSAFE_REMOTE_KEYS = new Set(["__proto__", "constructor", "prototype"])
 
 export class DuplicateDraftRecoveryReadError extends Error {
   constructor(code, message) {
@@ -763,7 +764,8 @@ async function readExactJson(context, { path, operation, accept = "application/v
   ) {
     fail(`${operation.toUpperCase().replaceAll("-", "_")}_UNAVAILABLE`, `${operation} read failed`)
   }
-  return safeSnapshot(result.body, `${operation.toUpperCase().replaceAll("-", "_")}_MALFORMED`)
+  const malformedCode = `${operation.toUpperCase().replaceAll("-", "_")}_MALFORMED`
+  return safeRemoteSnapshot(result.body, context.token, malformedCode)
 }
 
 async function readStrictPages(context, { path, operation, field, requireTotalCount = false }) {
@@ -808,7 +810,7 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
       fail(`${operation}_MALFORMED`, `${operation.toLowerCase()} response is malformed`)
     }
     remainingBytes -= result.bodyBytes
-    const body = safeSnapshot(result.body, `${operation}_MALFORMED`)
+    const body = safeRemoteSnapshot(result.body, context.token, `${operation}_MALFORMED`)
     let pageRecords
     if (field === undefined) {
       if (!Array.isArray(body)) {
@@ -970,6 +972,39 @@ function safeSnapshot(value, code) {
   }
 }
 
+function safeRemoteSnapshot(value, token, code) {
+  try {
+    return canonicalRemoteJson(snapshotJson(value), token)
+  } catch {
+    fail(code, "Recovery read response is malformed")
+  }
+}
+
+function canonicalRemoteJson(value, token) {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value
+  if (typeof value === "string") {
+    return token === null ? value : value.split(token).join("[REDACTED]")
+  }
+  if (Array.isArray(value)) return value.map((item) => canonicalRemoteJson(item, token))
+  const normalized = {}
+  for (const key of Object.keys(value).sort()) {
+    if (
+      UNSAFE_REMOTE_KEYS.has(key) ||
+      /token|secret|authorization|cookie/iu.test(key) ||
+      (token !== null && key.includes(token))
+    ) {
+      throw new TypeError("Unsafe remote response key")
+    }
+    Object.defineProperty(normalized, key, {
+      value: canonicalRemoteJson(value[key], token),
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    })
+  }
+  return normalized
+}
+
 function assertSha(value, label) {
   if (!isSha(value)) throw new TypeError(`${label} is invalid`)
 }
@@ -987,8 +1022,13 @@ function isObject(value) {
 }
 
 function isTimestamp(value) {
+  if (typeof value !== "string" || !TIMESTAMP_PATTERN.test(value)) return false
+  const milliseconds = Date.parse(value)
+  if (!Number.isFinite(milliseconds)) return false
+  const canonical = new Date(milliseconds).toISOString()
   return (
-    typeof value === "string" && TIMESTAMP_PATTERN.test(value) && Number.isFinite(Date.parse(value))
+    value === canonical ||
+    (canonical.endsWith(".000Z") && value === canonical.replace(".000Z", "Z"))
   )
 }
 

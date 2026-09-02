@@ -1404,10 +1404,13 @@ function isRecord(value) {
 }
 
 function isCaptureTimestamp(value) {
+  if (typeof value !== "string" || !CAPTURE_TIMESTAMP_PATTERN.test(value)) return false
+  const milliseconds = Date.parse(value)
+  if (!Number.isFinite(milliseconds)) return false
+  const canonical = new Date(milliseconds).toISOString()
   return (
-    typeof value === "string" &&
-    CAPTURE_TIMESTAMP_PATTERN.test(value) &&
-    Number.isFinite(Date.parse(value))
+    value === canonical ||
+    (canonical.endsWith(".000Z") && value === canonical.replace(".000Z", "Z"))
   )
 }
 
