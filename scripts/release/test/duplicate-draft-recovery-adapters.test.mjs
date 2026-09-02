@@ -134,6 +134,8 @@ test("reviewed authority rejects ambiguity, later main, unmerged PRs, tree drift
     ["later main", { mainSha: "e".repeat(40) }],
     ["unequal trees", { headTree: "e".repeat(40) }],
     ["failed validate", { checkConclusion: "failure" }],
+    ["duplicate check ID", { duplicateCheckId: true }],
+    ["duplicate CI run ID", { duplicateCiRunId: true }],
   ]
   for (const [name, overrides] of cases) {
     await t.test(name, async () => {
@@ -178,7 +180,7 @@ test("production reads bind repository, workflow, immutable setting, annotated t
     if (url === `${BASE}/actions/workflows/260503756/runs?per_page=100`) {
       return jsonResponse({ total_count: 1, workflow_runs: [releaseRun(10)] })
     }
-    if (url === `${BASE}/actions/runs/10/attempts/1/jobs?per_page=100`) {
+    if (url === `${BASE}/actions/runs/10/jobs?filter=all&per_page=100`) {
       return jsonResponse({
         total_count: 1,
         jobs: [
@@ -315,10 +317,17 @@ test("Release and job observations reject malformed rows and incoherent terminal
   )
 })
 
-test("candidate jobs are exhaustive for the exact requested run attempt", async () => {
+test("candidate jobs bind the run and exhaust every attempt through the current attempt", async () => {
   const exactJobs = [
-    job(21, "prepare", { run_attempt: 2 }),
+    job(21, "prepare"),
     job(22, "publish-npm", {
+      status: "queued",
+      conclusion: null,
+      started_at: null,
+      completed_at: null,
+    }),
+    job(23, "prepare", { run_attempt: 2 }),
+    job(24, "publish-npm", {
       run_attempt: 2,
       status: "queued",
       conclusion: null,
@@ -330,25 +339,39 @@ test("candidate jobs are exhaustive for the exact requested run attempt", async 
     root: "/workspace",
     run: async () => `${REVIEWED_COMMIT}\n`,
     fetchImpl: async (url) => {
-      assert.equal(url, `${BASE}/actions/runs/10/attempts/2/jobs?per_page=100`)
+      assert.equal(url, `${BASE}/actions/runs/10/jobs?filter=all&per_page=100`)
       return jsonResponse({ total_count: exactJobs.length, jobs: exactJobs })
     },
   })
   assert.deepEqual(
-    (await exactReader.readCandidatePublishJobs(10, 2)).map(({ runAttempt, name }) => ({
+    (await exactReader.readCandidatePublishJobs(10, 2)).map(({ runId, runAttempt, name }) => ({
+      runId,
       runAttempt,
       name,
     })),
     [
-      { runAttempt: 2, name: "prepare" },
-      { runAttempt: 2, name: "publish-npm" },
+      { runId: 10, runAttempt: 1, name: "prepare" },
+      { runId: 10, runAttempt: 1, name: "publish-npm" },
+      { runId: 10, runAttempt: 2, name: "prepare" },
+      { runId: 10, runAttempt: 2, name: "publish-npm" },
     ],
   )
 
   for (const jobs of [
-    [job(31, "prepare"), job(32, "publish-npm")],
-    [job(41, "prepare", { run_attempt: 2 })],
-    [job(51, "publish-npm", { run_attempt: 2 }), job(52, "publish-npm", { run_attempt: 2 })],
+    [job(31, "publish-npm", { run_id: 11 }), job(32, "publish-npm", { run_attempt: 2 })],
+    [job(41, "publish-npm", { run_attempt: 2 })],
+    [job(42, "prepare"), job(43, "publish-npm", { run_attempt: 2 })],
+    [job(51, "publish-npm"), job(52, "publish-npm"), job(53, "publish-npm", { run_attempt: 2 })],
+    [
+      job(61, "publish-npm"),
+      job(62, "publish-npm", { run_attempt: 2 }),
+      job(63, "publish-npm", { run_attempt: 3 }),
+    ],
+    [
+      job(71, "publish-npm"),
+      job(72, "publish-npm", { run_attempt: 2 }),
+      job(72, "prepare", { run_attempt: 2 }),
+    ],
   ]) {
     const reader = createDuplicateDraftRecoveryReader({
       root: "/workspace",
@@ -557,7 +580,7 @@ test("recovery pagination rejects same-origin page jumps and total-count drift",
               jobs: Array.from({ length: 100 }, (_, index) => job(index + 1, "prepare")),
             },
             200,
-            { link: `<${BASE}/actions/runs/10/attempts/1/jobs?per_page=100&page=2>; rel="next"` },
+            { link: `<${BASE}/actions/runs/10/jobs?filter=all&per_page=100&page=2>; rel="next"` },
           ),
   })
   await assert.rejects(
@@ -628,7 +651,7 @@ test("recovery pagination exhausts hidden Release, asset, and job pages", async 
               jobs: Array.from({ length: 100 }, (_, index) => job(index + 1, "prepare")),
             },
             200,
-            { link: `<${BASE}/actions/runs/10/attempts/1/jobs?per_page=100&page=2>; rel="next"` },
+            { link: `<${BASE}/actions/runs/10/jobs?filter=all&per_page=100&page=2>; rel="next"` },
           ),
   })
   assert.equal((await jobReader.readCandidatePublishJobs(10, 1)).at(-1).name, "publish-npm")
@@ -670,6 +693,65 @@ test("terminal pagination rejects a later last page and accepts the current last
           ),
   })
   assert.deepEqual(await completeReader.listCandidateReleases(), [])
+})
+
+test("pagination requires a stable advertised last page across the operation", async () => {
+  for (const { firstLast, terminalLink } of [
+    {
+      firstLast: 3,
+      terminalLink: `<${BASE}/releases?per_page=100&page=2>; rel="last"`,
+    },
+    { firstLast: 2, terminalLink: null },
+  ]) {
+    const reader = createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: async (url) =>
+        url.endsWith("page=2")
+          ? jsonResponse(
+              [releaseRow(101)],
+              200,
+              terminalLink === null ? {} : { link: terminalLink },
+            )
+          : jsonResponse(
+              Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+              200,
+              {
+                link: [
+                  `<${BASE}/releases?per_page=100&page=2>; rel="next"`,
+                  `<${BASE}/releases?per_page=100&page=${firstLast}>; rel="last"`,
+                ].join(", "),
+              },
+            ),
+    })
+    await assert.rejects(
+      reader.listCandidateReleases(),
+      (error) => error.code === "PAGINATION_DRIFT",
+    )
+  }
+})
+
+test("Release pagination rejects a repeated unrelated ID on a later page", async () => {
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) =>
+      url.endsWith("page=2")
+        ? jsonResponse([releaseRow(50)], 200, {
+            link: `<${BASE}/releases?per_page=100&page=2>; rel="last"`,
+          })
+        : jsonResponse(
+            Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+            200,
+            {
+              link: [
+                `<${BASE}/releases?per_page=100&page=2>; rel="next"`,
+                `<${BASE}/releases?per_page=100&page=2>; rel="last"`,
+              ].join(", "),
+            },
+          ),
+  })
+  await assert.rejects(reader.listCandidateReleases(), (error) => error.code === "PAGINATION_DRIFT")
 })
 
 test("recovery pagination enforces one cumulative response-byte budget", async () => {
@@ -717,6 +799,8 @@ function reviewedReader({
   mainSha = REVIEWED_COMMIT,
   headTree = TREE,
   checkConclusion = "success",
+  duplicateCheckId = false,
+  duplicateCiRunId = false,
 } = {}) {
   return createDuplicateDraftRecoveryReader({
     root: "/workspace",
@@ -736,7 +820,7 @@ function reviewedReader({
       }
       if (url === `${BASE}/commits/${REVIEWED_HEAD}/check-runs?per_page=100`) {
         return jsonResponse({
-          total_count: 1,
+          total_count: duplicateCheckId ? 2 : 1,
           check_runs: [
             {
               id: 1,
@@ -746,12 +830,24 @@ function reviewedReader({
               conclusion: checkConclusion,
               check_suite: { id: 77 },
             },
+            ...(duplicateCheckId
+              ? [
+                  {
+                    id: 1,
+                    name: "unrelated",
+                    head_sha: REVIEWED_HEAD,
+                    status: "completed",
+                    conclusion: "success",
+                    check_suite: { id: 78 },
+                  },
+                ]
+              : []),
           ],
         })
       }
       if (url === `${BASE}/actions/workflows/ci.yml/runs?head_sha=${REVIEWED_HEAD}&per_page=100`) {
         return jsonResponse({
-          total_count: 1,
+          total_count: duplicateCiRunId ? 2 : 1,
           workflow_runs: [
             {
               id: 2,
@@ -765,6 +861,22 @@ function reviewedReader({
               status: "completed",
               conclusion: checkConclusion,
             },
+            ...(duplicateCiRunId
+              ? [
+                  {
+                    id: 2,
+                    run_attempt: 1,
+                    name: "Unrelated",
+                    path: ".github/workflows/ci.yml",
+                    head_sha: REVIEWED_HEAD,
+                    head_branch: "reviewed-recovery",
+                    event: "workflow_dispatch",
+                    check_suite_id: 78,
+                    status: "completed",
+                    conclusion: "success",
+                  },
+                ]
+              : []),
           ],
         })
       }
@@ -818,6 +930,7 @@ function releaseRun(id) {
 function job(id, name, overrides = {}) {
   return {
     id,
+    run_id: 10,
     run_attempt: 1,
     name,
     status: "completed",

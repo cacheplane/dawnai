@@ -244,12 +244,12 @@ export function createDuplicateDraftRecoveryReader({
       assertPositiveInteger(runId, "candidate workflow run ID")
       assertPositiveInteger(runAttempt, "candidate workflow run attempt")
       const jobs = await readStrictPages(context, {
-        path: `/repos/${OWNER}/${REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+        path: `/repos/${OWNER}/${REPOSITORY}/actions/runs/${runId}/jobs?filter=all&per_page=100`,
         operation: "CANDIDATE_JOBS",
         field: "jobs",
         requireTotalCount: true,
       })
-      return deepFreeze(normalizeCandidateJobs(jobs, runAttempt))
+      return deepFreeze(normalizeCandidateJobs(jobs, runId, runAttempt))
     },
 
     async readNpmAbsence(name) {
@@ -301,8 +301,13 @@ export function createDuplicateDraftRecoveryReader({
         operation: "RELEASE_LIST",
       })
       const candidates = []
+      const releaseIds = new Set()
       for (const raw of releases) {
         const release = normalizeReleaseRow(raw)
+        if (releaseIds.has(release.id)) {
+          fail("PAGINATION_DRIFT", "Release inventory contains a repeated ID")
+        }
+        releaseIds.add(release.id)
         const marker = releaseMarker(release.body)
         if (
           marker === null &&
@@ -392,6 +397,8 @@ async function readRequiredCi(context, reviewedHeadSha) {
   ])
   const normalizedChecks = checks.map((check) => normalizeCheckRun(check, reviewedHeadSha))
   const normalizedWorkflows = workflows.map((run) => normalizeReviewedCiRun(run, reviewedHeadSha))
+  assertUniqueIds(normalizedChecks, "REVIEWED_VALIDATE_MALFORMED")
+  assertUniqueIds(normalizedWorkflows, "REVIEWED_VALIDATE_MALFORMED")
   const matchingWorkflows = normalizedWorkflows.filter(
     (run) =>
       run?.name === "CI" &&
@@ -500,20 +507,28 @@ function normalizeReleaseRuns(value) {
   return runs.sort((left, right) => left.id - right.id || left.runAttempt - right.runAttempt)
 }
 
-function normalizeCandidateJobs(value, expectedAttempt) {
+function normalizeCandidateJobs(value, expectedRunId, currentAttempt) {
   if (!Array.isArray(value) || value.length === 0) {
     fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
   }
   const ids = new Set()
+  const identities = new Set()
+  const attempts = new Set()
+  const publisherJobsByAttempt = new Map()
   const jobs = value.map((raw) => {
     const job = safeSnapshot(raw, "CANDIDATE_JOBS_MALFORMED")
+    const identity = `${job?.run_attempt}:${job?.id}`
     if (
       !isObject(job) ||
       !Number.isSafeInteger(job.id) ||
       job.id < 1 ||
       ids.has(job.id) ||
+      identities.has(identity) ||
+      !Number.isSafeInteger(job.run_id) ||
+      job.run_id !== expectedRunId ||
       !Number.isSafeInteger(job.run_attempt) ||
-      job.run_attempt !== expectedAttempt ||
+      job.run_attempt < 1 ||
+      job.run_attempt > currentAttempt ||
       !isBoundedText(job.name, 512) ||
       !JOB_STATUSES.has(job.status) ||
       !isNullableTimestamp(job.started_at) ||
@@ -524,8 +539,17 @@ function normalizeCandidateJobs(value, expectedAttempt) {
       fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
     ids.add(job.id)
+    identities.add(identity)
+    attempts.add(job.run_attempt)
+    if (job.name === "publish-npm") {
+      publisherJobsByAttempt.set(
+        job.run_attempt,
+        (publisherJobsByAttempt.get(job.run_attempt) ?? 0) + 1,
+      )
+    }
     return {
       id: job.id,
+      runId: job.run_id,
       runAttempt: job.run_attempt,
       name: job.name,
       status: job.status,
@@ -534,8 +558,13 @@ function normalizeCandidateJobs(value, expectedAttempt) {
       completedAt: job.completed_at,
     }
   })
-  if (jobs.filter(({ name }) => name === "publish-npm").length !== 1) {
-    fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow publish job identity is not exact")
+  if (attempts.size !== currentAttempt) {
+    fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow job attempt coverage is incomplete")
+  }
+  for (let attempt = 1; attempt <= currentAttempt; attempt += 1) {
+    if (!attempts.has(attempt) || publisherJobsByAttempt.get(attempt) !== 1) {
+      fail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow publish job identity is not exact")
+    }
   }
   return jobs.sort((left, right) => left.runAttempt - right.runAttempt || left.id - right.id)
 }
@@ -605,6 +634,12 @@ function normalizeReviewedCiRun(value, reviewedHeadSha) {
     fail("REVIEWED_VALIDATE_MALFORMED", "Reviewed CI workflow evidence is malformed")
   }
   return run
+}
+
+function assertUniqueIds(values, code) {
+  if (new Set(values.map(({ id }) => id)).size !== values.length) {
+    fail(code, "Recovery read contains duplicate record IDs")
+  }
 }
 
 async function normalizeReleaseSnapshot({
@@ -735,6 +770,7 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
   const records = []
   const seenUrls = new Set()
   let totalCount = null
+  let advertisedLastPage = null
   let url = `${API_ORIGIN}${path}`
   let remainingBytes = context.maxResponseBytes
   const startedAt = context.now()
@@ -812,10 +848,21 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
         fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
       }
     }
+    const last = links.get("last")
+    const observedLastPage =
+      last === undefined ? null : (normalizePaginationPage(last, path)?.page ?? null)
+    if (
+      (advertisedLastPage !== null && observedLastPage === null) ||
+      (advertisedLastPage !== null && observedLastPage !== advertisedLastPage)
+    ) {
+      fail("PAGINATION_DRIFT", "Recovery read pagination last page changed")
+    }
+    if (advertisedLastPage === null && observedLastPage !== null) {
+      advertisedLastPage = observedLastPage
+    }
     const next = links.get("next") ?? null
     if (next === null) {
-      const last = links.get("last")
-      if (last !== undefined && normalizePaginationPage(last, path)?.page !== page + 1) {
+      if (advertisedLastPage !== null && advertisedLastPage !== page + 1) {
         fail("PAGINATION_DRIFT", "Recovery read pagination is incomplete")
       }
       if (requireTotalCount && records.length !== totalCount) {
@@ -828,6 +875,9 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
     }
     const normalized = normalizePaginationUrl(next, path, page + 2)
     if (normalized === null) fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
+    if (advertisedLastPage !== null && page + 2 > advertisedLastPage) {
+      fail("PAGINATION_DRIFT", "Recovery read pagination is inconsistent")
+    }
     url = normalized
   }
   fail(`${operation}_OVER_LIMIT`, `${operation.toLowerCase()} read exceeds the page limit`)

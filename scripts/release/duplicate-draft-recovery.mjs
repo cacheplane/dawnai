@@ -165,6 +165,7 @@ export async function captureDuplicateDraftRecoveryEvidence({
   const candidateJobObservations = []
   for (const run of candidateRuns) {
     candidateJobObservations.push({
+      runId: run.id,
       runAttempt: run.runAttempt,
       jobs: await captureRead(
         reader,
@@ -174,8 +175,8 @@ export async function captureDuplicateDraftRecoveryEvidence({
       ),
     })
   }
-  for (const { jobs, runAttempt } of candidateJobObservations) {
-    assertNoStartedPublishJob(jobs, runAttempt)
+  for (const { jobs, runId, runAttempt } of candidateJobObservations) {
+    assertNoStartedPublishJob(jobs, runId, runAttempt)
   }
 
   const npmPackages = []
@@ -1023,29 +1024,36 @@ function assertUniqueRunIds(runs, label) {
   }
 }
 
-function assertNoStartedPublishJob(value, expectedAttempt) {
+function assertNoStartedPublishJob(value, expectedRunId, currentAttempt) {
   if (!Array.isArray(value) || value.length === 0) {
     captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
   }
   const ids = new Set()
+  const identities = new Set()
+  const attempts = new Set()
   const publishJobs = []
   for (const raw of value) {
     let job
     try {
       job = exactObject(
         raw,
-        ["id", "runAttempt", "name", "status", "conclusion", "startedAt", "completedAt"],
+        ["id", "runId", "runAttempt", "name", "status", "conclusion", "startedAt", "completedAt"],
         "candidate workflow job",
       )
     } catch {
       captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
+    const identity = `${job.runAttempt}:${job.id}`
     if (
       !Number.isSafeInteger(job.id) ||
       job.id < 1 ||
       ids.has(job.id) ||
+      identities.has(identity) ||
+      !Number.isSafeInteger(job.runId) ||
+      job.runId !== expectedRunId ||
       !Number.isSafeInteger(job.runAttempt) ||
-      job.runAttempt !== expectedAttempt ||
+      job.runAttempt < 1 ||
+      job.runAttempt > currentAttempt ||
       !isBoundedCaptureText(job.name, 512) ||
       !CAPTURE_JOB_STATUSES.has(job.status) ||
       !isNullableCaptureTimestamp(job.startedAt) ||
@@ -1060,12 +1068,25 @@ function assertNoStartedPublishJob(value, expectedAttempt) {
       captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
     }
     ids.add(job.id)
+    identities.add(identity)
+    attempts.add(job.runAttempt)
     if (job.name === "publish-npm") publishJobs.push(job)
   }
-  if (publishJobs.length !== 1) {
-    captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow publish job identity is not exact")
+  if (attempts.size !== currentAttempt) {
+    captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow job attempt coverage is incomplete")
   }
-  if (publishJobs[0].startedAt !== null) {
+  for (let attempt = 1; attempt <= currentAttempt; attempt += 1) {
+    if (
+      !attempts.has(attempt) ||
+      publishJobs.filter((job) => job.runAttempt === attempt).length !== 1
+    ) {
+      captureFail(
+        "CANDIDATE_JOBS_MALFORMED",
+        "Candidate workflow publish job identity is not exact",
+      )
+    }
+  }
+  if (publishJobs.some(({ startedAt }) => startedAt !== null)) {
     captureFail("CANDIDATE_PUBLISH_JOB_STARTED", "A candidate publish-npm job has already started")
   }
 }

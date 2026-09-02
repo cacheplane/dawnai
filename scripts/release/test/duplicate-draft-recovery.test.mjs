@@ -638,17 +638,7 @@ function captureReader({
     },
   ],
   runs = candidateRuns,
-  jobs = [
-    {
-      id: 701,
-      runAttempt: 1,
-      name: "publish-npm",
-      status: "queued",
-      conclusion: null,
-      startedAt: null,
-      completedAt: null,
-    },
-  ],
+  jobs = null,
   candidateReleases,
 } = {}) {
   const observation = recoveryObservation({ states })
@@ -680,7 +670,20 @@ function captureReader({
     },
     async readCandidatePublishJobs(runId, runAttempt) {
       calls.push(["readCandidatePublishJobs", runId, runAttempt])
-      return typeof jobs === "function" ? jobs(runId, runAttempt) : jobs
+      return jobs === null
+        ? Array.from({ length: runAttempt }, (_, index) => ({
+            id: runId * 10 + index + 1,
+            runId,
+            runAttempt: index + 1,
+            name: "publish-npm",
+            status: "queued",
+            conclusion: null,
+            startedAt: null,
+            completedAt: null,
+          }))
+        : typeof jobs === "function"
+          ? jobs(runId, runAttempt)
+          : jobs
     },
     async readNpmAbsence(name) {
       calls.push(["readNpmAbsence", name])
@@ -825,17 +828,21 @@ test("capture checks jobs for every observed candidate run and rejects started p
   ]
   const { reader, calls } = captureReader({
     candidateRuns,
-    jobs: (_runId, runAttempt) => [
-      {
-        id: 700 + runAttempt,
-        runAttempt,
-        name: "publish-npm",
-        status: runAttempt === 1 ? "queued" : "completed",
-        conclusion: runAttempt === 1 ? null : "failure",
-        startedAt: runAttempt === 1 ? null : RECOVERY_CAPTURED_AT,
-        completedAt: runAttempt === 1 ? null : RECOVERY_CAPTURED_AT,
-      },
-    ],
+    jobs: (runId, currentAttempt) =>
+      Array.from({ length: currentAttempt }, (_, index) => {
+        const runAttempt = index + 1
+        const startedEarlierAttempt = currentAttempt === 2 && runAttempt === 1
+        return {
+          id: runId * 10 + runAttempt,
+          runId,
+          runAttempt,
+          name: "publish-npm",
+          status: startedEarlierAttempt ? "completed" : "queued",
+          conclusion: startedEarlierAttempt ? "failure" : null,
+          startedAt: startedEarlierAttempt ? RECOVERY_CAPTURED_AT : null,
+          completedAt: startedEarlierAttempt ? RECOVERY_CAPTURED_AT : null,
+        }
+      }),
   })
   await assert.rejects(
     captureDuplicateDraftRecoveryEvidence({
@@ -859,6 +866,7 @@ test("capture treats completed publish jobs without start timestamps as malforme
     jobs: [
       {
         id: 702,
+        runId: 700,
         runAttempt: 1,
         name: "publish-npm",
         status: "completed",
@@ -878,7 +886,7 @@ test("capture treats completed publish jobs without start timestamps as malforme
   )
 })
 
-test("capture requires exactly one coherent publish job for the exact run attempt", async () => {
+test("capture requires exact run identity, attempt coverage, and one publisher per attempt", async () => {
   const candidateRuns = [
     {
       id: 800,
@@ -891,29 +899,34 @@ test("capture requires exactly one coherent publish job for the exact run attemp
       updatedAt: RECOVERY_CAPTURED_AT,
     },
   ]
-  const queuedPublish = {
-    id: 802,
-    runAttempt: 2,
+  const attemptOne = {
+    id: 801,
+    runId: 800,
+    runAttempt: 1,
     name: "publish-npm",
     status: "queued",
     conclusion: null,
     startedAt: null,
     completedAt: null,
   }
+  const attemptTwo = { ...attemptOne, id: 802, runAttempt: 2 }
   for (const jobs of [
-    [{ ...queuedPublish, runAttempt: 1 }],
+    [{ ...attemptOne, runId: 900 }, attemptTwo],
+    [attemptTwo],
     [
       {
-        ...queuedPublish,
-        id: 801,
+        ...attemptOne,
         name: "prepare",
         status: "completed",
         conclusion: "success",
         startedAt: RECOVERY_CAPTURED_AT,
         completedAt: RECOVERY_CAPTURED_AT,
       },
+      attemptTwo,
     ],
-    [queuedPublish, { ...queuedPublish, id: 803 }],
+    [attemptOne, attemptTwo, { ...attemptTwo, id: 803 }],
+    [attemptOne, attemptTwo, { ...attemptTwo, id: 804, runAttempt: 3 }],
+    [attemptOne, { ...attemptTwo, id: attemptOne.id }],
   ]) {
     const { reader } = captureReader({ candidateRuns, jobs })
     await assert.rejects(
@@ -926,7 +939,7 @@ test("capture requires exactly one coherent publish job for the exact run attemp
     )
   }
 
-  const { reader, calls } = captureReader({ candidateRuns, jobs: [queuedPublish] })
+  const { reader, calls } = captureReader({ candidateRuns, jobs: [attemptOne, attemptTwo] })
   await captureDuplicateDraftRecoveryEvidence({
     reviewedCommit: MERGE_COMMIT_SHA,
     reader,
