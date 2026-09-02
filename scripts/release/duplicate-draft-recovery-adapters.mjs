@@ -293,6 +293,7 @@ export function createDuplicateDraftRecoveryReader({
         releaseId,
         expectedOriginalBody,
         github,
+        token: context.token,
       })
     },
 
@@ -649,6 +650,7 @@ async function normalizeReleaseSnapshot({
   releaseId,
   expectedOriginalBody,
   github,
+  token,
 }) {
   const raw = safeSnapshot(release, "RELEASE_MALFORMED")
   if (
@@ -707,6 +709,12 @@ async function normalizeReleaseSnapshot({
         fail("RECOVERY_ASSET_BYTES_CONFLICT", "Recovery evidence asset bytes are not exact")
       }
       const bytes = Buffer.from(downloaded, "base64")
+      if (token !== null && bytes.includes(Buffer.from(token, "utf8"))) {
+        fail(
+          "RECOVERY_ASSET_CREDENTIAL_CONFLICT",
+          "Recovery evidence asset contains configured credentials",
+        )
+      }
       if (
         bytes.toString("base64") !== downloaded ||
         bytes.byteLength !== asset.size ||

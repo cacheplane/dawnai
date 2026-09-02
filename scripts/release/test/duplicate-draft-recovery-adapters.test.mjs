@@ -588,6 +588,45 @@ test("release snapshots read complete assets and required recovery bytes through
   assert.equal(Object.hasOwn(snapshot.assets[1], "bytes"), false)
 })
 
+test("downloaded recovery evidence rejects configured credential bytes and preserves anonymous bytes", async () => {
+  const releaseId = 379982100
+  const token = "secret-token"
+  const originalBody = "canonical body\n"
+  const receiptBytes = Buffer.from(`{"credential":"${token}"}\n`)
+  const receiptName = `dawn-v0.8.22-duplicate-${releaseId}-recovery-receipt.json`
+  const createReader = (configuredToken) =>
+    createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      ...(configuredToken === null ? {} : { token: configuredToken }),
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: async (url) => {
+        if (url === `${BASE}/releases/${releaseId}`) {
+          return jsonResponse(releaseFixture({ releaseId, body: originalBody }))
+        }
+        if (url === `${BASE}/releases/${releaseId}/assets?per_page=100`) {
+          return jsonResponse([asset(1, receiptName, receiptBytes)])
+        }
+        if (url === `${BASE}/releases/assets/1`) return binaryResponse(receiptBytes)
+        assert.fail(`unexpected URL ${url}`)
+      },
+    })
+
+  await assert.rejects(
+    createReader(token).readReleaseSnapshot(releaseId, { expectedOriginalBody: originalBody }),
+    (error) => {
+      assert.equal(error.code, "RECOVERY_ASSET_CREDENTIAL_CONFLICT")
+      assert.equal(JSON.stringify(error).includes(token), false)
+      assert.equal(error.message.includes(token), false)
+      return true
+    },
+  )
+
+  const anonymous = await createReader(null).readReleaseSnapshot(releaseId, {
+    expectedOriginalBody: originalBody,
+  })
+  assert.equal(anonymous.assets[0].bytes, receiptBytes.toString("utf8"))
+})
+
 test("release snapshots reject duplicate asset IDs and name collisions", async () => {
   for (const field of ["id", "name"]) {
     const first = asset(1, "first.tgz", Buffer.from("first"))
