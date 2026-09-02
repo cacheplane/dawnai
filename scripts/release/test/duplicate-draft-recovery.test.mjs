@@ -3,12 +3,15 @@ import { createHash } from "node:crypto"
 import test from "node:test"
 
 import {
+  canonicalDuplicateDraftEvidence,
   canonicalRecoveryNotice,
   canonicalRecoveryReceipt,
   classifyDuplicateDraft,
   DUPLICATE_DRAFT_RECOVERY_POLICY,
   originalBodyAssetName,
+  parseDuplicateDraftEvidence,
   recoveryReceiptAssetName,
+  verifyDuplicateDraftEvidence,
 } from "../duplicate-draft-recovery.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
 import { canonicalReleaseBody, parseReleaseMarker } from "../metadata.mjs"
@@ -524,3 +527,281 @@ test("rejects malformed canonical receipt and notice inputs", () => {
     undefined,
   )
 })
+
+const RECOVERY_NOW = Date.parse("2026-09-01T00:10:00.000Z")
+const RECOVERY_CAPTURED_AT = "2026-09-01T00:00:00.000Z"
+const REVIEWED_HEAD_SHA = "1".repeat(40)
+const REVIEWED_TREE_SHA = "2".repeat(40)
+const MERGE_COMMIT_SHA = "3".repeat(40)
+const TAG_OBJECT_SHA = "4".repeat(40)
+
+function recoveryObservation({
+  states = ["untouched", "untouched"],
+  capturedAt = RECOVERY_CAPTURED_AT,
+} = {}) {
+  return {
+    capturedAt,
+    reviewedAuthority: {
+      mergeCommitSha: MERGE_COMMIT_SHA,
+      mergeTreeSha: REVIEWED_TREE_SHA,
+      pullRequestNumber: 789,
+      reviewedHeadSha: REVIEWED_HEAD_SHA,
+      reviewedTreeSha: REVIEWED_TREE_SHA,
+      validateRunId: 987654321,
+    },
+    repository: { id: 424242, nameWithOwner: POLICY.repository, mainSha: MERGE_COMMIT_SHA },
+    workflow: { id: 260503756, state: "disabled_manually" },
+    immutableReleases: { enabled: true },
+    candidate: {
+      version: POLICY.version,
+      commitSha: POLICY.candidateSha,
+      tagObjectSha: TAG_OBJECT_SHA,
+    },
+    npm: {
+      packages: CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => ({
+        name,
+        version: POLICY.version,
+        status: "absent",
+      })),
+    },
+    releaseRuns: [],
+    releases: {
+      canonical: {
+        releaseId: POLICY.canonicalReleaseId,
+        tagName: `v${POLICY.version}`,
+        body: ORIGINAL_BODY,
+        marker: ORIGINAL_MARKER,
+        assets: ORIGINAL_ASSETS,
+      },
+      duplicates: POLICY.duplicates.map((duplicate, index) =>
+        recoverySnapshotForState(duplicate.releaseId, states[index]),
+      ),
+    },
+  }
+}
+
+function recoverySnapshotForState(releaseId, state) {
+  if (state === "untouched") return snapshot({}, releaseId)
+  if (state === "body-archived") return snapshot({ evidenceAssets: ["body"] }, releaseId)
+  const expected = expectedFor(releaseId)
+  const recoveryReceipt = { ...expected.recoveryReceipt, recoveryCommit: MERGE_COMMIT_SHA }
+  const receiptBytes = canonicalRecoveryReceipt(recoveryReceipt).toString("utf8")
+  const receiptSha256 = createHash("sha256").update(receiptBytes, "utf8").digest("hex")
+  if (state === "receipt-archived") {
+    return snapshot({ evidenceAssets: ["body", "receipt"], receiptBytes, receiptSha256 }, releaseId)
+  }
+  if (state === "quarantined") {
+    return snapshot(
+      {
+        quarantined: true,
+        evidenceAssets: ["body", "receipt"],
+        receiptBytes,
+        receiptSha256,
+        body: canonicalRecoveryNotice({
+          repository: POLICY.repository,
+          version: POLICY.version,
+          canonicalReleaseId: POLICY.canonicalReleaseId,
+          duplicateReleaseId: releaseId,
+          originalBodySha256: BODY_SHA256,
+          archiveAssetName: originalBodyAssetName(releaseId, BODY_SHA256),
+          receiptAssetName: recoveryReceiptAssetName(releaseId),
+          receiptSha256,
+        }),
+      },
+      releaseId,
+    )
+  }
+  throw new TypeError(`Unknown recovery test state: ${state}`)
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalize(value[key])]),
+    )
+  }
+  return value
+}
+
+test("seals exact canonical duplicate-draft evidence with derived recovery state", () => {
+  const observation = recoveryObservation({ states: ["untouched", "receipt-archived"] })
+  const bytes = canonicalDuplicateDraftEvidence(observation)
+  const evidence = parseDuplicateDraftEvidence(bytes)
+
+  assert.equal(bytes.toString("utf8"), `${JSON.stringify(canonicalize(evidence))}\n`)
+  assert.deepEqual(bytes, canonicalDuplicateDraftEvidence(reverseObjectOrder(observation)))
+  assert.deepEqual(Object.keys(evidence), [
+    "schemaVersion",
+    "capturedAt",
+    "reviewedAuthority",
+    "repository",
+    "workflow",
+    "immutableReleases",
+    "candidate",
+    "npm",
+    "releaseRuns",
+    "releases",
+  ])
+  assert.equal(evidence.schemaVersion, 1)
+  assert.equal(evidence.capturedAt, RECOVERY_CAPTURED_AT)
+  assert.deepEqual(
+    evidence.npm.packages.map(({ name }) => name),
+    CANONICAL_RELEASE_PACKAGE_ORDER,
+  )
+  assert.deepEqual(evidence.releaseRuns, [])
+  assert.equal(evidence.releases.canonical.releaseId, POLICY.canonicalReleaseId)
+  assert.deepEqual(
+    evidence.releases.duplicates.map(({ releaseId, state, remainingTransitions }) => [
+      releaseId,
+      state,
+      remainingTransitions,
+    ]),
+    [
+      [
+        POLICY.duplicates[0].releaseId,
+        "untouched",
+        ["archive-body", "archive-receipt", "quarantine"],
+      ],
+      [POLICY.duplicates[1].releaseId, "receipt-archived", ["quarantine"]],
+    ],
+  )
+  assert.equal(
+    evidence.releases.duplicates[0].originalBodySha256,
+    createHash("sha256").update(ORIGINAL_BODY, "utf8").digest("hex"),
+  )
+  assert.equal(evidence.releases.duplicates[0].baseAssetSetSha256, BASE_ASSET_SET_SHA256)
+  assert.equal(Object.isFrozen(evidence), true)
+  assert.equal(Object.isFrozen(evidence.releases.duplicates[0]), true)
+  assert.throws(() => {
+    evidence.releases.duplicates[0].state = "quarantined"
+  }, TypeError)
+})
+
+test("rejects noncanonical, unsafe, sparse, and caller-trusted duplicate evidence", () => {
+  const bytes = canonicalDuplicateDraftEvidence(recoveryObservation())
+  const evidence = parseDuplicateDraftEvidence(bytes)
+  const noncanonical = Buffer.from(`${JSON.stringify(evidence)}\n`, "utf8")
+  assert.throws(() => parseDuplicateDraftEvidence(noncanonical), /canonical/u)
+
+  const extra = structuredClone(evidence)
+  extra.repository.extra = true
+  assert.throws(() => canonicalDuplicateDraftEvidence(extra), /fields/u)
+
+  const accessor = recoveryObservation()
+  let accessed = false
+  Object.defineProperty(accessor.repository, "id", {
+    enumerable: true,
+    get() {
+      accessed = true
+      return 424242
+    },
+  })
+  assert.throws(() => canonicalDuplicateDraftEvidence(accessor), /Invalid field|unsafe/u)
+  assert.equal(accessed, false)
+
+  const sparse = recoveryObservation()
+  delete sparse.npm.packages[0]
+  assert.throws(() => canonicalDuplicateDraftEvidence(sparse), /Invalid array|package/u)
+
+  const colluding = structuredClone(evidence)
+  colluding.releases.duplicates[0].state = "quarantined"
+  assert.throws(() => canonicalDuplicateDraftEvidence(colluding), /state|derived/u)
+})
+
+test("verifies fresh evidence against an exact current observation and rejects time or observation drift", () => {
+  const observation = recoveryObservation({ states: ["body-archived", "quarantined"] })
+  const evidence = parseDuplicateDraftEvidence(canonicalDuplicateDraftEvidence(observation))
+  const report = verifyDuplicateDraftEvidence({
+    evidence,
+    current: observation,
+    now: () => RECOVERY_NOW,
+  })
+  assert.deepEqual(report, { schemaVersion: 1, status: "PASS" })
+  assert.equal(Object.isFrozen(report), true)
+  assert.deepEqual(
+    verifyDuplicateDraftEvidence({
+      evidence,
+      current: observation,
+      now: () => Date.parse("2026-09-01T00:15:00.000Z"),
+    }),
+    { schemaVersion: 1, status: "PASS" },
+  )
+
+  assert.throws(
+    () =>
+      verifyDuplicateDraftEvidence({
+        evidence,
+        current: observation,
+        now: () => Date.parse("2026-09-01T00:15:00.001Z"),
+      }),
+    /expired/u,
+  )
+  assert.throws(
+    () =>
+      verifyDuplicateDraftEvidence({
+        evidence,
+        current: observation,
+        now: () => Date.parse("2026-08-31T23:59:59.999Z"),
+      }),
+    /future/u,
+  )
+  const drifted = recoveryObservation({ states: ["receipt-archived", "quarantined"] })
+  assert.throws(
+    () => verifyDuplicateDraftEvidence({ evidence, current: drifted, now: () => RECOVERY_NOW }),
+    /drift/u,
+  )
+})
+
+test("retains immutable expired partial-state evidence while allowing a distinct fresh superseding value", () => {
+  const expired = parseDuplicateDraftEvidence(
+    canonicalDuplicateDraftEvidence(
+      recoveryObservation({
+        states: ["body-archived", "untouched"],
+        capturedAt: "2026-08-31T23:44:59.999Z",
+      }),
+    ),
+  )
+  assert.equal(Object.isFrozen(expired), true)
+  assert.equal(expired.releases.duplicates[0].state, "body-archived")
+  assert.throws(() => {
+    expired.releases.duplicates[0].remainingTransitions.pop()
+  }, TypeError)
+  assert.throws(
+    () =>
+      verifyDuplicateDraftEvidence({
+        evidence: expired,
+        current: recoveryObservation({
+          states: ["body-archived", "untouched"],
+          capturedAt: expired.capturedAt,
+        }),
+        now: () => RECOVERY_NOW,
+      }),
+    /expired/u,
+  )
+
+  const superseding = canonicalDuplicateDraftEvidence(
+    recoveryObservation({ states: ["receipt-archived", "untouched"] }),
+  )
+  assert.notDeepEqual(superseding, canonicalDuplicateDraftEvidence({ ...expired }))
+  const writeOnceValues = new Map([
+    ["duplicate-draft-evidence-20260831T234459999Z.json", expired],
+    ["duplicate-draft-evidence-20260901T000000000Z.json", parseDuplicateDraftEvidence(superseding)],
+  ])
+  assert.equal(writeOnceValues.size, 2)
+  assert.equal(writeOnceValues.get("duplicate-draft-evidence-20260831T234459999Z.json"), expired)
+})
+
+function reverseObjectOrder(value) {
+  if (Array.isArray(value)) return value.map(reverseObjectOrder)
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .reverse()
+        .map(([key, item]) => [key, reverseObjectOrder(item)]),
+    )
+  }
+  return value
+}

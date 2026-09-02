@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 
 import { snapshotJson } from "./adapter-normalize.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
 import { parseReleaseMarker } from "./metadata.mjs"
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
@@ -9,6 +10,43 @@ const ASSET_NAME_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$/u
 const MARKER_DELIMITER = "DAWN_RELEASE_CONTROLLER_MARKER"
 const MAX_NOTICE_BYTES = 16 * 1024
 const MAX_RECEIPT_BYTES = 64 * 1024
+const MAX_DUPLICATE_DRAFT_EVIDENCE_BYTES = 512 * 1024
+const DUPLICATE_EVIDENCE_FIELDS = [
+  "schemaVersion",
+  "capturedAt",
+  "reviewedAuthority",
+  "repository",
+  "workflow",
+  "immutableReleases",
+  "candidate",
+  "npm",
+  "releaseRuns",
+  "releases",
+]
+const DUPLICATE_OBSERVATION_FIELDS = DUPLICATE_EVIDENCE_FIELDS.filter(
+  (field) => field !== "schemaVersion",
+)
+const DUPLICATE_SOURCE_FIELDS = [
+  "releaseId",
+  "tagName",
+  "body",
+  "marker",
+  "assets",
+  "evidenceAssets",
+]
+const DUPLICATE_DERIVED_FIELDS = [
+  "originalBodySha256",
+  "originalAssets",
+  "baseAssetSetSha256",
+  "archiveAssetName",
+  "receiptAssetName",
+  "receiptSha256",
+  "receiptBytes",
+  "noticeBytes",
+  "state",
+  "remainingTransitions",
+]
+const MAX_DUPLICATE_EVIDENCE_AGE_MS = 15 * 60 * 1000
 
 export const DUPLICATE_DRAFT_RECOVERY_POLICY = deepFreeze({
   repository: "cacheplane/dawnai",
@@ -20,6 +58,60 @@ export const DUPLICATE_DRAFT_RECOVERY_POLICY = deepFreeze({
     { releaseId: 379986168, tagName: "untagged-20706099efa3c38335a8" },
   ],
 })
+
+/**
+ * Serialize the authority-bound recovery observation into its sole canonical
+ * representation. It performs no I/O and accepts neither credentials nor
+ * transport data.
+ */
+export function canonicalDuplicateDraftEvidence(value) {
+  const evidence = normalizeDuplicateDraftEvidence(value)
+  const bytes = Buffer.from(`${JSON.stringify(canonicalize(evidence))}\n`, "utf8")
+  if (bytes.byteLength > MAX_DUPLICATE_DRAFT_EVIDENCE_BYTES) {
+    throw new TypeError("Duplicate draft evidence exceeds its byte bounds")
+  }
+  return bytes
+}
+
+/** Parse only canonical, bounded evidence bytes and return an immutable value. */
+export function parseDuplicateDraftEvidence(bytes) {
+  const input = normalizeEvidenceBytes(bytes)
+  let parsed
+  try {
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(input))
+  } catch (error) {
+    throw new TypeError("Duplicate draft evidence is not valid UTF-8 JSON", { cause: error })
+  }
+  const evidence = normalizeDuplicateDraftEvidence(parsed)
+  const canonical = canonicalDuplicateDraftEvidence(evidence)
+  if (!canonical.equals(input)) throw new TypeError("Duplicate draft evidence is not canonical")
+  return deepFreeze(evidence)
+}
+
+/**
+ * Reparse the sealed value, verify its short validity interval, and prove a
+ * fresh observation derives byte-for-byte identical facts. Drift is never
+ * repaired or inferred by the verifier.
+ */
+export function verifyDuplicateDraftEvidence({ evidence, current, now = Date.now }) {
+  if (typeof now !== "function") throw new TypeError("Duplicate draft evidence clock is invalid")
+  const sealed = parseDuplicateDraftEvidence(canonicalDuplicateDraftEvidence(evidence))
+  const nowMs = now()
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+    throw new TypeError("Duplicate draft evidence time is invalid")
+  }
+  const capturedAtMs = Date.parse(sealed.capturedAt)
+  if (capturedAtMs > nowMs)
+    throw new Error("Duplicate draft evidence capture time is in the future")
+  if (nowMs - capturedAtMs > MAX_DUPLICATE_EVIDENCE_AGE_MS) {
+    throw new Error("Duplicate draft evidence has expired and must be recaptured")
+  }
+  const fresh = normalizeDuplicateDraftObservation(current, sealed.capturedAt)
+  if (!canonicalDuplicateDraftEvidence(fresh).equals(canonicalDuplicateDraftEvidence(sealed))) {
+    throw new Error("Duplicate draft evidence drifted from the fresh observation")
+  }
+  return deepFreeze({ schemaVersion: 1, status: "PASS" })
+}
 
 export function classifyDuplicateDraft(value, expected) {
   const snapshot = exactObject(
@@ -300,6 +392,337 @@ export function canonicalRecoveryNotice(input) {
     throw new Error("Recovery notice exceeds its byte limit")
   }
   return text
+}
+
+function normalizeDuplicateDraftEvidence(value) {
+  const source = snapshotJson(value)
+  if (!isRecord(source)) throw new TypeError("Duplicate draft evidence must be an object")
+  if (!Object.hasOwn(source, "schemaVersion")) return normalizeDuplicateDraftObservation(source)
+  exactObject(source, DUPLICATE_EVIDENCE_FIELDS, "duplicate draft evidence")
+  if (source.schemaVersion !== 1) throw new TypeError("Duplicate draft evidence schema is invalid")
+  const rawDuplicates = normalizeDuplicateEvidenceDuplicates(source.releases)
+  const rebuilt = normalizeDuplicateDraftObservation({
+    capturedAt: source.capturedAt,
+    reviewedAuthority: source.reviewedAuthority,
+    repository: source.repository,
+    workflow: source.workflow,
+    immutableReleases: source.immutableReleases,
+    candidate: source.candidate,
+    npm: source.npm,
+    releaseRuns: source.releaseRuns,
+    releases: { canonical: source.releases.canonical, duplicates: rawDuplicates },
+  })
+  if (!sameJson(source, rebuilt)) {
+    throw new TypeError("Duplicate draft evidence contains caller-trusted derived fields")
+  }
+  return rebuilt
+}
+
+function normalizeDuplicateDraftObservation(value, capturedAtOverride) {
+  const source = exactObject(value, DUPLICATE_OBSERVATION_FIELDS, "duplicate draft observation")
+  const capturedAt = normalizeCanonicalTimestamp(
+    capturedAtOverride === undefined ? source.capturedAt : capturedAtOverride,
+    "Duplicate draft evidence capture time",
+  )
+  if (capturedAtOverride !== undefined) {
+    normalizeCanonicalTimestamp(
+      source.capturedAt,
+      "Current duplicate draft observation capture time",
+    )
+  }
+  const reviewedAuthority = normalizeReviewedAuthority(source.reviewedAuthority)
+  const repository = normalizeRecoveryRepository(
+    source.repository,
+    reviewedAuthority.mergeCommitSha,
+  )
+  const workflow = normalizeRecoveryWorkflow(source.workflow)
+  const immutableReleases = normalizeImmutableReleases(source.immutableReleases)
+  const candidate = normalizeRecoveryCandidate(source.candidate)
+  const npm = normalizeNpmAbsence(source.npm, candidate.version)
+  const releaseRuns = normalizeReleaseRuns(source.releaseRuns)
+  const releases = normalizeRecoveryReleases(source.releases, { reviewedAuthority, candidate })
+  return {
+    schemaVersion: 1,
+    capturedAt,
+    reviewedAuthority,
+    repository,
+    workflow,
+    immutableReleases,
+    candidate,
+    npm,
+    releaseRuns,
+    releases,
+  }
+}
+
+function normalizeReviewedAuthority(value) {
+  const source = exactObject(
+    value,
+    [
+      "mergeCommitSha",
+      "mergeTreeSha",
+      "pullRequestNumber",
+      "reviewedHeadSha",
+      "reviewedTreeSha",
+      "validateRunId",
+    ],
+    "reviewed recovery authority",
+  )
+  assertGitSha(source.mergeCommitSha, "Recovery merge commit")
+  assertGitSha(source.mergeTreeSha, "Recovery merge tree")
+  assertGitSha(source.reviewedHeadSha, "Reviewed pull request head")
+  assertGitSha(source.reviewedTreeSha, "Reviewed pull request tree")
+  assertPositiveInteger(source.pullRequestNumber, "Reviewed pull request number")
+  assertPositiveInteger(source.validateRunId, "Reviewed validate run ID")
+  if (source.mergeTreeSha !== source.reviewedTreeSha) {
+    throw new TypeError("Reviewed and merged recovery trees must be identical")
+  }
+  return {
+    mergeCommitSha: source.mergeCommitSha,
+    mergeTreeSha: source.mergeTreeSha,
+    pullRequestNumber: source.pullRequestNumber,
+    reviewedHeadSha: source.reviewedHeadSha,
+    reviewedTreeSha: source.reviewedTreeSha,
+    validateRunId: source.validateRunId,
+  }
+}
+
+function normalizeRecoveryRepository(value, mergeCommitSha) {
+  const source = exactObject(value, ["id", "nameWithOwner", "mainSha"], "recovery repository")
+  assertPositiveInteger(source.id, "Recovery repository ID")
+  assertGitSha(source.mainSha, "Recovery repository main SHA")
+  if (
+    source.nameWithOwner !== DUPLICATE_DRAFT_RECOVERY_POLICY.repository ||
+    source.mainSha !== mergeCommitSha
+  ) {
+    throw new TypeError("Recovery repository identity is not exact")
+  }
+  return { id: source.id, nameWithOwner: source.nameWithOwner, mainSha: source.mainSha }
+}
+
+function normalizeRecoveryWorkflow(value) {
+  const source = exactObject(value, ["id", "state"], "recovery workflow")
+  if (source.id !== 260503756 || source.state !== "disabled_manually") {
+    throw new TypeError("Recovery workflow is not the disabled Release workflow")
+  }
+  return { id: 260503756, state: "disabled_manually" }
+}
+
+function normalizeImmutableReleases(value) {
+  const source = exactObject(value, ["enabled"], "immutable Releases evidence")
+  if (source.enabled !== true) throw new TypeError("Immutable Releases must be enabled")
+  return { enabled: true }
+}
+
+function normalizeRecoveryCandidate(value) {
+  const source = exactObject(value, ["version", "commitSha", "tagObjectSha"], "recovery candidate")
+  assertGitSha(source.tagObjectSha, "Recovery candidate annotated tag object")
+  if (
+    source.version !== DUPLICATE_DRAFT_RECOVERY_POLICY.version ||
+    source.commitSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha
+  ) {
+    throw new TypeError("Recovery candidate identity is not exact")
+  }
+  return { version: source.version, commitSha: source.commitSha, tagObjectSha: source.tagObjectSha }
+}
+
+function normalizeNpmAbsence(value, version) {
+  const source = exactObject(value, ["packages"], "npm absence evidence")
+  if (!Array.isArray(source.packages) || source.packages.length !== 21) {
+    throw new TypeError("npm absence evidence package inventory is invalid")
+  }
+  const packageOrder = CANONICAL_RELEASE_PACKAGE_ORDER
+  return {
+    packages: source.packages.map((entry, index) => {
+      const item = exactObject(entry, ["name", "version", "status"], "npm absence package")
+      if (
+        item.name !== packageOrder[index] ||
+        item.version !== version ||
+        item.status !== "absent"
+      ) {
+        throw new TypeError("npm absence evidence is not exact")
+      }
+      return { name: item.name, version: item.version, status: "absent" }
+    }),
+  }
+}
+
+function normalizeReleaseRuns(value) {
+  if (!Array.isArray(value) || value.length !== 0) {
+    throw new TypeError("Recovery evidence requires no release workflow runs")
+  }
+  return []
+}
+
+function normalizeRecoveryReleases(value, { reviewedAuthority, candidate }) {
+  const source = exactObject(value, ["canonical", "duplicates"], "recovery Releases evidence")
+  const canonical = normalizeCanonicalRecoveryRelease(source.canonical, candidate)
+  if (
+    !Array.isArray(source.duplicates) ||
+    source.duplicates.length !== DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.length
+  ) {
+    throw new TypeError("Recovery duplicate Release inventory is invalid")
+  }
+  const originalBodySha256 = sha256(canonical.body)
+  const originalAssets = canonical.assets.map(({ name, sha256: digest }) => ({
+    name,
+    sha256: digest,
+  }))
+  const baseAssetSetSha256 = assetSetSha256(canonical.assets)
+  const duplicates = source.duplicates.map((value, index) => {
+    const raw = exactObject(value, DUPLICATE_SOURCE_FIELDS, "recovery duplicate Release")
+    const configured = DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates[index]
+    if (raw.releaseId !== configured.releaseId || raw.tagName !== configured.tagName) {
+      throw new TypeError("Recovery duplicate Release order or identity is not exact")
+    }
+    const recoveryReceipt = {
+      repository: DUPLICATE_DRAFT_RECOVERY_POLICY.repository,
+      version: candidate.version,
+      candidateSha: candidate.commitSha,
+      recoveryCommit: reviewedAuthority.mergeCommitSha,
+      canonicalReleaseId: DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId,
+      duplicateReleaseId: raw.releaseId,
+      originalBodySha256,
+      baseAssetSetSha256,
+      archiveAsset: {
+        name: originalBodyAssetName(raw.releaseId, originalBodySha256),
+        sha256: originalBodySha256,
+      },
+    }
+    const receiptBytes = canonicalRecoveryReceipt(recoveryReceipt).toString("utf8")
+    const receiptSha256 = sha256Bytes(Buffer.from(receiptBytes, "utf8"))
+    const noticeBytes = canonicalRecoveryNotice({
+      repository: DUPLICATE_DRAFT_RECOVERY_POLICY.repository,
+      version: candidate.version,
+      canonicalReleaseId: DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId,
+      duplicateReleaseId: raw.releaseId,
+      originalBodySha256,
+      archiveAssetName: recoveryReceipt.archiveAsset.name,
+      receiptAssetName: recoveryReceiptAssetName(raw.releaseId),
+      receiptSha256,
+    })
+    const state = classifyDuplicateDraft(raw, {
+      releaseId: raw.releaseId,
+      tagName: raw.tagName,
+      canonicalBody: canonical.body,
+      canonicalMarker: canonical.marker,
+      originalBodySha256,
+      originalAssets: canonical.assets,
+      recoveryReceipt,
+      recoveryNotice: noticeBytes,
+    })
+    return {
+      ...raw,
+      originalBodySha256,
+      originalAssets,
+      baseAssetSetSha256,
+      archiveAssetName: recoveryReceipt.archiveAsset.name,
+      receiptAssetName: recoveryReceiptAssetName(raw.releaseId),
+      receiptSha256,
+      receiptBytes,
+      noticeBytes,
+      state,
+      remainingTransitions: remainingTransitions(state),
+    }
+  })
+  return { canonical, duplicates }
+}
+
+function normalizeCanonicalRecoveryRelease(value, candidate) {
+  const source = exactObject(
+    value,
+    ["releaseId", "tagName", "body", "marker", "assets"],
+    "canonical Release",
+  )
+  assertReleaseId(source.releaseId, "Canonical Release ID")
+  if (
+    source.releaseId !== DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ||
+    source.tagName !== `v${candidate.version}` ||
+    typeof source.body !== "string" ||
+    !Array.isArray(source.assets) ||
+    source.assets.length !== 45
+  ) {
+    throw new TypeError("Canonical Release identity is not exact")
+  }
+  const assets = normalizeAssets(source.assets, "canonical Release assets", false)
+  assertUniqueAssets(assets, "canonical Release assets")
+  let marker
+  try {
+    marker = parseReleaseMarker(source.body)
+  } catch (error) {
+    throw new TypeError("Canonical Release body is not a valid Dawn release body", { cause: error })
+  }
+  if (
+    !sameJson(marker, source.marker) ||
+    marker.phase !== "ESCROWED" ||
+    marker.version !== candidate.version ||
+    marker.commitSha !== candidate.commitSha ||
+    marker.tag !== source.tagName ||
+    marker.baseAssetSetSha256 !== assetSetSha256(assets)
+  ) {
+    throw new TypeError("Canonical Release marker is not exact")
+  }
+  return { releaseId: source.releaseId, tagName: source.tagName, body: source.body, marker, assets }
+}
+
+function normalizeDuplicateEvidenceDuplicates(value) {
+  const releases = exactObject(value, ["canonical", "duplicates"], "recovery Releases evidence")
+  if (!Array.isArray(releases.duplicates))
+    throw new TypeError("Recovery duplicate Release inventory is invalid")
+  return releases.duplicates.map((duplicate) => {
+    const item = exactObject(
+      duplicate,
+      [...DUPLICATE_SOURCE_FIELDS, ...DUPLICATE_DERIVED_FIELDS],
+      "sealed recovery duplicate Release",
+    )
+    return Object.fromEntries(DUPLICATE_SOURCE_FIELDS.map((field) => [field, item[field]]))
+  })
+}
+
+function remainingTransitions(state) {
+  if (state === "untouched") return ["archive-body", "archive-receipt", "quarantine"]
+  if (state === "body-archived") return ["archive-receipt", "quarantine"]
+  if (state === "receipt-archived") return ["quarantine"]
+  if (state === "quarantined") return []
+  throw new TypeError("Duplicate Release state is invalid")
+}
+
+function normalizeEvidenceBytes(value) {
+  if (!(value instanceof Uint8Array))
+    throw new TypeError("Duplicate draft evidence bytes are invalid")
+  const bytes = Buffer.from(value)
+  if (
+    bytes.byteLength < 1 ||
+    bytes.byteLength > MAX_DUPLICATE_DRAFT_EVIDENCE_BYTES ||
+    bytes.at(-1) !== 0x0a ||
+    bytes.includes(0x0d)
+  ) {
+    throw new TypeError("Duplicate draft evidence bytes are outside canonical bounds")
+  }
+  return bytes
+}
+
+function normalizeCanonicalTimestamp(value, label) {
+  if (typeof value !== "string") throw new TypeError(`${label} is invalid`)
+  const milliseconds = Date.parse(value)
+  if (!Number.isSafeInteger(milliseconds) || new Date(milliseconds).toISOString() !== value) {
+    throw new TypeError(`${label} is not canonical`)
+  }
+  return value
+}
+
+function assertPositiveInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${label} is invalid`)
+}
+
+function assertUniqueAssets(assets, label) {
+  const ids = new Set()
+  const names = new Set()
+  for (const asset of assets) {
+    if (ids.has(asset.id) || names.has(asset.name)) throw new TypeError(`${label} are not unique`)
+    ids.add(asset.id)
+    names.add(asset.name)
+  }
 }
 
 function assertPolicyIdentity(source) {
