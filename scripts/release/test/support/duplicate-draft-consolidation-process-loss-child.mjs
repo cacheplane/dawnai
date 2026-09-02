@@ -33,6 +33,11 @@ if (mode === "init") {
   })
   process.exit(0)
 }
+if (mode === "hang") await new Promise(() => setInterval(() => {}, 1_000))
+if (mode === "flood") {
+  process.stdout.write("x".repeat(128 * 1024))
+  await new Promise(() => setInterval(() => {}, 1_000))
+}
 
 const fixture = createDuplicateDraftConsolidationFixture()
 const state = () => JSON.parse(readFileSync(statePath, "utf8"))

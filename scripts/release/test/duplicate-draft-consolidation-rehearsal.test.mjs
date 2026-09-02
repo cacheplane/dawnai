@@ -283,16 +283,20 @@ test("a fresh process recovers the durable lock and intent after an actual SIGKI
   state.armBeforeDelete = true
   await writeFile(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 })
   const killed = startFreshChild("perform", root, statePath, readyPath)
-  await Promise.race([
-    waitForPath(readyPath, 10_000),
-    killed.result.then((result) => {
-      throw new Error(`Child exited before the durable boundary: ${result.stderr}`)
-    }),
-  ])
-  killed.child.kill("SIGKILL")
-  const killedResult = await killed.result
-  assert.equal(killedResult.code, null)
-  assert.equal(killedResult.signal, "SIGKILL")
+  try {
+    await Promise.race([
+      waitForPath(readyPath, 10_000),
+      killed.result.then((result) => {
+        throw new Error(`Child exited before the durable boundary: ${result.stderr}`)
+      }),
+    ])
+    killed.kill()
+    const killedResult = await killed.result
+    assert.equal(killedResult.code, null)
+    assert.equal(killedResult.signal, "SIGKILL")
+  } finally {
+    await killed.cleanup()
+  }
 
   const journalBeforeResume = parseConsolidationEnvelope(
     "journal",
@@ -364,6 +368,52 @@ test("a fresh process recovers the durable lock and intent after an actual SIGKI
   ])
 })
 
+test("fresh child cleanup reaps a process when sentinel polling fails", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("SIGKILL is not supported on Windows")
+    return
+  }
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "dawn-child-cleanup-")))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const statePath = path.join(root, "state.json")
+  const readyPath = path.join(root, "never-ready")
+  assert.equal((await runFreshChild("init", root, statePath, readyPath)).code, 0)
+  const running = startFreshChild("hang", root, statePath, readyPath)
+  const pid = running.child.pid
+  try {
+    await assert.rejects(
+      Promise.race([
+        waitForPath(readyPath, 100),
+        running.result.then(() => {
+          throw new Error("child exited early")
+        }),
+      ]),
+      /Timed out waiting/u,
+    )
+  } finally {
+    await running.cleanup()
+  }
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
+})
+
+test("fresh child output is bounded and overflow kills the process", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("SIGKILL is not supported on Windows")
+    return
+  }
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "dawn-child-output-")))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const running = startFreshChild("flood", root, path.join(root, "state"), path.join(root, "ready"))
+  try {
+    const result = await running.result
+    assert.equal(result.signal, "SIGKILL")
+    assert.match(result.stdout, /\[output truncated\]/u)
+    assert.ok(Buffer.byteLength(result.stdout) < 66 * 1024)
+  } finally {
+    await running.cleanup()
+  }
+})
+
 function startFreshChild(mode, root, statePath, readyPath) {
   const child = spawn(process.execPath, [PROCESS_LOSS_CHILD, mode, root, statePath, readyPath], {
     cwd: root,
@@ -371,18 +421,51 @@ function startFreshChild(mode, root, statePath, readyPath) {
   })
   let stdout = ""
   let stderr = ""
+  let settled = false
+  const append = (target, chunk) => {
+    const next = target + chunk
+    if (Buffer.byteLength(next) > 64 * 1024) {
+      child.kill("SIGKILL")
+      return `${next.slice(0, 64 * 1024)}\n[output truncated]`
+    }
+    return next
+  }
   child.stdout.setEncoding("utf8").on("data", (chunk) => {
-    stdout += chunk
+    stdout = append(stdout, chunk)
   })
   child.stderr.setEncoding("utf8").on("data", (chunk) => {
-    stderr += chunk
+    stderr = append(stderr, chunk)
+  })
+  const result = new Promise((resolve, reject) => {
+    child.once("error", reject)
+    child.once("close", (code, signal) => {
+      settled = true
+      resolve({ code, signal, stderr, stdout })
+    })
   })
   return {
     child,
-    result: new Promise((resolve, reject) => {
-      child.once("error", reject)
-      child.once("exit", (code, signal) => resolve({ code, signal, stderr, stdout }))
-    }),
+    result,
+    kill() {
+      if (!settled) child.kill("SIGKILL")
+    },
+    async cleanup() {
+      if (!settled) child.kill("SIGKILL")
+      let cleanupTimer
+      try {
+        await Promise.race([
+          result,
+          new Promise((_, reject) => {
+            cleanupTimer = setTimeout(() => reject(new Error("Child cleanup timed out")), 2_000)
+          }),
+        ])
+      } finally {
+        clearTimeout(cleanupTimer)
+      }
+      child.stdout.destroy()
+      child.stderr.destroy()
+      child.removeAllListeners()
+    },
   }
 }
 
@@ -393,6 +476,7 @@ async function runFreshChild(mode, root, statePath, readyPath) {
     return await running.result
   } finally {
     clearTimeout(timeout)
+    await running.cleanup()
   }
 }
 

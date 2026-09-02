@@ -496,6 +496,19 @@ jobs:
       "non-composing-include.yml": nonComposingInclude,
     }),
   )
+
+  const standaloneIncludesDoNotCompose = matrixWorkflow(
+    {
+      method: ["GET"],
+      include: [{ method: "DELETE" }, { endpoint: "/repos/cacheplane/dawnai/releases/1" }],
+    },
+    `curl --request "\${{ matrix.method }}" "\${{ matrix.endpoint }}"`,
+  )
+  assert.doesNotThrow(() =>
+    assertNoDuplicateDraftWorkflowMutation({
+      "standalone-includes.yml": standaloneIncludesDoNotCompose,
+    }),
+  )
 })
 
 test("workflow isolation follows every repository-local executable transitively", async (t) => {
@@ -540,13 +553,48 @@ test("workflow isolation follows every repository-local executable transitively"
           "curl --request DELETE https://api.github.com/repos/cacheplane/dawnai/releases/379982100\n",
       },
     },
+    {
+      name: "reachable banned identifier",
+      workflow: "node --enable-source-maps scripts/hidden.mjs",
+      files: { "scripts/hidden.mjs": "export const lane = 'duplicate-draft-consolidation'\n" },
+    },
+    {
+      name: "static JavaScript import and spawn",
+      workflow: "node scripts/first.mjs",
+      files: {
+        "scripts/first.mjs": "import './second.js'\n",
+        "scripts/second.js": "spawn('bash', ['-eu', 'scripts/hidden.sh'])\n",
+        "scripts/hidden.sh": "gh release delete opaque-tag --yes\n",
+      },
+    },
+    {
+      name: "pnpm exec tsx runner",
+      workflow: "pnpm exec tsx scripts/hidden.ts",
+      files: { "scripts/hidden.ts": "github.rest.repos.deleteRelease({ release_id: 1 })\n" },
+    },
+    {
+      name: "bash option runner",
+      workflow: "bash -eu scripts/hidden.sh",
+      files: { "scripts/hidden.sh": "gh release delete opaque-tag --yes\n" },
+    },
+    {
+      name: "filtered workspace package script",
+      workflow: "pnpm --filter @fixture/worker run hidden",
+      files: {
+        "packages/worker/package.json": JSON.stringify({
+          name: "@fixture/worker",
+          scripts: { hidden: "node scripts/hidden.mjs" },
+        }),
+        "packages/worker/scripts/hidden.mjs": "gh release delete opaque-tag --yes\n",
+      },
+    },
   ]
   for (const fixture of cases) {
     await t.test(fixture.name, async () => {
       const root = await createWorkflowReachabilityFixture(t, fixture)
       await assert.rejects(
         () => assertNoDuplicateDraftWorkflowMutationFromRoot(root),
-        /Release DELETE/u,
+        /Release DELETE|consolidation identifier/u,
       )
     })
   }
@@ -582,6 +630,14 @@ test("workflow isolation follows every repository-local executable transitively"
     await writeFile(path.join(outside, "escape.sh"), "echo safe\n")
     await mkdir(path.join(root, "scripts"), { recursive: true })
     await symlink(path.join(outside, "escape.sh"), path.join(root, "scripts", "escape.sh"))
+    await assert.rejects(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
+  })
+
+  await t.test("unsupported repository-local runner fails closed", async () => {
+    const root = await createWorkflowReachabilityFixture(t, {
+      workflow: "custom-runner scripts/hidden.mjs",
+      files: { "scripts/hidden.mjs": "echo safe\n" },
+    })
     await assert.rejects(() => assertNoDuplicateDraftWorkflowMutationFromRoot(root))
   })
 })
@@ -2273,15 +2329,20 @@ async function assertNoDuplicateDraftWorkflowMutationFromRoot(root) {
       maxBytes: 1024 * 1024,
     }),
   )
+  const workspacePackages = await discoverWorkspacePackages(root)
   const visited = new Set()
   let visits = 0
+  const claimVisit = (identity) => {
+    if (visited.has(identity)) return false
+    if (visits >= 256) throw new Error("Workflow executable traversal exceeds the isolation bound")
+    visited.add(identity)
+    visits += 1
+    return true
+  }
   const visitFile = async (relative, kind = "script") => {
     const normalized = normalizeReachablePath(relative)
     const identity = `${kind}:${normalized}`
-    if (visited.has(identity)) return
-    visited.add(identity)
-    visits += 1
-    if (visits > 256) throw new Error("Workflow executable traversal exceeds the isolation bound")
+    if (!claimVisit(identity)) return
     const source = await readBoundedFixture(path.join(root, normalized), {
       root,
       maxBytes: 1024 * 1024,
@@ -2304,22 +2365,87 @@ async function assertNoDuplicateDraftWorkflowMutationFromRoot(root) {
       }
       return
     }
+    if (/duplicate-draft-consolidation|release:consolidate-drafts/u.test(source)) {
+      throw new Error(`${normalized} contains a banned consolidation identifier`)
+    }
     assertNoReleaseDeleteExecution(source, normalized)
     if (/\.(?:ba|z)?sh$/u.test(normalized) || !/\.[a-z0-9]+$/iu.test(normalized)) {
       await visitCommand(source, normalized)
     }
+    if (/\.[cm]?[jt]sx?$/u.test(normalized)) {
+      for (const reference of localModuleReferences(source)) {
+        await visitResolvedFile(path.posix.dirname(normalized), reference)
+      }
+      for (const reference of localSpawnReferences(source)) {
+        await visitCommand(reference, normalized)
+      }
+    }
   }
-  const visitCommand = async (command, label) => {
+  const visitResolvedFile = async (directory, reference) => {
+    const base = normalizeReachablePath(path.posix.join(directory, reference))
+    if (base.split("/").includes("node_modules")) return
+    const candidates = /\.[a-z0-9]+$/iu.test(base)
+      ? [base, ...(/\.js$/u.test(base) ? [base.replace(/\.js$/u, ".ts")] : [])]
+      : [
+          base,
+          ...[".mjs", ".js", ".cjs", ".ts", ".tsx"].map((suffix) => `${base}${suffix}`),
+          ...["index.mjs", "index.js", "index.ts"].map((name) => path.posix.join(base, name)),
+        ]
+    let lastError
+    for (const candidate of candidates) {
+      try {
+        const status = await lstat(path.join(root, candidate))
+        if (!status.isFile() || status.isSymbolicLink()) {
+          throw new TypeError("Invalid repository-local executable file")
+        }
+        await visitFile(candidate)
+        return
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error
+        lastError = error
+      }
+    }
+    if (lastError?.code === "ENOENT") return
+    throw lastError
+  }
+  const visitCommand = async (command, label, baseDirectory = ".") => {
     assertNoReleaseDeleteExecution(command, label)
     for (const name of packageScriptReferences(command)) {
       const script = packageJson.scripts?.[name]
       if (typeof script !== "string") continue
       const identity = `package:${name}`
-      if (visited.has(identity)) continue
-      visited.add(identity)
+      if (!claimVisit(identity)) continue
       await visitCommand(script, `package script ${name}`)
     }
-    for (const file of localCommandFileReferences(command)) await visitFile(file)
+    for (const { packageName, scriptName } of filteredPackageScriptReferences(command)) {
+      const normalizedPackageName = packageName.replace(/^\.\.\./u, "").replace(/\.\.\.$/u, "")
+      const workspace = workspacePackages.get(normalizedPackageName)
+      const script = workspace?.manifest.scripts?.[scriptName]
+      if (typeof script !== "string") {
+        if (["exec", "install", "list"].includes(scriptName)) continue
+        throw new Error(
+          `${label} contains an unresolved filtered workspace script ${packageName}:${scriptName}`,
+        )
+      }
+      const identity = `package:${normalizedPackageName}:${scriptName}`
+      if (!claimVisit(identity)) continue
+      await visitCommand(script, `package script ${packageName}:${scriptName}`, workspace.directory)
+    }
+    const files = localCommandFileReferences(command)
+    for (const file of files) await visitResolvedFile(baseDirectory, file)
+    const unknownRunner = /(?:^|[\n;&|])\s*([\w.-]+)\s+(?:\.\/)?(?:scripts|\.github)\//gu.exec(
+      command,
+    )?.[1]
+    if (unknownRunner !== undefined && !["node", "bash", "sh", "tsx"].includes(unknownRunner)) {
+      throw new Error(`${label} contains unsupported repository-local runner ${unknownRunner}`)
+    }
+    if (
+      /(?:^|[\s;&|"'(])(?:scripts|\.\/scripts|\.github)\/[\w./-]+/u.test(command) &&
+      files.size === 0 &&
+      !/\bnode\s+--test\s+[^\n]*\*/u.test(command)
+    ) {
+      throw new Error(`${label} contains unsupported repository-local execution syntax: ${command}`)
+    }
   }
   const visitStep = async (step, label) => {
     if (!isRecord(step)) throw new TypeError(`${label} contains an invalid executable step`)
@@ -2356,6 +2482,7 @@ async function assertNoDuplicateDraftWorkflowMutationFromRoot(root) {
     }
   }
   for (const [file, source] of Object.entries(sources)) {
+    if (!claimVisit(`workflow:${file}`)) continue
     await visitWorkflow(parseWorkflowSource(source, file), file)
   }
 }
@@ -2395,13 +2522,90 @@ function packageScriptReferences(command) {
   return names
 }
 
+function filteredPackageScriptReferences(command) {
+  const references = []
+  const pattern = /\bpnpm\s+(?:--filter|-F)\s+([^\s]+)\s+(?:run\s+)?([\w:.-]+)/gu
+  for (const match of String(command).matchAll(pattern)) {
+    references.push({ packageName: match[1], scriptName: match[2] })
+  }
+  return references
+}
+
+async function discoverWorkspacePackages(root) {
+  const packages = new Map()
+  const visitDirectory = async (relative, depth) => {
+    let entries
+    try {
+      entries = await readdir(path.join(root, relative), { withFileTypes: true })
+    } catch (error) {
+      if (error?.code === "ENOENT") return
+      throw error
+    }
+    if (entries.length > 256) throw new Error("Workspace package discovery exceeds the bound")
+    const manifestPath = path.join(root, relative, "package.json")
+    try {
+      const status = await lstat(manifestPath)
+      if (!status.isFile() || status.isSymbolicLink())
+        throw new TypeError("Invalid workspace manifest")
+      const manifest = JSON.parse(
+        await readBoundedFixture(manifestPath, {
+          root,
+          maxBytes: 1024 * 1024,
+        }),
+      )
+      if (typeof manifest.name === "string")
+        packages.set(manifest.name, { directory: relative, manifest })
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+    if (depth === 0) return
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith(".")) {
+        await visitDirectory(path.posix.join(relative, entry.name), depth - 1)
+      }
+    }
+  }
+  for (const [directory, depth] of [
+    ["packages", 1],
+    ["apps", 1],
+    ["examples", 2],
+  ]) {
+    await visitDirectory(directory, depth)
+  }
+  return packages
+}
+
 function localCommandFileReferences(command) {
   const files = new Set()
-  const pattern = /(?:^|[\s;&|"'(])(?:node|bash|sh)\s+((?:\.\/)?(?:scripts|\.github)\/[\w./-]+)/gu
+  const pattern =
+    /(?:^|[\s;&|"'(])(?:node(?:\s+--?[\w=-]+)*|(?:ba)?sh(?:\s+-[a-z]+)*|pnpm\s+exec\s+(?:tsx|node)(?:\s+--?[\w=-]+)*|tsx)\s+((?:\.\/)?(?:scripts|\.github)\/[\w./-]*[\w.-])(?![\w./*-])/giu
   for (const match of String(command).matchAll(pattern)) files.add(match[1])
-  const direct = /(?:^|[\s;&|"'(])(\.\/(?:scripts|\.github)\/[\w./-]+)/gu
+  const direct = /(?:^|[\s;&|"'(])((?:\.\/)?(?:scripts|\.github)\/[\w./-]*[\w.-])(?![\w./*-])/gu
   for (const match of String(command).matchAll(direct)) files.add(match[1])
   return files
+}
+
+function localModuleReferences(source) {
+  const references = new Set()
+  const executableSource = String(source).replace(/`(?:\\[\s\S]|[^`])*`/gu, "")
+  const pattern =
+    /(?:\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?|\bimport\s*\(|\brequire\s*\()(["'])(\.\.?\/[^"']+)\1/gu
+  for (const match of executableSource.matchAll(pattern)) references.add(match[2])
+  return references
+}
+
+function localSpawnReferences(source) {
+  const commands = new Set()
+  const executableSource = String(source).replace(/`(?:\\[\s\S]|[^`])*`/gu, "")
+  const pattern =
+    /\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*(["'])([^"']+)\1\s*,\s*\[([^\]]*)\]/gu
+  for (const match of executableSource.matchAll(pattern)) {
+    const args = [...match[3].matchAll(/(["'])([^"']+)\1/gu)].map((entry) => entry[2])
+    commands.add([match[2], ...args].join(" "))
+  }
+  const execPattern = /\b(?:exec|execSync)\s*\(\s*(["'])([^"']+)\1/gu
+  for (const match of executableSource.matchAll(execPattern)) commands.add(match[2])
+  return commands
 }
 
 function workflowExecutionContexts(workflow) {
@@ -2460,6 +2664,10 @@ function collectStaticMatrixRows(matrix) {
   }
   let states = [{ base: {}, row: {} }]
   for (const [key, values] of axes) {
+    if (values.length === 0) return { dynamic: false, rows: [] }
+    if (states.length > Math.floor(1024 / values.length)) {
+      throw new Error("Workflow matrix expansion exceeds the isolation bound")
+    }
     const next = []
     for (const state of states) {
       for (const value of values) {
@@ -2478,11 +2686,15 @@ function collectStaticMatrixRows(matrix) {
   const includes = staticMatrixObjects(matrix.include)
   if (includes === null) return { dynamic: true, rows: [{}] }
   if (axes.length === 0 && includes.length > 0) {
+    if (includes.length > 1024) {
+      throw new Error("Workflow matrix expansion exceeds the isolation bound")
+    }
     states = includes.map((entry) => ({
       base: { ...entry },
       row: { ...entry },
     }))
   } else {
+    const standalone = []
     for (const include of includes) {
       let applied = false
       for (const state of states) {
@@ -2490,8 +2702,14 @@ function collectStaticMatrixRows(matrix) {
         state.row = { ...state.row, ...include }
         applied = true
       }
-      if (!applied) states.push({ base: { ...include }, row: { ...include } })
+      if (!applied) {
+        if (states.length + standalone.length >= 1024) {
+          throw new Error("Workflow matrix expansion exceeds the isolation bound")
+        }
+        standalone.push({ base: { ...include }, row: { ...include } })
+      }
     }
+    states.push(...standalone)
   }
   if (states.length > 1024) throw new Error("Workflow matrix expansion exceeds the isolation bound")
   return { dynamic: false, rows: states.map(({ row }) => row) }
