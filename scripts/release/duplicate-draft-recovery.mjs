@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 
 import { snapshotJson } from "./adapter-normalize.mjs"
+import { parseReleaseMarker } from "./metadata.mjs"
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/u
@@ -53,6 +54,25 @@ export function classifyDuplicateDraft(value, expected) {
   )
   const assets = normalizeAssets(snapshot.assets, "duplicate Release assets", true)
   const evidenceKinds = normalizeEvidenceKinds(snapshot.evidenceAssets)
+  let parsedCanonicalMarker
+  try {
+    parsedCanonicalMarker = parseReleaseMarker(requirements.canonicalBody)
+  } catch (error) {
+    throw new Error("Duplicate canonical body is not a valid Dawn release body", { cause: error })
+  }
+  if (
+    parsedCanonicalMarker.phase !== "ESCROWED" ||
+    parsedCanonicalMarker.version !== DUPLICATE_DRAFT_RECOVERY_POLICY.version ||
+    parsedCanonicalMarker.commitSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha ||
+    parsedCanonicalMarker.tag !== `v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}` ||
+    !sameJson(parsedCanonicalMarker, requirements.canonicalMarker)
+  ) {
+    throw new Error("Duplicate canonical body marker is not the approved ESCROWED marker")
+  }
+  const expectedBaseAssetSetSha256 = assetSetSha256(originalAssets)
+  if (parsedCanonicalMarker.baseAssetSetSha256 !== expectedBaseAssetSetSha256) {
+    throw new Error("Duplicate canonical marker base-asset digest is not exact")
+  }
   const bodyAssetName = originalBodyAssetName(
     requirements.releaseId,
     requirements.originalBodySha256,
@@ -81,6 +101,7 @@ export function classifyDuplicateDraft(value, expected) {
       DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ||
     recoveryReceiptInput.duplicateReleaseId !== requirements.releaseId ||
     recoveryReceiptInput.originalBodySha256 !== requirements.originalBodySha256 ||
+    recoveryReceiptInput.baseAssetSetSha256 !== expectedBaseAssetSetSha256 ||
     recoveryReceiptInput.archiveAsset.name !== bodyAssetName ||
     recoveryReceiptInput.archiveAsset.sha256 !== requirements.originalBodySha256
   ) {
@@ -137,8 +158,7 @@ export function classifyDuplicateDraft(value, expected) {
     }
   }
 
-  const canonicalMarker = requirements.canonicalMarker
-  if (!isRecord(canonicalMarker) || !sameJson(snapshot.marker, canonicalMarker)) {
+  if (!sameJson(snapshot.marker, parsedCanonicalMarker)) {
     if (evidenceKinds.length === 2 && snapshot.marker === null) {
       // The quarantine state intentionally has no live Dawn marker.
     } else {
@@ -472,6 +492,12 @@ function compareText(left, right) {
 
 function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex")
+}
+
+function assetSetSha256(assets) {
+  return sha256(
+    `${JSON.stringify(assets.map(({ name, sha256: digest }) => ({ name, sha256: digest })))}\n`,
+  )
 }
 
 function sha256Bytes(value) {

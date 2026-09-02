@@ -10,6 +10,8 @@ import {
   originalBodyAssetName,
   recoveryReceiptAssetName,
 } from "../duplicate-draft-recovery.mjs"
+import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
+import { canonicalReleaseBody, parseReleaseMarker } from "../metadata.mjs"
 
 const POLICY = {
   repository: "cacheplane/dawnai",
@@ -22,21 +24,93 @@ const POLICY = {
   ],
 }
 
-const BODY_SHA256 = createHash("sha256").update("canonical body\n", "utf8").digest("hex")
-const BASE_ASSET_SET_SHA256 = "1".repeat(64)
-const ORIGINAL_BODY = "canonical body\n"
-const ORIGINAL_MARKER = {
-  schemaVersion: 1,
-  phase: "ESCROWED",
-  version: POLICY.version,
-  commitSha: POLICY.candidateSha,
-  tag: `v${POLICY.version}`,
-}
 const ORIGINAL_ASSETS = Array.from({ length: 45 }, (_, index) => ({
   id: 101 + index,
   name: `asset-${String(index + 1).padStart(2, "0")}.json`,
   sha256: "0123456789abcdef"[index % 16].repeat(64),
 }))
+const BASE_ASSET_SET_SHA256 = assetSetSha256(ORIGINAL_ASSETS)
+const MANIFEST = createManifest()
+const ORIGINAL_MARKER = createEscrowedMarker(MANIFEST)
+const ORIGINAL_BODY = canonicalReleaseBody({ marker: ORIGINAL_MARKER, manifest: MANIFEST })
+const BODY_SHA256 = createHash("sha256").update(ORIGINAL_BODY, "utf8").digest("hex")
+
+function createManifest() {
+  const packages = CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => {
+    const filename = `${name.startsWith("@") ? name.slice(1).replaceAll("/", "-") : name}-${POLICY.version}.tgz`
+    const bytes = Buffer.from(`package:${name}`, "utf8")
+    const sha512 = createHash("sha512").update(bytes).digest("hex")
+    return {
+      name,
+      version: POLICY.version,
+      filename,
+      size: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      sha512,
+      npmIntegrity: `sha512-${Buffer.from(sha512, "hex").toString("base64")}`,
+      access: "public",
+    }
+  })
+  return {
+    schemaVersion: 1,
+    version: POLICY.version,
+    commitSha: POLICY.candidateSha,
+    ci: { workflow: "CI", runId: 1, runAttempt: 1 },
+    artifact: {
+      name: `release-v${POLICY.version}-${POLICY.candidateSha.slice(0, 12)}`,
+      prepareRunId: 2,
+      prepareRunAttempt: 1,
+    },
+    packageOrder: [...CANONICAL_RELEASE_PACKAGE_ORDER],
+    packages,
+  }
+}
+
+function createEscrowedMarker(manifest) {
+  const subjects = [
+    {
+      name: "manifest.json",
+      sha256: createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex"),
+    },
+    ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
+  ]
+  return {
+    schemaVersion: 1,
+    epoch: "fixed-group-v1",
+    revision: 2,
+    phase: "ESCROWED",
+    version: POLICY.version,
+    commitSha: POLICY.candidateSha,
+    tag: `v${POLICY.version}`,
+    manifestSha256: createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex"),
+    releaseRecordSha256: "e".repeat(64),
+    baseAssetSetSha256: assetSetSha256(ORIGINAL_ASSETS),
+    attestationSet: {
+      repository: POLICY.repository,
+      workflow: ".github/workflows/release.yml",
+      sourceRef: `refs/tags/v${POLICY.version}`,
+      commitSha: POLICY.candidateSha,
+      workflowRunId: 3,
+      runAttempt: 1,
+      subjects: subjects.map(({ name, sha256 }) => ({
+        subjectName: name,
+        subjectSha256: sha256,
+        bundleName: `${name}.intoto.jsonl`,
+        bundleSha256: "f".repeat(64),
+      })),
+    },
+    npmEvidenceSha256: null,
+    smoke: null,
+    audit: null,
+    abandonmentSha256: null,
+  }
+}
+
+function assetSetSha256(assets) {
+  return createHash("sha256")
+    .update(`${JSON.stringify(assets.map(({ name, sha256 }) => ({ name, sha256 })))}\n`, "utf8")
+    .digest("hex")
+}
 
 function expectedFor(releaseId = POLICY.duplicates[0].releaseId) {
   const duplicate = POLICY.duplicates.find((item) => item.releaseId === releaseId)
@@ -61,7 +135,7 @@ function expectedFor(releaseId = POLICY.duplicates[0].releaseId) {
     releaseId,
     tagName: duplicate.tagName,
     canonicalBody: ORIGINAL_BODY,
-    canonicalMarker: ORIGINAL_MARKER,
+    canonicalMarker: parseReleaseMarker(ORIGINAL_BODY),
     originalBodySha256: BODY_SHA256,
     originalAssets: ORIGINAL_ASSETS,
     recoveryReceipt,
@@ -78,8 +152,8 @@ function expectedFor(releaseId = POLICY.duplicates[0].releaseId) {
   }
 }
 
-function snapshot(overrides = {}) {
-  const expected = expectedFor()
+function snapshot(overrides = {}, releaseId = POLICY.duplicates[0].releaseId) {
+  const expected = expectedFor(releaseId)
   const evidenceAssets = overrides.evidenceAssets ?? []
   const canonicalReceiptBytes = canonicalRecoveryReceipt(expected.recoveryReceipt)
   const receiptBytes = overrides.receiptBytes ?? canonicalReceiptBytes.toString("utf8")
@@ -120,23 +194,31 @@ test("exports the exact frozen duplicate draft recovery policy", () => {
 })
 
 test("classifies each exact resumable duplicate state", () => {
-  const expected = expectedFor()
-  assert.equal(classifyDuplicateDraft(snapshot({ evidenceAssets: [] }), expected), "untouched")
-  assert.equal(
-    classifyDuplicateDraft(snapshot({ evidenceAssets: ["body"] }), expected),
-    "body-archived",
-  )
-  assert.equal(
-    classifyDuplicateDraft(snapshot({ evidenceAssets: ["body", "receipt"] }), expected),
-    "receipt-archived",
-  )
-  assert.equal(
-    classifyDuplicateDraft(
-      snapshot({ quarantined: true, evidenceAssets: ["body", "receipt"] }),
-      expected,
-    ),
-    "quarantined",
-  )
+  for (const duplicate of POLICY.duplicates) {
+    const expected = expectedFor(duplicate.releaseId)
+    assert.equal(
+      classifyDuplicateDraft(snapshot({ evidenceAssets: [] }, duplicate.releaseId), expected),
+      "untouched",
+    )
+    assert.equal(
+      classifyDuplicateDraft(snapshot({ evidenceAssets: ["body"] }, duplicate.releaseId), expected),
+      "body-archived",
+    )
+    assert.equal(
+      classifyDuplicateDraft(
+        snapshot({ evidenceAssets: ["body", "receipt"] }, duplicate.releaseId),
+        expected,
+      ),
+      "receipt-archived",
+    )
+    assert.equal(
+      classifyDuplicateDraft(
+        snapshot({ quarantined: true, evidenceAssets: ["body", "receipt"] }, duplicate.releaseId),
+        expected,
+      ),
+      "quarantined",
+    )
+  }
 })
 
 test("rejects identity, marker, body, asset, and evidence conflicts", () => {
@@ -144,13 +226,23 @@ test("rejects identity, marker, body, asset, and evidence conflicts", () => {
   const cases = [
     ["wrong Release ID", { releaseId: POLICY.canonicalReleaseId }],
     ["exact candidate tag", { tagName: `v${POLICY.version}` }],
-    ["changed original asset", { assets: [{ ...ORIGINAL_ASSETS[0], sha256: "e".repeat(64) }] }],
+    [
+      "changed original asset",
+      (() => {
+        const assets = structuredClone(snapshot().assets)
+        assets[0].sha256 = "e".repeat(64)
+        return { assets }
+      })(),
+    ],
     [
       "extra asset",
       { assets: [...snapshot().assets, { id: 999, name: "extra.txt", sha256: "f".repeat(64) }] },
     ],
     ["noncanonical marker", { marker: { ...ORIGINAL_MARKER, phase: "ATTACHING" } }],
-    ["malformed notice", { quarantined: true, body: "recovery\n" }],
+    [
+      "malformed notice",
+      { quarantined: true, evidenceAssets: ["body", "receipt"], body: "recovery\n" },
+    ],
     ["receipt without body archive", { evidenceAssets: ["receipt"] }],
     ["unknown evidence combination", { evidenceAssets: ["body", "body"] }],
   ]
@@ -279,6 +371,54 @@ test("rejects a quarantine notice that points at a wrong-body archive", () => {
   )
 })
 
+test("rejects a detached body and marker pair that is not a canonical Dawn body", () => {
+  const expected = expectedFor()
+  const detachedBody = "detached operator body\n"
+  const detachedBodySha256 = createHash("sha256").update(detachedBody, "utf8").digest("hex")
+  const detachedReceipt = {
+    ...expected.recoveryReceipt,
+    originalBodySha256: detachedBodySha256,
+    archiveAsset: {
+      name: originalBodyAssetName(expected.releaseId, detachedBodySha256),
+      sha256: detachedBodySha256,
+    },
+  }
+  assert.throws(() =>
+    classifyDuplicateDraft(snapshot({ body: detachedBody }), {
+      ...expected,
+      canonicalBody: detachedBody,
+      originalBodySha256: detachedBodySha256,
+      recoveryReceipt: detachedReceipt,
+    }),
+  )
+})
+
+test("rejects an arbitrary base-asset digest even in an otherwise valid canonical body", () => {
+  const expected = expectedFor()
+  const arbitraryDigest = "1".repeat(64)
+  const marker = { ...expected.canonicalMarker, baseAssetSetSha256: arbitraryDigest }
+  const body = canonicalReleaseBody({ marker, manifest: MANIFEST })
+  const bodySha256 = createHash("sha256").update(body, "utf8").digest("hex")
+  const recoveryReceipt = {
+    ...expected.recoveryReceipt,
+    originalBodySha256: bodySha256,
+    baseAssetSetSha256: arbitraryDigest,
+    archiveAsset: {
+      name: originalBodyAssetName(expected.releaseId, bodySha256),
+      sha256: bodySha256,
+    },
+  }
+  assert.throws(() =>
+    classifyDuplicateDraft(snapshot({ body, marker }), {
+      ...expected,
+      canonicalBody: body,
+      canonicalMarker: marker,
+      originalBodySha256: bodySha256,
+      recoveryReceipt,
+    }),
+  )
+})
+
 test("derives bounded candidate-specific evidence asset names", () => {
   const bodyName = originalBodyAssetName(POLICY.duplicates[0].releaseId, BODY_SHA256)
   const receiptName = recoveryReceiptAssetName(POLICY.duplicates[0].releaseId)
@@ -307,6 +447,10 @@ test("creates canonical newline-terminated receipt and notice bytes", () => {
   })
   assert.ok(Buffer.isBuffer(receipt))
   assert.equal(receipt.toString("utf8").endsWith("\n"), true)
+  assert.equal(
+    receipt.toString("utf8"),
+    `{"archiveAsset":{"name":"${archiveAssetName}","sha256":"${BODY_SHA256}"},"baseAssetSetSha256":"${BASE_ASSET_SET_SHA256}","candidateSha":"${POLICY.candidateSha}","canonicalReleaseId":${POLICY.canonicalReleaseId},"duplicateReleaseId":${releaseId},"originalBodySha256":"${BODY_SHA256}","recoveryCommit":"${POLICY.candidateSha}","repository":"${POLICY.repository}","schemaVersion":1,"version":"${POLICY.version}"}\n`,
+  )
   assert.deepEqual(JSON.parse(receipt), {
     schemaVersion: 1,
     repository: POLICY.repository,
@@ -316,7 +460,7 @@ test("creates canonical newline-terminated receipt and notice bytes", () => {
     canonicalReleaseId: POLICY.canonicalReleaseId,
     duplicateReleaseId: releaseId,
     originalBodySha256: BODY_SHA256,
-    baseAssetSetSha256: "1".repeat(64),
+    baseAssetSetSha256: BASE_ASSET_SET_SHA256,
     archiveAsset: { name: archiveAssetName, sha256: BODY_SHA256 },
   })
 
@@ -334,6 +478,16 @@ test("creates canonical newline-terminated receipt and notice bytes", () => {
   })
   assert.equal(typeof notice, "string")
   assert.equal(notice.endsWith("\n"), true)
+  assert.equal(
+    notice,
+    `{"archiveAssetName":"${archiveAssetName}","candidateSha":"${POLICY.candidateSha}","canonicalReleaseId":${POLICY.canonicalReleaseId},"duplicateReleaseId":${releaseId},"originalBodySha256":"${BODY_SHA256}","receiptAssetName":"${receiptAssetName}","receiptSha256":"${createHash(
+      "sha256",
+    )
+      .update(canonicalRecoveryReceipt(expectedFor(releaseId).recoveryReceipt))
+      .digest(
+        "hex",
+      )}","repository":"${POLICY.repository}","schemaVersion":1,"type":"DAWN_DUPLICATE_DRAFT_RECOVERY","version":"${POLICY.version}"}\n`,
+  )
   assert.equal(notice.includes("DAWN_RELEASE_CONTROLLER_MARKER"), false)
   assert.match(notice, /379991871/u)
   assert.match(notice, /379982100/u)
