@@ -1539,6 +1539,52 @@ test("final authority rejects failed or wrong-subject production attestation aft
   }
 })
 
+test("production final authority downloads current asset identities while preserving semantic equality", async () => {
+  const fixture = await authorityFixture({
+    stage: "final",
+    finalAssetIdentityVolatility: true,
+  })
+  const { authority } = await captureConsolidationAuthority(fixture.input)
+  const currentAssetIds = fixture.remainingReleases[0].assets.map(({ id }) => String(id))
+  const downloadedAssetIds = fixture.networkOperations
+    .filter((entry) => entry.startsWith(`download:${DUPLICATE_DRAFT_SURVIVOR_ID}:`))
+    .map((entry) => entry.split(":").at(-1))
+
+  assert.equal(authority.releases[0].assets.length, 45)
+  assert.deepEqual(downloadedAssetIds, currentAssetIds)
+  assert.notDeepEqual(
+    authority.releases[0].assets.map(({ id }) => id),
+    fixture.proposal.releases[0].assets.map(({ id }) => id),
+  )
+})
+
+test("production final authority rejects current asset semantic drift", async (t) => {
+  for (const drift of [
+    "duplicate-name",
+    "missing",
+    "extra",
+    "size",
+    "digest",
+    "state",
+    "content-type",
+    "label",
+    "uploader",
+    "listed-download-identity",
+  ]) {
+    await t.test(drift, async () => {
+      const fixture = await authorityFixture({ stage: "final", finalAssetSemanticDrift: drift })
+      await assert.rejects(
+        captureConsolidationAuthority(fixture.input),
+        /authority|asset|payload/iu,
+      )
+      assert.equal(
+        fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+        false,
+      )
+    })
+  }
+})
+
 test("writer freshness accepts exactly 120000ms and rejects 120001ms, future evidence, and noncanonical clocks", async () => {
   const fixture = await authorityFixture()
   const { authority } = await captureConsolidationAuthority(fixture.input)
@@ -1760,6 +1806,8 @@ async function authorityFixture({
   terminalGate = null,
   deleteHook = null,
   attestationVerify = null,
+  finalAssetIdentityVolatility = false,
+  finalAssetSemanticDrift = null,
 } = {}) {
   const evidenceFixture = createDuplicateDraftConsolidationFixture()
   const inspected = await inspectEquivalentDrafts({
@@ -1784,6 +1832,43 @@ async function authorityFixture({
   const remainingReleases = evidenceFixture.releases
     .filter(({ id }) => expectedIds.includes(String(id)))
     .map((release) => structuredClone(release))
+  const originalAssetsByCurrentId = new Map()
+  if (stage === "final") {
+    const survivor = remainingReleases[0]
+    for (const [index, asset] of survivor.assets.entries()) {
+      const originalAssetId = asset.id
+      if (finalAssetIdentityVolatility) {
+        asset.id = 8_000_000 + index
+        asset.node_id = `RA_current_${index}`
+        asset.created_at = `2026-09-01T10:${String(index).padStart(2, "0")}:00Z`
+        asset.updated_at = `2026-09-01T11:${String(index).padStart(2, "0")}:00Z`
+        asset.download_count += 100
+      }
+      originalAssetsByCurrentId.set(String(asset.id), originalAssetId)
+    }
+    const asset = survivor.assets[0]
+    if (finalAssetSemanticDrift === "duplicate-name") asset.name = survivor.assets[1].name
+    if (finalAssetSemanticDrift === "missing") survivor.assets.pop()
+    if (finalAssetSemanticDrift === "extra") {
+      survivor.assets.push({
+        ...structuredClone(survivor.assets.at(-1)),
+        id: 9_999_999,
+        node_id: "RA_extra_current",
+        name: "unexpected-current-asset.tgz",
+      })
+    }
+    if (finalAssetSemanticDrift === "size") asset.size += 1
+    if (finalAssetSemanticDrift === "digest") asset.digest = `sha256:${"f".repeat(64)}`
+    if (finalAssetSemanticDrift === "state") asset.state = "open"
+    if (finalAssetSemanticDrift === "content-type") asset.content_type = "text/plain"
+    if (finalAssetSemanticDrift === "label") asset.label = "changed label"
+    if (finalAssetSemanticDrift === "uploader") asset.uploader.login = "changed-uploader"
+    if (finalAssetSemanticDrift === "listed-download-identity") {
+      const otherId = survivor.assets[1].id
+      survivor.assets[1].id = asset.id
+      asset.id = otherId
+    }
+  }
   const directRelease = structuredClone(
     remainingReleases.find(
       ({ id }) =>
@@ -1968,7 +2053,10 @@ async function authorityFixture({
         },
         async downloadReleaseAsset(input) {
           log(`download:${input.releaseId}:${input.assetId}`)
-          return evidenceFixture.github.downloadReleaseAsset(input)
+          const originalAssetId = originalAssetsByCurrentId.get(String(input.assetId))
+          return evidenceFixture.github.downloadReleaseAsset(
+            originalAssetId === undefined ? input : { ...input, assetId: originalAssetId },
+          )
         },
         async getRelease({ releaseId }) {
           log(`get-release:${releaseId}`)

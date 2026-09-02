@@ -122,6 +122,44 @@ function rebuildSelfConsistentTestReceipt(receipt) {
   rehashTestEnvelope(receipt)
 }
 
+function rebuildUncheckedChronologyReceipt(receipt) {
+  const proposal = receipt.record.proposedEnvelope
+  const journal = receipt.record.journalEnvelope
+  rehashTestEnvelope(proposal)
+  const confirmation = `CONSOLIDATE v${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
+  const confirmationSha256 = createHash("sha256").update(confirmation, "utf8").digest("hex")
+  journal.record.proposedRecordSha256 = proposal.recordSha256
+  journal.record.confirmationSha256 = confirmationSha256
+  let previous = null
+  journal.record.events = journal.record.events.map(({ event }, index) => {
+    const nextEvent = structuredClone(event)
+    nextEvent.sequence = index + 1
+    nextEvent.previousEventSha256 = previous
+    if (nextEvent.type === "operation-started") {
+      nextEvent.payload.proposedRecordSha256 = proposal.recordSha256
+      nextEvent.payload.confirmationSha256 = confirmationSha256
+    }
+    if (nextEvent.type === "delete-intent") nextEvent.payload.authorityEventSha256 = previous
+    const eventSha256 = canonicalRecordSha256(nextEvent)
+    previous = eventSha256
+    return { event: nextEvent, eventSha256 }
+  })
+  journal.record.updatedAt = journal.record.events.at(-1).event.recordedAt
+  rehashTestEnvelope(journal)
+  const finalAuthority = journal.record.events.at(-1).event.payload.authority
+  receipt.record.finalAuthority = structuredClone(finalAuthority)
+  receipt.record.finalSurvivor = structuredClone(finalAuthority.releases[0])
+  rehashTestEnvelope(receipt)
+}
+
+function after(timestamp, milliseconds = 1_000) {
+  return new Date(Date.parse(timestamp) + milliseconds).toISOString()
+}
+
+function before(timestamp, milliseconds = 1_000) {
+  return new Date(Date.parse(timestamp) - milliseconds).toISOString()
+}
+
 function mutateHistoricalEvidence(receipt, releaseId, mutate) {
   const proposalEvidence = receipt.record.proposedEnvelope.record.releases.find(
     ({ id }) => id === releaseId,
@@ -189,7 +227,7 @@ test("verify independently replays the receipt and revalidates the exact live su
   assert.equal((await stat(harness.receiptPath)).mode & 0o777, 0o644)
 })
 
-test("verify accepts a legal retry and stage-two history with volatile service evidence", async (t) => {
+async function legalRetryVerificationFixture(t) {
   const deletion = await oneDeletionFixture(t, {
     deleteClassifications: ["transport-ambiguous", "confirmed-204"],
     freshAuthorityMutation: "volatile",
@@ -345,6 +383,12 @@ test("verify accepts a legal retry and stage-two history with volatile service e
   const harness = await verificationFixture(t, {
     performed: { receiptPath, dependencies: { repositoryRoot } },
   })
+
+  return { harness, receipt }
+}
+
+test("verify accepts a legal retry and stage-two history with volatile service evidence", async (t) => {
+  const { harness, receipt } = await legalRetryVerificationFixture(t)
 
   const result = await verifyDuplicateDraftConsolidation(
     { receipt: "scripts/release/duplicate-draft-consolidation.json" },
@@ -638,6 +682,159 @@ test("verify rejects fully rehashed self-consistent historical semantic tamperin
       const tampered = structuredClone(harness.receipt)
       mutate(tampered)
       rebuildSelfConsistentTestReceipt(tampered)
+      await writeFile(harness.receiptPath, `${JSON.stringify(tampered)}\n`)
+      await assert.rejects(
+        verifyDuplicateDraftConsolidation(
+          { receipt: "scripts/release/duplicate-draft-consolidation.json" },
+          harness.dependencies,
+        ),
+        /failed/iu,
+      )
+      assert.deepEqual(harness.calls, [])
+      assert.equal(harness.writerCalls, 0)
+    })
+  }
+})
+
+test("verify rejects fully rehashed historical chronology contradictions before live composition", async (t) => {
+  const cases = [
+    [
+      "reversed npm interval",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "npm-observed").event
+        event.payload.inventory.startedAt = after(event.payload.inventory.completedAt)
+      },
+    ],
+    [
+      "npm package outside interval",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "npm-observed").event
+        event.payload.inventory.packages[0].observedAt = after(event.payload.inventory.completedAt)
+      },
+    ],
+    [
+      "authority observation after event",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "delete-authority-observed").event
+        event.payload.authority.observedAt = after(event.recordedAt)
+      },
+    ],
+    [
+      "authority component after authority",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "delete-authority-observed").event
+        event.payload.authority.annotatedTag.observedAt = after(event.payload.authority.observedAt)
+      },
+    ],
+    [
+      "authority npm after authority",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "delete-authority-observed").event
+        const timestamp = after(event.payload.authority.observedAt)
+        event.payload.authority.npmInventory.completedAt = timestamp
+        event.payload.authority.npmInventory.packages.at(-1).observedAt = timestamp
+      },
+    ],
+    [
+      "release evidence after authority",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "delete-authority-observed").event
+        event.payload.authority.releases[0].updatedAt = after(event.payload.authority.observedAt)
+      },
+    ],
+    [
+      "target read reversal",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "delete-authority-observed").event
+        event.payload.authority.targetRead.releaseGetStartedAt = after(
+          event.payload.authority.targetRead.releaseGetCompletedAt,
+        )
+      },
+    ],
+    [
+      "target read after authority",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "delete-authority-observed").event
+        event.payload.authority.targetRead.assetsListCompletedAt = after(
+          event.payload.authority.observedAt,
+        )
+      },
+    ],
+    [
+      "delete outcome after event",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "delete-outcome").event
+        event.payload.observedAt = after(event.recordedAt)
+      },
+    ],
+    [
+      "resume reconciliation after event",
+      "retry",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "resume-reconciliation").event
+        event.payload.observedAt = after(event.recordedAt)
+      },
+    ],
+    [
+      "absence direct after list",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "absence-converged").event
+        event.payload.directGet404At = after(event.payload.listAbsentAt)
+      },
+    ],
+    [
+      "absence list after completion",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "absence-converged").event
+        event.payload.listAbsentAt = after(event.payload.completedAt)
+      },
+    ],
+    [
+      "absence completion after event",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "absence-converged").event
+        event.payload.completedAt = after(event.recordedAt)
+      },
+    ],
+    [
+      "event recordedAt reversal",
+      "normal",
+      (events) => {
+        const index = events.findIndex(({ event }) => event.type === "delete-intent")
+        events[index].event.recordedAt = before(events[index - 1].event.recordedAt)
+      },
+    ],
+    [
+      "final authority observation after event",
+      "normal",
+      (events) => {
+        const event = events.find(({ event }) => event.type === "final-authority-observed").event
+        event.payload.authority.observedAt = after(event.recordedAt)
+      },
+    ],
+  ]
+
+  for (const [name, fixtureKind, mutate] of cases) {
+    await t.test(name, async (t) => {
+      const harness =
+        fixtureKind === "retry"
+          ? (await legalRetryVerificationFixture(t)).harness
+          : await verificationFixture(t)
+      const tampered = structuredClone(harness.receipt)
+      mutate(tampered.record.journalEnvelope.record.events)
+      rebuildUncheckedChronologyReceipt(tampered)
       await writeFile(harness.receiptPath, `${JSON.stringify(tampered)}\n`)
       await assert.rejects(
         verifyDuplicateDraftConsolidation(
@@ -948,6 +1145,7 @@ test("CLI performs the complete production-composed consolidation using only ext
 
   const beforeVerify = harness.events.length
   const deletesBeforeVerify = [...harness.deleteIds]
+  const currentAssetIds = harness.volatilizeSurvivorAssets()
   harness.stdout.value = ""
   harness.options.argv = [
     "verify",
@@ -965,10 +1163,11 @@ test("CLI performs the complete production-composed consolidation using only ext
     verifyEvents.filter((entry) => entry === `get-release:${DUPLICATE_DRAFT_IDS[1]}`).length,
     1,
   )
-  assert.equal(
-    verifyEvents.filter((entry) => entry.startsWith(`download:${DUPLICATE_DRAFT_SURVIVOR_ID}:`))
-      .length,
-    45,
+  assert.deepEqual(
+    verifyEvents
+      .filter((entry) => entry.startsWith(`download:${DUPLICATE_DRAFT_SURVIVOR_ID}:`))
+      .map((entry) => entry.split(":").at(-1)),
+    currentAssetIds,
   )
   assert.equal(verifyEvents.filter((entry) => entry === "npm").length, 21)
   assert.equal(verifyEvents.filter((entry) => entry === "attestations").length, 1)
@@ -2841,6 +3040,18 @@ async function productionPerformRehearsalFixture(t, options = {}) {
     stdout,
     stderr,
     receiptPath: path.join(inspection.root, "scripts/release/duplicate-draft-consolidation.json"),
+    volatilizeSurvivorAssets() {
+      const ids = []
+      for (const [index, asset] of releaseFixture.releases[0].assets.entries()) {
+        asset.id = 8_500_000 + index
+        asset.node_id = `RA_verify_current_${index}`
+        asset.created_at = `2026-09-01T10:${String(index).padStart(2, "0")}:00Z`
+        asset.updated_at = `2026-09-01T11:${String(index).padStart(2, "0")}:00Z`
+        asset.download_count += 1_000
+        ids.push(String(asset.id))
+      }
+      return ids
+    },
     options: {
       argv: [
         "perform",

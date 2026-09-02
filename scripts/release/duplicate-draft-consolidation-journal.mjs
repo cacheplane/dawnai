@@ -259,6 +259,7 @@ function replayJournal(journal) {
     pendingRetryFromAttempt: null,
     orphanAuthorityRecoveries: 0,
   }
+  assertEventTemporalOrder(started)
   let previousTimestamp = started.recordedAt
   for (let index = 1; index < events.length; index += 1) {
     const envelope = events[index]
@@ -267,9 +268,106 @@ function replayJournal(journal) {
       throw new Error("Journal event timestamps are not monotone")
     }
     previousTimestamp = event.recordedAt
+    assertEventTemporalOrder(event)
     applyEvent(state, event, envelope.eventSha256)
   }
   return state
+}
+
+function assertEventTemporalOrder(event) {
+  const eventTime = event.recordedAt
+  if (event.type === "npm-observed") {
+    assertNpmTemporalOrder(event.payload.inventory, eventTime)
+    return
+  }
+  if (event.type === "delete-authority-observed" || event.type === "final-authority-observed") {
+    assertAuthorityEventTemporalOrder(event.payload.authority, eventTime)
+    return
+  }
+  if (event.type === "delete-outcome" || event.type === "resume-reconciliation") {
+    assertNotAfter(event.payload.observedAt, eventTime, `${event.type} observation`)
+    if (event.payload.releaseEvidence !== null && event.payload.releaseEvidence !== undefined) {
+      assertReleaseEvidenceTemporalOrder(event.payload.releaseEvidence, event.payload.observedAt)
+    }
+    return
+  }
+  if (event.type === "absence-converged") {
+    assertOrderedTimestamps(
+      [
+        event.payload.directGet404At,
+        event.payload.listAbsentAt,
+        event.payload.completedAt,
+        eventTime,
+      ],
+      "absence convergence",
+    )
+  }
+}
+
+function assertAuthorityEventTemporalOrder(authority, eventTime) {
+  assertNotAfter(authority.observedAt, eventTime, "authority observation")
+  assertNotAfter(
+    authority.annotatedTag.observedAt,
+    authority.observedAt,
+    "annotated tag observation",
+  )
+  assertNotAfter(
+    authority.workflowAuthority.observedAt,
+    authority.observedAt,
+    "workflow observation",
+  )
+  assertNpmTemporalOrder(authority.npmInventory, authority.observedAt)
+  for (const release of authority.releases) {
+    assertReleaseEvidenceTemporalOrder(release, authority.observedAt)
+  }
+  if (authority.targetRead !== null) {
+    assertOrderedTimestamps(
+      [
+        authority.npmInventory.completedAt,
+        authority.targetRead.releaseGetStartedAt,
+        authority.targetRead.releaseGetCompletedAt,
+        authority.targetRead.assetsListStartedAt,
+        authority.targetRead.assetsListCompletedAt,
+        authority.observedAt,
+      ],
+      "authority target read",
+    )
+  }
+}
+
+function assertNpmTemporalOrder(inventory, upperBound) {
+  assertNotAfter(inventory.startedAt, inventory.completedAt, "npm inventory interval")
+  for (const entry of inventory.packages) {
+    assertOrderedTimestamps(
+      [inventory.startedAt, entry.observedAt, inventory.completedAt],
+      "npm package observation",
+    )
+  }
+  assertNotAfter(inventory.completedAt, upperBound, "npm inventory completion")
+}
+
+function assertReleaseEvidenceTemporalOrder(release, upperBound) {
+  assertOrderedTimestamps([release.createdAt, release.updatedAt, upperBound], "Release evidence")
+  for (const asset of release.assets) {
+    assertOrderedTimestamps(
+      [asset.createdAt, asset.updatedAt, upperBound],
+      "Release asset evidence",
+    )
+  }
+}
+
+function assertNotAfter(earlier, later, label) {
+  assertOrderedTimestamps([earlier, later], label)
+}
+
+function assertOrderedTimestamps(timestamps, label) {
+  const values = timestamps.map((timestamp) => Date.parse(timestamp))
+  if (
+    values.some((value) => !Number.isFinite(value)) ||
+    values.some((value, index) => index > 0 && value < values[index - 1])
+  ) {
+    throw new Error(`${label} timestamps are contradictory`)
+  }
 }
 
 function applyEvent(state, event, eventSha256) {

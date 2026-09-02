@@ -710,18 +710,32 @@ function appendExpectedPayloadTrace(steps, proposal, stage, rawReleases, exact, 
       throw new Error("Authority proposal is missing a required Release")
     }
     const orderedAssets = stage === "pre-delete-2" ? release.assets : rawRelease.assets
+    const finalAssetsByName =
+      stage === "final" ? new Map(release.assets.map((asset) => [asset.name, asset])) : null
+    if (
+      finalAssetsByName !== null &&
+      (orderedAssets.length !== finalAssetsByName.size ||
+        new Set(orderedAssets.map(({ name }) => name)).size !== finalAssetsByName.size)
+    ) {
+      throw new Error("Final Release asset names differ from the proposal")
+    }
     for (const rawAsset of orderedAssets) {
-      const asset = release.assets.find(({ id }) => id === String(rawAsset.id))
+      const asset =
+        finalAssetsByName === null
+          ? release.assets.find(({ id }) => id === String(rawAsset.id))
+          : finalAssetsByName.get(rawAsset.name)
       if (asset === undefined) {
         throw new Error("Broad Release contains an unexpected asset")
       }
+      if (stage === "final") assertFinalTraceAsset(rawAsset, asset)
+      const currentAssetId = stage === "final" ? canonicalId(rawAsset.id) : asset.id
       steps.push(
         exact(
           "GitHub reader downloadReleaseAsset",
           [
             {
               releaseId,
-              assetId: asset.id,
+              assetId: currentAssetId,
               maximumBytes: asset.size,
             },
           ],
@@ -757,6 +771,22 @@ function appendExpectedPayloadTrace(steps, proposal, stage, rawReleases, exact, 
         session.keyResults.set("terminal-assets", actual)
       }),
     )
+  }
+}
+
+function assertFinalTraceAsset(actual, proposed) {
+  if (
+    actual.name !== proposed.name ||
+    actual.label !== proposed.label ||
+    actual.state !== proposed.state ||
+    actual.content_type !== proposed.contentType ||
+    actual.size !== proposed.size ||
+    actual.digest !== proposed.digest ||
+    actual.uploader?.login !== proposed.uploader.login ||
+    String(actual.uploader?.id) !== proposed.uploader.id ||
+    actual.uploader?.node_id !== proposed.uploader.nodeId
+  ) {
+    throw new Error("Current final Release asset semantics differ from the proposal")
   }
 }
 
