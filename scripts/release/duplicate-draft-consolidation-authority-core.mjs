@@ -1557,7 +1557,7 @@ function assertExactIncidentConfirmation(value, proposedEnvelope) {
     throw new TypeError("Operator confirmation must be an exact control-free string")
   }
   const { candidate, roles } = proposedEnvelope.record
-  const expected = `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`
+  const expected = `CONSOLIDATE v${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`
   if (value !== expected) {
     throw new Error("Operator confirmation does not exactly bind the proposal")
   }

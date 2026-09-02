@@ -245,7 +245,7 @@ export async function createAuthorizedDeleteHarness({ fetchImpl, deleteNow }) {
 
 function exactConfirmation(proposal) {
   const { candidate, roles } = proposal.record
-  return `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
+  return `CONSOLIDATE v${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
 }
 
 function journalHeadBytes(journalPath, journal) {

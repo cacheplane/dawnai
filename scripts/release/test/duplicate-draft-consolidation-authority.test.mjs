@@ -232,17 +232,21 @@ test("cannot authorize DELETE without the exact current private journal", async 
   )
 })
 
-test("requires the exact incident confirmation string instead of a template-object digest", async () => {
-  for (const variant of ["spacing", "newline", "template-object"]) {
+test("requires the exact v-prefixed incident confirmation string instead of a variant", async () => {
+  for (const variant of ["spacing", "newline", "template-object", "unprefixed", "wrong-prefix"]) {
     const fixture = await authorityFixture()
     const captured = await captureConsolidationAuthority(fixture.input)
     const consumption = await journalIntentConsumption(captured, fixture)
     const confirmation =
-      variant === "spacing"
-        ? consumption.confirmation.replace(" SURVIVOR ", "  SURVIVOR ")
-        : variant === "newline"
-          ? `${consumption.confirmation}\n`
-          : JSON.stringify(fixture.proposal.confirmation)
+      variant === "unprefixed"
+        ? consumption.confirmation.replace("CONSOLIDATE v", "CONSOLIDATE ")
+        : variant === "wrong-prefix"
+          ? consumption.confirmation.replace("CONSOLIDATE v", "CONSOLIDATE version-")
+          : variant === "spacing"
+            ? consumption.confirmation.replace(" SURVIVOR ", "  SURVIVOR ")
+            : variant === "newline"
+              ? `${consumption.confirmation}\n`
+              : JSON.stringify(fixture.proposal.confirmation)
     await assert.rejects(
       captured.networkEpoch.consume({ ...consumption, confirmation }),
       /confirmation|exact|consumed|epoch/iu,
@@ -2085,7 +2089,7 @@ async function journalIntentConsumption(captured, fixture, overrides = {}) {
 
 function exactConfirmation(proposedEnvelope) {
   const { candidate, roles } = proposedEnvelope.record
-  return `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`
+  return `CONSOLIDATE v${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`
 }
 
 function journalHeadBytes(fixture, journal) {

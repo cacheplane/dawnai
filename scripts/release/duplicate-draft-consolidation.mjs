@@ -162,13 +162,12 @@ export async function performDuplicateDraftConsolidation(input, dependencies) {
       completedAt: state.lastAuthority.observedAt,
     })
     const receiptBytes = canonicalConsolidationEnvelopeBytes("final", receipt)
-    if (await exactExistingReceipt(context.receiptPath, receiptBytes)) {
-      return completedPerformResult(receipt)
-    }
+    const receiptAlreadyDurable = await exactExistingReceipt(context.receiptPath, receiptBytes)
     if (resumedFromFinalAuthority) {
       const freshFinalAuthority = await context.captureFinalAuthority(context)
       assertFreshFinalAuthority(freshFinalAuthority, state.lastAuthority, context.proposal.record)
     }
+    if (receiptAlreadyDurable) return completedPerformResult(receipt)
     await context.publishReceipt(context.receiptPath, receiptBytes)
     return completedPerformResult(receipt)
   } catch {
@@ -389,7 +388,7 @@ function approvedPerformPath(repositoryRoot, relativePath, expected) {
 }
 
 function exactConfirmation(proposal) {
-  return `CONSOLIDATE ${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
+  return `CONSOLIDATE v${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
 }
 
 async function loadOrCreatePerformJournal(context) {

@@ -20,6 +20,8 @@ import {
   performDuplicateDraftConsolidation,
   performOneDuplicateDeletion,
 } from "../duplicate-draft-consolidation.mjs"
+import { createDuplicateDraftConsolidationAdapters } from "../duplicate-draft-consolidation-adapters.mjs"
+import { runDuplicateDraftConsolidationCli } from "../duplicate-draft-consolidation-cli.mjs"
 import { captureDirectTargetRead } from "../duplicate-draft-consolidation-evidence.mjs"
 import {
   readPrivateEnvelope,
@@ -213,13 +215,125 @@ test("perform receipt resume freshly rechecks final authority and stops on every
   }
 })
 
-test("perform accepts an existing byte-identical canonical receipt without overwrite or network", async (t) => {
+test("perform accepts an existing byte-identical canonical receipt without overwrite after fresh validation", async (t) => {
   const harness = await performFixture(t)
   const first = await performDuplicateDraftConsolidation(harness.input, harness.dependencies)
-  const calls = [...harness.calls]
+  const durable = await readFile(harness.receiptPath)
   const second = await performDuplicateDraftConsolidation(harness.input, harness.dependencies)
   assert.deepEqual(second, first)
-  assert.deepEqual(harness.calls, calls)
+  assert.equal(harness.calls.filter((entry) => entry === "final").length, 2)
+  assert.equal(harness.calls.filter((entry) => entry === "receipt").length, 1)
+  assert.deepEqual(await readFile(harness.receiptPath), durable)
+})
+
+test("CLI performs the complete production-composed consolidation using only external service fakes", async (t) => {
+  const harness = await productionPerformRehearsalFixture(t)
+  const code = await runDuplicateDraftConsolidationCli(harness.options)
+  assert.equal(code, 0, harness.stderr.value)
+  assert.equal(harness.stderr.value, "")
+  assert.deepEqual(harness.deleteIds, [...DUPLICATE_DRAFT_IDS])
+  assert.equal(harness.deleteIds.includes(DUPLICATE_DRAFT_SURVIVOR_ID), false)
+
+  const firstDelete = harness.events.indexOf(`delete:${DUPLICATE_DRAFT_IDS[0]}`)
+  const secondDelete = harness.events.indexOf(`delete:${DUPLICATE_DRAFT_IDS[1]}`)
+  assert.ok(firstDelete > 0)
+  assert.ok(secondDelete > firstDelete)
+  const downloads = (from, to) =>
+    harness.events.slice(from, to).filter((entry) => entry.startsWith("download:")).length
+  assert.equal(downloads(0, firstDelete), 270)
+  assert.equal(downloads(firstDelete + 1, secondDelete), 90)
+  assert.equal(downloads(secondDelete + 1), 45)
+  for (const [from, to, expectedIds] of [
+    [0, firstDelete, [DUPLICATE_DRAFT_SURVIVOR_ID, ...DUPLICATE_DRAFT_IDS]],
+    [firstDelete + 1, secondDelete, [DUPLICATE_DRAFT_SURVIVOR_ID, DUPLICATE_DRAFT_IDS[1]]],
+    [secondDelete + 1, harness.events.length, [DUPLICATE_DRAFT_SURVIVOR_ID]],
+  ]) {
+    const sets = harness.events
+      .slice(from, to)
+      .filter((entry) => entry.startsWith("releases:"))
+      .map((entry) => entry.slice("releases:".length))
+    assert.ok(sets.length > 0)
+    assert.equal(
+      sets.every((entry) => entry === expectedIds.join(",")),
+      true,
+    )
+  }
+  assert.equal(harness.events.filter((entry) => entry === "local-main").length, 3)
+  assert.equal(harness.events.filter((entry) => entry === "github-main").length, 3)
+  assert.equal(harness.events.filter((entry) => entry === "npm").length, 84)
+
+  const receiptBytes = await readTrackedReceipt(
+    harness.receiptPath,
+    DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes,
+  )
+  const receipt = parseConsolidationEnvelope("final", receiptBytes)
+  assert.deepEqual(
+    [
+      ...receipt.record.proposedEnvelope.record.npmInventories.map(({ stage }) => stage),
+      ...receipt.record.journalEnvelope.record.events.flatMap(({ event }) => {
+        if (event.type === "npm-observed") return [event.payload.inventory.stage]
+        if (event.type === "delete-authority-observed") {
+          return [event.payload.authority.npmInventory.stage]
+        }
+        if (event.type === "final-authority-observed") {
+          return [event.payload.authority.npmInventory.stage]
+        }
+        return []
+      }),
+    ],
+    [
+      "inspect-initial",
+      "inspect-ready",
+      "perform-initial",
+      "pre-delete-1",
+      "pre-delete-2",
+      "final",
+    ],
+  )
+  assert.equal((await stat(harness.receiptPath)).mode & 0o777, 0o644)
+  assert.deepEqual(JSON.parse(harness.stdout.value), {
+    status: "complete",
+    survivor: DUPLICATE_DRAFT_SURVIVOR_ID,
+    deleted: [...DUPLICATE_DRAFT_IDS],
+    receipt: "scripts/release/duplicate-draft-consolidation.json",
+    receiptSha256: receipt.recordSha256,
+  })
+})
+
+test("production-composed CLI stops after target one when main advances before target two", async (t) => {
+  const harness = await productionPerformRehearsalFixture(t, { driftMainAfterFirstDelete: true })
+  assert.equal(await runDuplicateDraftConsolidationCli(harness.options), 1)
+  assert.deepEqual(harness.deleteIds, [DUPLICATE_DRAFT_IDS[0]])
+  assert.equal(harness.stderr.value, "Duplicate-draft perform failed.\n")
+  await assert.rejects(readFile(harness.receiptPath), /ENOENT/iu)
+})
+
+test("perform recovers post-rename receipt ambiguity only after fresh final validation", async (t) => {
+  const harness = await performFixture(t, { postRenameReceiptFailureOnce: true })
+  await assert.rejects(
+    performDuplicateDraftConsolidation(harness.input, harness.dependencies),
+    /failed/iu,
+  )
+  const durable = await readFile(harness.receiptPath)
+  const result = await performDuplicateDraftConsolidation(harness.input, harness.dependencies)
+  assert.match(result.receiptSha256, /^[0-9a-f]{64}$/u)
+  assert.equal(harness.calls.filter((entry) => entry.startsWith("delete:")).length, 2)
+  assert.equal(harness.calls.filter((entry) => entry === "final").length, 2)
+  assert.equal(harness.calls.filter((entry) => entry === "receipt").length, 1)
+  assert.deepEqual(await readFile(harness.receiptPath), durable)
+})
+
+test("perform rejects an exact durable receipt when its mandatory fresh final recheck drifts", async (t) => {
+  const harness = await performFixture(t, { resumeFinalDrift: "main" })
+  await performDuplicateDraftConsolidation(harness.input, harness.dependencies)
+  const durable = await readFile(harness.receiptPath)
+  await assert.rejects(
+    performDuplicateDraftConsolidation(harness.input, harness.dependencies),
+    /failed/iu,
+  )
+  assert.equal(harness.calls.filter((entry) => entry.startsWith("delete:")).length, 2)
+  assert.equal(harness.calls.filter((entry) => entry === "receipt").length, 1)
+  assert.deepEqual(await readFile(harness.receiptPath), durable)
 })
 
 test("perform never overwrites malformed, different canonical, or unsafe existing receipts", async (t) => {
@@ -1838,12 +1952,239 @@ async function inspectionFixture(t, options = {}) {
   }
 }
 
+async function productionPerformRehearsalFixture(t, options = {}) {
+  const inspection = await inspectionFixture(t)
+  await inspectDuplicateDrafts(exactInput(), inspection.dependencies)
+  await mkdir(path.join(inspection.root, "scripts", "release"), { recursive: true })
+  const proposal = parseConsolidationEnvelope(
+    "proposed",
+    await readPrivateEnvelope(
+      path.join(inspection.root, OUTPUT),
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.proposedBytes,
+    ),
+  )
+  const releaseFixture = createDuplicateDraftConsolidationFixture()
+  const deleted = new Set()
+  const deleteIds = []
+  const events = []
+  let nowMs = Date.now() + 60 * 60_000
+  const now = () => new Date(nowMs++).toISOString()
+  const currentReleases = () =>
+    releaseFixture.releases
+      .filter(({ id }) => !deleted.has(String(id)))
+      .map((release) => structuredClone(release))
+  const present = (operation, value) => ({
+    status: "PRESENT",
+    operation,
+    httpStatus: 200,
+    code: null,
+    value,
+  })
+  const externalGithub = {
+    async getRef({ ref }) {
+      if (ref === "heads/main") {
+        events.push("github-main")
+        const sha =
+          options.driftMainAfterFirstDelete && deleted.has(DUPLICATE_DRAFT_IDS[0])
+            ? "c".repeat(40)
+            : CONTROLLER_SHA
+        return present("ref", {
+          ref: "refs/heads/main",
+          object: { type: "commit", sha },
+        })
+      }
+      assert.equal(ref, `tags/${DUPLICATE_DRAFT_CANDIDATE.tag}`)
+      return present("ref", {
+        ref: `refs/tags/${DUPLICATE_DRAFT_CANDIDATE.tag}`,
+        object: { type: "tag", sha: "a".repeat(40) },
+      })
+    },
+    async getGitTag({ tagSha }) {
+      assert.equal(tagSha, "a".repeat(40))
+      return present("git-tag", {
+        sha: tagSha,
+        tag: DUPLICATE_DRAFT_CANDIDATE.tag,
+        object: { type: "commit", sha: DUPLICATE_DRAFT_CANDIDATE.commitSha },
+      })
+    },
+    async getWorkflow({ workflow }) {
+      events.push(`workflow:${workflow}`)
+      assert.equal(workflow, "release.yml")
+      return present("workflow", {
+        id: 202_458_345,
+        path: ".github/workflows/release.yml",
+        state: "disabled_manually",
+      })
+    },
+    async listReleases() {
+      const releases = currentReleases()
+      events.push(`releases:${releases.map(({ id }) => id).join(",")}`)
+      return present("releases", releases)
+    },
+    async getRelease({ releaseId }) {
+      const release = currentReleases().find(({ id }) => String(id) === String(releaseId))
+      if (release === undefined) {
+        return {
+          status: "AMBIGUOUS",
+          operation: "release",
+          httpStatus: 404,
+          code: "NOT_FOUND",
+        }
+      }
+      return present("release", release)
+    },
+    async listReleaseAssets({ releaseId }) {
+      const release = currentReleases().find(({ id }) => String(id) === String(releaseId))
+      if (release === undefined) throw new Error("deleted Release has no assets")
+      return present("release-assets", release.assets)
+    },
+    async downloadReleaseAsset(input) {
+      events.push(`download:${input.releaseId}:${input.assetId}`)
+      return releaseFixture.github.downloadReleaseAsset(input)
+    },
+  }
+  const fetchImpl = async (url, init = {}) => {
+    const target = String(url)
+    if (init.method === "DELETE") {
+      const releaseId = target.split("/").at(-1)
+      assert.equal(DUPLICATE_DRAFT_IDS.includes(releaseId), true)
+      assert.equal(deleted.has(releaseId), false)
+      deleted.add(releaseId)
+      deleteIds.push(releaseId)
+      events.push(`delete:${releaseId}`)
+      return new Response(null, { status: 204 })
+    }
+    if (target === "https://api.github.com/repos/cacheplane/dawnai") {
+      return jsonTestResponse({
+        id: 1_210_070_282,
+        full_name: "cacheplane/dawnai",
+        default_branch: "main",
+      })
+    }
+    if (target === "https://api.github.com/user") {
+      return jsonTestResponse({ id: 61_436, login: "blove" })
+    }
+    if (target.includes("/actions/workflows/") && target.includes("/runs?")) {
+      return jsonTestResponse({ total_count: 0, workflow_runs: [] })
+    }
+    throw new Error(`unexpected rehearsal request ${target}`)
+  }
+  const run = async (_command, args) => {
+    if (args[0] === "symbolic-ref") {
+      return { exitCode: 0, stdout: "main\n", stderr: "" }
+    }
+    if (args[0] === "status") return { exitCode: 0, stdout: "", stderr: "" }
+    if (args[0] === "rev-parse" && args.at(-1).startsWith("refs/remotes/origin/main")) {
+      return { exitCode: 0, stdout: `${CONTROLLER_SHA}\n`, stderr: "" }
+    }
+    throw new Error(`unexpected rehearsal command ${args.join(" ")}`)
+  }
+  const createAdapters = () =>
+    createDuplicateDraftConsolidationAdapters({
+      cwd: inspection.root,
+      token: "ghp_fixture_token_1234567890",
+      environment: { HOME: inspection.root, PATH: "/tools" },
+      dependencies: {
+        fetchImpl,
+        run,
+        now,
+        createGitHubReader() {
+          return externalGithub
+        },
+        createOwnerPreflightAdapters() {
+          return {
+            git: {
+              async headSha() {
+                events.push("local-main")
+                return CONTROLLER_SHA
+              },
+            },
+          }
+        },
+        createNpmReader() {
+          return {
+            async observePackageVersion() {
+              events.push("npm")
+              return {
+                status: "ABSENT",
+                operation: "package-version",
+                httpStatus: 404,
+                code: "E404",
+              }
+            },
+          }
+        },
+        createCliAttestationVerifier() {
+          return {
+            async verify(input) {
+              events.push("attestations")
+              return releaseFixture.attestations.verify(input)
+            },
+          }
+        },
+      },
+    })
+  const stdout = memorySink()
+  const stderr = memorySink()
+  const confirmation = `CONSOLIDATE v${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
+  return {
+    deleteIds,
+    events,
+    stdout,
+    stderr,
+    receiptPath: path.join(inspection.root, "scripts/release/duplicate-draft-consolidation.json"),
+    options: {
+      argv: [
+        "perform",
+        "--proposal",
+        ".dawn/release/duplicate-draft-consolidation.proposed.json",
+        "--journal",
+        ".dawn/release/duplicate-draft-consolidation.journal.json",
+        "--receipt",
+        "scripts/release/duplicate-draft-consolidation.json",
+        "--confirmation",
+        confirmation,
+      ],
+      cwd: inspection.root,
+      environment: {},
+      stdout,
+      stderr,
+      dependencies: {
+        createAdapters,
+        now,
+        async wait(milliseconds, { signal }) {
+          assert.equal(signal instanceof AbortSignal, true)
+          nowMs += milliseconds
+        },
+      },
+    },
+  }
+}
+
+function jsonTestResponse(value) {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  })
+}
+
+function memorySink() {
+  const sink = {
+    value: "",
+    write(chunk) {
+      sink.value += String(chunk)
+      return true
+    },
+  }
+  return sink
+}
+
 async function performFixture(t, options = {}) {
   const inspection = await inspectionFixture(t)
   await inspectDuplicateDrafts(exactInput(), inspection.dependencies)
   const proposalPath = path.join(inspection.root, OUTPUT)
   const proposal = parseConsolidationEnvelope("proposed", await readFile(proposalPath))
-  const confirmation = `CONSOLIDATE ${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
+  const confirmation = `CONSOLIDATE v${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
   const journalPath = path.join(
     inspection.root,
     ".dawn/release/duplicate-draft-consolidation.journal.json",
@@ -1855,6 +2196,7 @@ async function performFixture(t, options = {}) {
   await mkdir(path.dirname(receiptPath), { recursive: true })
   const calls = []
   let failReceipt = options.failReceiptOnce === true
+  let failAfterReceiptRename = options.postRenameReceiptFailureOnce === true
   let failInitialVerification = options.failInitialVerificationOnce === true
   let finalCaptures = 0
   let tick = Date.parse(proposal.record.inspectedAt) + 1_000
@@ -2059,6 +2401,10 @@ async function performFixture(t, options = {}) {
         }
         const { writeTrackedReceipt } = await import("../duplicate-draft-consolidation-files.mjs")
         await writeTrackedReceipt(target, bytes)
+        if (failAfterReceiptRename) {
+          failAfterReceiptRename = false
+          throw new Error("simulated post-rename receipt durability ambiguity")
+        }
       },
     }),
   }
@@ -2069,7 +2415,7 @@ async function oneDeletionFixture(t, options) {
   await inspectDuplicateDrafts(exactInput(), inspection.dependencies)
   const proposalPath = path.join(inspection.root, OUTPUT)
   const proposal = parseConsolidationEnvelope("proposed", await readFile(proposalPath))
-  const confirmation = `CONSOLIDATE ${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
+  const confirmation = `CONSOLIDATE v${proposal.record.candidate.version} ${proposal.record.candidate.commitSha} SURVIVOR ${proposal.record.roles.survivor} DELETE ${proposal.record.roles.duplicates.join(",")} PROPOSAL ${proposal.recordSha256}`
   const confirmationSha256 = createHash("sha256").update(confirmation, "utf8").digest("hex")
   const journalPath = path.join(
     inspection.root,
