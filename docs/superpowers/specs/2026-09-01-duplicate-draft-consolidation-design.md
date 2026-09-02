@@ -257,7 +257,7 @@ Each envelope is `{ "record": <exact-schema object>, "recordSha256": <hex> }`.
 one newline; the digest field is outside the hashed projection. The proposed,
 journal, and receipt records use separate schema identifiers and exact field
 sets. All arrays have fixed canonical order, timestamps are canonical UTC, and
-the maximum serialized sizes are 4 MiB for proposed, 64 MiB for journal, and 96
+the maximum serialized sizes are 4 MiB for proposed, 72 MiB for journal, and 96
 MiB for final receipt. Unknown/missing fields, noncanonical bytes, invalid
 UTF-8, duplicate keys, digest mismatch, or excessive size are rejected.
 
@@ -266,7 +266,8 @@ survivor evidence record, 8 MiB journal-event reserve, and 1 MiB
 canonical-envelope reserve. Initialization and tests require:
 
 ```text
-journalBytes >= ((targets * maximumAttempts) + finalStages) *
+journalBytes >= ((targets * maximumAttempts) + finalStages +
+                 maximumOrphanAuthorityRecoveries) *
                 authorityStageBytes + journalEventReserveBytes
 
 finalReceiptBytes >= proposedBytes + journalBytes +
@@ -274,10 +275,11 @@ finalReceiptBytes >= proposedBytes + journalBytes +
                      envelopeReserveBytes
 ```
 
-With two targets, three attempts each, and one final stage, the journal minimum
-is 64 MiB. The chosen 96 MiB final cap preserves 17 MiB of additional headroom
-over its 79 MiB minimum. Tests exercise the maximum attempt/event shape and both
-relationships.
+With two targets, three attempts each, one final stage, and exactly one orphan
+authority recovery for the whole operation, the journal minimum is 72 MiB. A
+second orphan-authority recovery stops without appending. The chosen 96 MiB
+final cap preserves 9 MiB of additional headroom over its 87 MiB minimum. Tests
+exercise the maximum eight-authority-stage history and both relationships.
 
 ### Exact shared records
 
@@ -428,8 +430,11 @@ ambiguous. If the process disappears before recording an outcome, resume reads
 the target:
 
 - present and semantically identical: append
-  `present-unchanged-retryable`, refresh every authority source into a new
-  attempt, persist a new intent, and only then retry DELETE. If the prior
+	`present-unchanged-retryable` only after refreshing every authority source
+	and fully hydrating the current 45-asset target evidence. Persist that actual
+	fresh evidence in the reconciliation, append the same captured authority for
+	the new attempt with no intervening network, persist a new intent, and only
+	then retry DELETE. If the prior
   complete npm inventory is more than two minutes old, append a new
   `perform-initial` inventory, wait at least 60 seconds while repeating the
   heavy payload checks, then capture the target's new `pre-delete-1` or
@@ -440,8 +445,10 @@ the target:
 The same state decision applies after a durably recorded ambiguous outcome. If
 the six-read/90-second window repeatedly observes the target present and
 semantically unchanged, with complete enumeration still including it and every
-other authority input unchanged, append `present-unchanged-retryable` and begin
-a fully fresh numbered attempt. If it becomes absent, append
+other authority input unchanged, perform one full fresh authority capture,
+append `present-unchanged-retryable` with that capture's actual current target
+evidence, and bind the same capture to the fully fresh numbered attempt. If it
+becomes absent, append
 `absence-converged`. A changed target, reader disagreement/error, or a third
 ambiguous attempt that remains present stops. A target present after a recorded
 `confirmed-204` also stops; it is not eligible for retry.

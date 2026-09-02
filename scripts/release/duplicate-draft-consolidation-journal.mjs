@@ -5,11 +5,18 @@ import {
 	canonicalConsolidationEnvelopeBytes,
 	canonicalEventEnvelope,
 	createConsolidationEnvelope,
+	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
 	parseConsolidationEnvelope,
 } from "./duplicate-draft-consolidation-schema.mjs";
 
 const MAXIMUM_DELETE_ATTEMPTS = 3;
-const MAXIMUM_CONSECUTIVE_AUTHORITIES = 3;
+const MAXIMUM_ORPHAN_AUTHORITY_RECOVERIES =
+	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumOrphanAuthorityRecoveries;
+if (MAXIMUM_ORPHAN_AUTHORITY_RECOVERIES !== 1) {
+	throw new Error(
+		"Journal orphan-authority recovery bound must remain exactly one",
+	);
+}
 const APPROVED_DUPLICATE_IDS = Object.freeze(["379982100", "379986168"]);
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const TIMESTAMP_PATTERN =
@@ -157,7 +164,12 @@ export function nextResumeAction(state, liveTarget) {
 	}
 	const evidence = dataValue(live, "releaseEvidence", "live Release evidence");
 	const expected = state.lastAuthority?.targetRead?.evidence;
-	if (expected === undefined || !isDeepStrictEqual(evidence, expected)) {
+	if (expected === undefined) {
+		return "stop";
+	}
+	try {
+		assertEvidenceEqualsProposal(evidence, expected);
+	} catch {
 		return "stop";
 	}
 	if (state.phase === "delete-outcome") {
@@ -273,7 +285,8 @@ function replayJournal(journal) {
 		lastOutcomeClassification: null,
 		lastAuthority: null,
 		lastAuthorityEventSha256: null,
-		consecutiveAuthorities: 0,
+		lastRetryEvidence: null,
+		orphanAuthorityRecoveries: 0,
 	};
 	let previousTimestamp = started.recordedAt;
 	for (let index = 1; index < events.length; index += 1) {
@@ -346,12 +359,12 @@ function applyEvent(state, event, eventSha256) {
 		if (expectedAttempt > MAXIMUM_DELETE_ATTEMPTS) {
 			throw new Error("Delete attempts are exhausted at the reviewed maximum");
 		}
-		const consecutiveAuthorities = supersedingOrphan
-			? state.consecutiveAuthorities + 1
-			: 1;
-		if (consecutiveAuthorities > MAXIMUM_CONSECUTIVE_AUTHORITIES) {
+		const orphanAuthorityRecoveries = supersedingOrphan
+			? state.orphanAuthorityRecoveries + 1
+			: state.orphanAuthorityRecoveries;
+		if (orphanAuthorityRecoveries > MAXIMUM_ORPHAN_AUTHORITY_RECOVERIES) {
 			throw new Error(
-				"Consecutive orphan delete authorities exceed their bound",
+				"Orphan delete authority recoveries exceed their global bound",
 			);
 		}
 		const targetIndex = state.deletionOrder.indexOf(
@@ -361,6 +374,12 @@ function applyEvent(state, event, eventSha256) {
 		if (event.payload.authority.stage !== expectedStage) {
 			throw new Error("Delete authority stage differs from fixed target order");
 		}
+		if (supersedingOrphan) {
+			assertOrphanAuthorityMatches(
+				event.payload.authority,
+				state.lastAuthority,
+			);
+		}
 		if (
 			event.payload.authority.controller.headSha !== state.controllerSha ||
 			event.payload.authority.controller.originMainSha !==
@@ -369,12 +388,19 @@ function applyEvent(state, event, eventSha256) {
 		) {
 			throw new Error("Controller main SHA drifted from operation-started");
 		}
+		if (state.lastRetryEvidence !== null) {
+			assertEvidenceEqualsProposal(
+				event.payload.authority.targetRead.evidence,
+				state.lastRetryEvidence,
+			);
+		}
 		state.phase = "delete-authority-observed";
 		state.attemptNumber = expectedAttempt;
 		state.lastOutcomeClassification = null;
 		state.lastAuthority = event.payload.authority;
 		state.lastAuthorityEventSha256 = eventSha256;
-		state.consecutiveAuthorities = consecutiveAuthorities;
+		state.lastRetryEvidence = null;
+		state.orphanAuthorityRecoveries = orphanAuthorityRecoveries;
 		return;
 	}
 	if (event.type === "delete-intent") {
@@ -412,14 +438,20 @@ function applyEvent(state, event, eventSha256) {
 		}
 		if (
 			event.payload.classification === "present-unchanged-retryable" &&
-			!isDeepStrictEqual(
-				event.payload.releaseEvidence,
-				state.lastAuthority?.targetRead?.evidence,
-			)
+			state.lastAuthority?.targetRead?.evidence === undefined
 		) {
 			throw new Error(
-				"Retryable target evidence changed from delete authority",
+				"Retryable target evidence has no preceding delete authority",
 			);
+		}
+		if (event.payload.classification === "present-unchanged-retryable") {
+			assertEvidenceEqualsProposal(
+				event.payload.releaseEvidence,
+				state.lastAuthority.targetRead.evidence,
+			);
+			state.lastRetryEvidence = event.payload.releaseEvidence;
+		} else {
+			state.lastRetryEvidence = null;
 		}
 		state.phase =
 			event.payload.classification === "present-unchanged-retryable"
@@ -450,7 +482,7 @@ function applyEvent(state, event, eventSha256) {
 		state.lastOutcomeClassification = null;
 		state.lastAuthority = null;
 		state.lastAuthorityEventSha256 = null;
-		state.consecutiveAuthorities = 0;
+		state.lastRetryEvidence = null;
 		state.phase = "target-converged";
 		return;
 	}
@@ -477,6 +509,61 @@ function applyEvent(state, event, eventSha256) {
 		return;
 	}
 	throw new Error(`Illegal journal event ${event.type}`);
+}
+
+function assertOrphanAuthorityMatches(actual, previous) {
+	if (
+		previous === null ||
+		actual.stage !== previous.stage ||
+		!isDeepStrictEqual(actual.controller, previous.controller) ||
+		!isDeepStrictEqual(
+			withoutObservedAt(actual.annotatedTag),
+			withoutObservedAt(previous.annotatedTag),
+		) ||
+		!isDeepStrictEqual(
+			withoutObservedAt(actual.workflowAuthority),
+			withoutObservedAt(previous.workflowAuthority),
+		) ||
+		!isDeepStrictEqual(
+			stableNpmInventory(actual.npmInventory),
+			stableNpmInventory(previous.npmInventory),
+		) ||
+		!isDeepStrictEqual(actual.payloadProof, previous.payloadProof) ||
+		actual.releases.length !== previous.releases.length ||
+		!isDeepStrictEqual(
+			actual.releases.map(({ id }) => id),
+			previous.releases.map(({ id }) => id),
+		)
+	) {
+		throw new Error("Orphan authority recovery drifted from prior authority");
+	}
+	for (let index = 0; index < actual.releases.length; index += 1) {
+		assertEvidenceEqualsProposal(
+			actual.releases[index],
+			previous.releases[index],
+		);
+	}
+	assertEvidenceEqualsProposal(
+		actual.targetRead.evidence,
+		previous.targetRead.evidence,
+	);
+}
+
+function withoutObservedAt({ observedAt: _observedAt, ...value }) {
+	return value;
+}
+
+function stableNpmInventory({
+	startedAt: _startedAt,
+	completedAt: _completedAt,
+	...inventory
+}) {
+	return {
+		...inventory,
+		packages: inventory.packages.map(
+			({ observedAt: _observedAt, ...entry }) => entry,
+		),
+	};
 }
 
 function assertFinalAuthorityMatchesProposal(authority, proposal) {

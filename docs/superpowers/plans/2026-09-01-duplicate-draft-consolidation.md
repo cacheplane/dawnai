@@ -94,7 +94,7 @@ Import the dedicated consolidation limits from the new schema module and assert:
 ```js
 assert.deepEqual(DUPLICATE_DRAFT_CONSOLIDATION_LIMITS, {
   proposedBytes: 4 * MEBIBYTE,
-  journalBytes: 64 * MEBIBYTE,
+  journalBytes: 72 * MEBIBYTE,
   finalReceiptBytes: 96 * MEBIBYTE,
   authorityStageBytes: 8 * MEBIBYTE,
   survivorEvidenceBytes: 2 * MEBIBYTE,
@@ -102,11 +102,13 @@ assert.deepEqual(DUPLICATE_DRAFT_CONSOLIDATION_LIMITS, {
   envelopeReserveBytes: MEBIBYTE,
   maximumDeleteAttempts: 3,
   maximumTargets: 2,
+  maximumOrphanAuthorityRecoveries: 1,
   maximumAssetDownloads: 135,
 })
 assert.ok(
   DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes >=
-    (2 * 3 + 1) * DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes +
+    (2 * 3 + 1 + 1) *
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes +
       DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes,
 )
 assert.ok(
@@ -673,11 +675,16 @@ Add an internal/export-for-test function:
 export async function performOneDuplicateDeletion(input, dependencies)
 ```
 
-Use six complete read attempts, a 90-second wall-clock ceiling, and backoff no
-longer than 30 seconds. Retry DELETE only for an ambiguous/unrecorded outcome
-whose target remains present and semantically unchanged through the bounded
-window, and only after a completely fresh authority/intent attempt. Any read
-403/429/5xx/timeout stops rather than being treated as absence.
+Use six complete read attempts under one 90-second wall-clock ceiling, give each
+request the exact remaining timeout, and bound every backoff by its policy,
+30 seconds, and the remaining shared budget. Retry DELETE only for an
+ambiguous/unrecorded outcome whose target remains present and semantically
+unchanged through the bounded window. Before recording the retry transition,
+perform a completely fresh full authority capture, persist its actual current
+45-asset target evidence, then append that same authority and consume its epoch
+without intervening network. Any included Release or asset drift, clock
+reversal, 403/429/5xx/timeout, or pagination failure stops rather than being
+treated as absence.
 
 - [ ] **Step 4: Run focused tests and commit**
 

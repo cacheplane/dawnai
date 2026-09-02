@@ -12,9 +12,11 @@ import {
 	parseConsolidationJournal,
 } from "../duplicate-draft-consolidation-journal.mjs";
 import {
+	canonicalConsolidationEnvelopeBytes,
 	canonicalEventEnvelope,
 	canonicalRecordSha256,
 	createConsolidationEnvelope,
+	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
 } from "../duplicate-draft-consolidation-schema.mjs";
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs";
 import {
@@ -161,32 +163,146 @@ test("requires an authority event and its exact digest immediately before intent
 	);
 });
 
-test("supersedes at most two orphan authorities for the same unattempted request", () => {
+test("admits exactly one orphan authority recovery globally and rejects a second before append", () => {
 	let journal = newJournal();
 	const authority = preDeleteAuthority(0);
 	journal = appendAuthority(journal, 0, 1, authority, 1);
 	const firstDigest = journal.record.events.at(-1).eventSha256;
 	journal = appendAuthority(journal, 0, 1, authority, 2);
-	journal = appendAuthority(journal, 0, 1, authority, 3);
 	const newestDigest = journal.record.events.at(-1).eventSha256;
 	assert.notEqual(newestDigest, firstDigest);
 	assert.equal(
 		deriveConsolidationState(journal).phase,
 		"delete-authority-observed",
 	);
+	const driftedOrphan = preDeleteAuthority(0);
+	driftedOrphan.targetRead.evidence.assets[0].label = "included drift";
+	driftedOrphan.targetRead.evidenceSha256 = canonicalRecordSha256(
+		driftedOrphan.targetRead.evidence,
+	);
+	driftedOrphan.releases[1] = structuredClone(
+		driftedOrphan.targetRead.evidence,
+	);
+	assert.throws(
+		() =>
+			appendAuthority(
+				appendAuthority(newJournal(), 0, 1, authority, 1),
+				0,
+				1,
+				driftedOrphan,
+				2,
+			),
+		/proposal|authority|evidence|asset|drift/iu,
+	);
 
 	assert.throws(
-		() => appendAuthority(journal, 0, 1, authority, 4),
+		() => appendAuthority(journal, 0, 1, authority, 3),
 		/orphan|authority|bound/iu,
 	);
-	journal = appendIntent(journal, 0, 1, 4);
+	assert.equal(journal.record.events.length, 3);
+	assert.equal(journal.record.events.at(-1).eventSha256, newestDigest);
+	journal = appendIntent(journal, 0, 1, 3);
 	assert.equal(
 		journal.record.events.at(-1).event.payload.authorityEventSha256,
 		newestDigest,
 	);
 	assert.throws(
-		() => appendAuthority(journal, 0, 1, authority, 5),
+		() => appendAuthority(journal, 0, 1, authority, 4),
 		/authority|intent|legal|state/iu,
+	);
+});
+
+test("the maximum eight-stage authority history serializes within the 72 MiB journal admission bound", () => {
+	let journal = newJournal();
+	let second = 1;
+	for (let targetIndex = 0; targetIndex < 2; targetIndex += 1) {
+		for (let attemptNumber = 1; attemptNumber <= 3; attemptNumber += 1) {
+			const authority = maximumSizedAuthority(preDeleteAuthority(targetIndex));
+			journal = appendAuthority(
+				journal,
+				targetIndex,
+				attemptNumber,
+				authority,
+				second++,
+			);
+			if (targetIndex === 0 && attemptNumber === 1) {
+				journal = appendAuthority(
+					journal,
+					targetIndex,
+					attemptNumber,
+					maximumSizedAuthority(preDeleteAuthority(targetIndex)),
+					second++,
+				);
+			}
+			if (targetIndex === 1 && attemptNumber === 1) {
+				const beforeRejectedRecovery = journal;
+				assert.throws(
+					() =>
+						appendAuthority(
+							journal,
+							targetIndex,
+							attemptNumber,
+							maximumSizedAuthority(preDeleteAuthority(targetIndex)),
+							second,
+						),
+					/orphan|authority|bound/iu,
+				);
+				assert.equal(journal, beforeRejectedRecovery);
+			}
+			journal = appendIntent(journal, targetIndex, attemptNumber, second++);
+			if (attemptNumber < 3) {
+				journal = appendOutcome(
+					journal,
+					targetIndex,
+					attemptNumber,
+					"transport-ambiguous",
+					null,
+					second++,
+				);
+				journal = appendReconciliation(
+					journal,
+					targetIndex,
+					attemptNumber,
+					"present-unchanged-retryable",
+					targetEvidence(authority),
+					second++,
+				);
+			} else {
+				journal = appendOutcome(
+					journal,
+					targetIndex,
+					attemptNumber,
+					"confirmed-204",
+					204,
+					second++,
+				);
+				journal = appendAbsence(
+					journal,
+					targetIndex,
+					attemptNumber,
+					"confirmed-204",
+					second++,
+				);
+			}
+		}
+	}
+	journal = appendJournalEvent(
+		journal,
+		"final-authority-observed",
+		{ authority: maximumSizedAuthority(finalAuthority()) },
+		at(second),
+	);
+	const bytes = canonicalConsolidationEnvelopeBytes("journal", journal);
+	assert.ok(
+		bytes.byteLength <= DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+	);
+	assert.equal(
+		journal.record.events.filter(({ event }) =>
+			["delete-authority-observed", "final-authority-observed"].includes(
+				event.type,
+			),
+		).length,
+		8,
 	);
 });
 
@@ -233,12 +349,13 @@ test("an intent with no outcome and unchanged target requires reconciliation the
 		}),
 		"refresh-and-retry",
 	);
+	const freshEvidence = volatileEvidence(targetEvidence(authority), "retry");
 	journal = appendReconciliation(
 		journal,
 		0,
 		1,
 		"present-unchanged-retryable",
-		targetEvidence(authority),
+		freshEvidence,
 		3,
 	);
 	journal = appendAuthority(journal, 0, 2, preDeleteAuthority(0), 4);
@@ -246,6 +363,34 @@ test("an intent with no outcome and unchanged target requires reconciliation the
 	state = deriveConsolidationState(journal);
 	assert.equal(state.attemptNumber, 2);
 	assert.equal(state.phase, "delete-intent");
+});
+
+test("retry evidence accepts service volatility but the next authority rejects included asset drift", () => {
+	const authority = preDeleteAuthority(0);
+	let journal = appendIntent(
+		appendAuthority(newJournal(), 0, 1, authority, 1),
+		0,
+		1,
+		2,
+	);
+	journal = appendReconciliation(
+		journal,
+		0,
+		1,
+		"present-unchanged-retryable",
+		volatileEvidence(targetEvidence(authority), "observed"),
+		3,
+	);
+	const drifted = preDeleteAuthority(0);
+	drifted.targetRead.evidence.assets[0].label = "changed included label";
+	drifted.targetRead.evidenceSha256 = canonicalRecordSha256(
+		drifted.targetRead.evidence,
+	);
+	drifted.releases[1] = structuredClone(drifted.targetRead.evidence);
+	assert.throws(
+		() => appendAuthority(journal, 0, 2, drifted, 4),
+		/asset|evidence|proposal|equal/iu,
+	);
 });
 
 test("a retry perform-initial observation advances and binds the next attempt", () => {
@@ -494,6 +639,28 @@ function newJournal() {
 	});
 }
 
+function maximumSizedAuthority(value) {
+	const authority = structuredClone(value);
+	const currentBytes = Buffer.byteLength(
+		`${JSON.stringify(authority)}\n`,
+		"utf8",
+	);
+	const currentNameBytes = Buffer.byteLength(
+		JSON.stringify(authority.annotatedTag.name),
+		"utf8",
+	);
+	const replacementBytes =
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes -
+		currentBytes +
+		currentNameBytes;
+	authority.annotatedTag.name = "x".repeat(replacementBytes - 2);
+	assert.equal(
+		Buffer.byteLength(`${JSON.stringify(authority)}\n`, "utf8"),
+		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes,
+	);
+	return authority;
+}
+
 function exactConfirmation(proposedEnvelope) {
 	const { candidate, roles } = proposedEnvelope.record;
 	return `CONSOLIDATE ${candidate.version} ${candidate.commitSha} SURVIVOR ${roles.survivor} DELETE ${roles.duplicates.join(",")} PROPOSAL ${proposedEnvelope.recordSha256}`;
@@ -690,6 +857,19 @@ function finalAuthority() {
 
 function targetEvidence(authority) {
 	return structuredClone(authority.targetRead.evidence);
+}
+
+function volatileEvidence(value, suffix) {
+	const evidence = structuredClone(value);
+	evidence.nodeId = `RE_${suffix}`;
+	evidence.createdAt = at(1);
+	evidence.updatedAt = at(2);
+	evidence.assets[0].id = `99000${suffix.length}`;
+	evidence.assets[0].nodeId = `RA_${suffix}`;
+	evidence.assets[0].createdAt = at(1);
+	evidence.assets[0].updatedAt = at(2);
+	evidence.assets[0].downloadCount += 1;
+	return evidence;
 }
 
 async function journalFixture() {

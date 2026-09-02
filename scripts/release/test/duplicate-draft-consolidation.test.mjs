@@ -46,6 +46,9 @@ import {
 const OUTPUT = ".dawn/release/duplicate-draft-consolidation.proposed.json";
 const BASE_TIME = Date.parse("2026-09-01T12:00:00.000Z");
 const CONTROLLER_SHA = "b".repeat(40);
+const CONVERGENCE_BACKOFFS = Object.freeze([
+	1_000, 5_000, 15_000, 30_000, 30_000,
+]);
 
 test("one-target deletion rejects a numeric or survivor target before creating network adapters", async () => {
 	let adapterCreations = 0;
@@ -179,6 +182,77 @@ test("one-target deletion gives an unchanged ambiguous target six complete reads
 	);
 });
 
+test("one-target retry persists the actual fresh 45-asset target evidence before binding that same authority", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["transport-ambiguous", "confirmed-204"],
+		freshAuthorityMutation: "volatile",
+	});
+	await performOneDuplicateDeletion(harness.input, harness.dependencies);
+	const journal = parseConsolidationEnvelope(
+		"journal",
+		await readPrivateEnvelope(
+			harness.input.journalPath,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+		),
+	);
+	const authorities = journal.record.events.filter(
+		({ event }) => event.type === "delete-authority-observed",
+	);
+	const retry = journal.record.events.find(
+		({ event }) =>
+			event.type === "resume-reconciliation" &&
+			event.payload.classification === "present-unchanged-retryable",
+	);
+	assert.equal(authorities.length, 2);
+	assert.equal(retry.event.payload.releaseEvidence.assets.length, 45);
+	assert.notDeepEqual(
+		retry.event.payload.releaseEvidence,
+		authorities[0].event.payload.authority.targetRead.evidence,
+	);
+	assert.deepEqual(
+		retry.event.payload.releaseEvidence,
+		authorities[1].event.payload.authority.targetRead.evidence,
+	);
+	assert.ok(
+		journal.record.events.indexOf(retry) <
+			journal.record.events.indexOf(authorities[1]),
+	);
+	const secondCapture = harness.events.lastIndexOf(
+		"authority:pre-delete-1:379982100",
+	);
+	assert.deepEqual(harness.events.slice(secondCapture), [
+		"authority:pre-delete-1:379982100",
+		"durable:authority",
+		"durable:intent",
+		"delete:379982100",
+		"durable:outcome:confirmed-204",
+		"direct:379982100",
+		"list",
+	]);
+});
+
+test("one-target retry stops when the fresh full authority capture finds included asset drift", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["transport-ambiguous"],
+		freshAuthorityMutation: "asset-included",
+	});
+	await assert.rejects(
+		performOneDuplicateDeletion(harness.input, harness.dependencies),
+		/failed/iu,
+	);
+	assert.equal(
+		harness.events.filter((entry) => entry.startsWith("delete:")).length,
+		1,
+	);
+	const state = deriveConsolidationState(
+		await readPrivateEnvelope(
+			harness.input.journalPath,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+		),
+	);
+	assert.equal(state.phase, "delete-outcome");
+});
+
 test("one-target deletion preserves received 404 ambiguity while converging absence", async (t) => {
 	const harness = await oneDeletionFixture(t, {
 		deleteClassifications: ["response-404-ambiguous"],
@@ -202,27 +276,121 @@ test("one-target deletion preserves received 404 ambiguity while converging abse
 	);
 });
 
-test("one-target deletion resumes crashes after intent and after an outcome journal write from disk", async (t) => {
-	for (const faultAt of ["after-intent", "after-outcome-journal"]) {
-		const harness = await oneDeletionFixture(t, {
-			deleteClassifications: ["confirmed-204"],
-		});
-		await assert.rejects(
-			performOneDuplicateDeletion(
-				harness.input,
-				harness.dependenciesWithFault(faultAt),
-			),
-			/failed/iu,
-		);
-		const result = await performOneDuplicateDeletion(
-			harness.input,
-			harness.dependencies,
-		);
-		assert.equal(result.status, "converged");
-		assert.equal(
-			harness.events.filter((entry) => entry.startsWith("delete:")).length,
+test("one-target deletion resumes each exact intent, request, outcome, resume, and convergence crash boundary", async (t) => {
+	const scenarios = [
+		[
+			"after-intent-journal",
+			["confirmed-204"],
 			1,
-		);
+			"confirmed-204",
+			"delete-intent",
+		],
+		[
+			"after-intent-head",
+			["confirmed-204"],
+			1,
+			"confirmed-204",
+			"delete-intent",
+		],
+		["before-delete", ["confirmed-204"], 1, "confirmed-204", "delete-intent"],
+		["after-delete", ["confirmed-204"], 1, "ambiguous", "delete-intent"],
+		[
+			"after-outcome-journal",
+			["confirmed-204"],
+			1,
+			"confirmed-204",
+			"delete-outcome",
+		],
+		[
+			"after-outcome-head",
+			["confirmed-204"],
+			1,
+			"confirmed-204",
+			"delete-outcome",
+		],
+		[
+			"after-resume-journal",
+			["transport-ambiguous", "confirmed-204"],
+			2,
+			"confirmed-204",
+			"resume-present",
+		],
+		[
+			"after-resume-head",
+			["transport-ambiguous", "confirmed-204"],
+			2,
+			"confirmed-204",
+			"resume-present",
+		],
+		[
+			"after-convergence-journal",
+			["confirmed-204"],
+			1,
+			"confirmed-204",
+			"target-converged",
+		],
+		[
+			"after-convergence-head",
+			["confirmed-204"],
+			1,
+			"confirmed-204",
+			"target-converged",
+		],
+	];
+	for (const [
+		faultAt,
+		deleteClassifications,
+		deleteCalls,
+		basis,
+		crashPhase,
+	] of scenarios) {
+		await t.test(faultAt, async (t) => {
+			const harness = await oneDeletionFixture(t, { deleteClassifications });
+			await assert.rejects(
+				performOneDuplicateDeletion(
+					harness.input,
+					harness.dependenciesWithFault(faultAt),
+				),
+				/failed/iu,
+			);
+			assert.equal(
+				deriveConsolidationState(
+					await readPrivateEnvelope(
+						harness.input.journalPath,
+						DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+					),
+				).phase,
+				crashPhase,
+			);
+			const result = await performOneDuplicateDeletion(
+				harness.input,
+				harness.dependencies,
+			);
+			assert.equal(result.status, "converged");
+			assert.equal(result.basis, basis);
+			assert.equal(
+				harness.events.filter((entry) => entry.startsWith("delete:")).length,
+				deleteCalls,
+			);
+			const journal = parseConsolidationEnvelope(
+				"journal",
+				await readPrivateEnvelope(
+					harness.input.journalPath,
+					DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+				),
+			);
+			assert.equal(deriveConsolidationState(journal).phase, "target-converged");
+			assert.deepEqual(
+				await readPrivateEnvelope(
+					harness.input.journalPath.replace(
+						/journal\.json$/u,
+						"journal.head.json",
+					),
+					16 * 1024,
+				),
+				testJournalHeadBytes(harness.input.journalPath, journal),
+			);
+		});
 	}
 });
 
@@ -250,6 +418,84 @@ test("one-target deletion supersedes orphan authority after either authority dur
 		assert.equal(
 			harness.events.filter((entry) => entry.startsWith("delete:")).length,
 			1,
+		);
+	}
+});
+
+test("one-target deletion stops honestly before a second global orphan-authority recovery", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["confirmed-204"],
+	});
+	for (let crash = 0; crash < 2; crash += 1) {
+		await assert.rejects(
+			performOneDuplicateDeletion(
+				harness.input,
+				harness.dependenciesWithFault("after-authority-journal"),
+			),
+			/failed/iu,
+		);
+	}
+	await assert.rejects(
+		performOneDuplicateDeletion(harness.input, harness.dependencies),
+		/failed/iu,
+	);
+	const journal = parseConsolidationEnvelope(
+		"journal",
+		await readPrivateEnvelope(
+			harness.input.journalPath,
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+		),
+	);
+	assert.equal(
+		journal.record.events.filter(
+			({ event }) => event.type === "delete-authority-observed",
+		).length,
+		2,
+	);
+	assert.equal(
+		harness.events.filter((entry) => entry.startsWith("delete:")).length,
+		0,
+	);
+});
+
+test("one-target deletion refreshes volatile retry evidence again after either resume durability crash", async (t) => {
+	for (const faultAt of ["after-resume-journal", "after-resume-head"]) {
+		const harness = await oneDeletionFixture(t, {
+			deleteClassifications: ["transport-ambiguous", "confirmed-204"],
+			freshAuthorityMutation: "volatile",
+		});
+		await assert.rejects(
+			performOneDuplicateDeletion(
+				harness.input,
+				harness.dependenciesWithFault(faultAt),
+			),
+			/failed/iu,
+		);
+		const result = await performOneDuplicateDeletion(
+			harness.input,
+			harness.dependencies,
+		);
+		assert.equal(result.status, "converged");
+		const journal = parseConsolidationEnvelope(
+			"journal",
+			await readPrivateEnvelope(
+				harness.input.journalPath,
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+			),
+		);
+		const retry = journal.record.events.find(
+			({ event }) =>
+				event.type === "resume-reconciliation" &&
+				event.payload.classification === "present-unchanged-retryable",
+		);
+		const retryAuthority = journal.record.events.find(
+			({ event }) =>
+				event.type === "delete-authority-observed" &&
+				event.payload.attemptNumber === 2,
+		);
+		assert.notDeepEqual(
+			retry.event.payload.releaseEvidence,
+			retryAuthority.event.payload.authority.targetRead.evidence,
 		);
 	}
 });
@@ -341,6 +587,90 @@ test("one-target deletion stops on reader disagreement, changed evidence, confir
 			1,
 		);
 	}
+});
+
+test("one-target convergence shares one exact 90-second budget across six complete request pairs and waits", async (t) => {
+	const timing = exactConvergenceTimeline([
+		500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 3_500,
+	]);
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["transport-ambiguous"],
+		absenceOnConvergenceAttempt: 6,
+	});
+	const result = await performOneDuplicateDeletion(
+		harness.input,
+		harness.dependenciesWithTimeline(timing.values),
+	);
+	assert.equal(result.basis, "ambiguous");
+	assert.deepEqual(harness.waits, [1_000, 5_000, 15_000, 30_000, 30_000]);
+	assert.deepEqual(
+		harness.requestBudgets.map(({ operation }) => operation),
+		timing.requests.map(({ operation }) => operation),
+	);
+	for (const [index, { timeoutMs }] of harness.requestBudgets.entries()) {
+		assert.ok(timeoutMs > 0);
+		assert.ok(timeoutMs <= timing.requests[index].timeoutMs);
+	}
+	assert.ok(harness.requestBudgets.at(-1).timeoutMs <= 3_500);
+	assert.equal(
+		harness.events.filter((entry) => entry.startsWith("direct:")).length,
+		6,
+	);
+	assert.equal(harness.events.filter((entry) => entry === "list").length, 6);
+	assert.equal(timing.completedAt, 90_000);
+});
+
+test("one-target convergence stops on a reversed or future monotonic test trace before a seventh request", async (t) => {
+	for (const timeline of [
+		Object.freeze([0, 1, 0]),
+		Object.freeze([0, 90_001]),
+	]) {
+		const harness = await oneDeletionFixture(t, {
+			deleteClassifications: ["transport-ambiguous"],
+		});
+		await assert.rejects(
+			performOneDuplicateDeletion(
+				harness.input,
+				harness.dependenciesWithTimeline(timeline),
+			),
+			/failed/iu,
+		);
+		assert.equal(
+			harness.events.filter((entry) => entry.startsWith("delete:")).length,
+			1,
+		);
+		assert.ok(
+			harness.events.filter((entry) => entry.startsWith("direct:")).length < 7,
+		);
+	}
+});
+
+test("one-target deletion rejects an accessor-backed monotonic test trace without invocation or network", async (t) => {
+	const harness = await oneDeletionFixture(t, {
+		deleteClassifications: ["confirmed-204"],
+	});
+	let accessorCalls = 0;
+	const monotonicTimeline = new Array(2);
+	for (let index = 0; index < monotonicTimeline.length; index += 1) {
+		Object.defineProperty(monotonicTimeline, index, {
+			enumerable: true,
+			get() {
+				accessorCalls += 1;
+				return index;
+			},
+		});
+	}
+	Object.freeze(monotonicTimeline);
+	const eventCount = harness.events.length;
+	await assert.rejects(
+		performOneDuplicateDeletion(
+			harness.input,
+			harness.dependenciesWithTimeline(monotonicTimeline),
+		),
+		/failed/iu,
+	);
+	assert.equal(accessorCalls, 0);
+	assert.equal(harness.events.length, eventCount);
 });
 
 test("inspects the exact incident, observes the gap, and writes one canonical private proposal", async (t) => {
@@ -1132,6 +1462,8 @@ async function oneDeletionFixture(t, options) {
 	);
 
 	const events = [];
+	const waits = [];
+	const requestBudgets = [];
 	const targetReleaseId = DUPLICATE_DRAFT_IDS[0];
 	const authorityTime = new Date(
 		Date.parse(proposal.record.inspectedAt) + 1_000,
@@ -1174,6 +1506,9 @@ async function oneDeletionFixture(t, options) {
 	};
 	let deleted = false;
 	let deleteCalls = 0;
+	let authorityCaptures = 0;
+	let adapterFault = null;
+	let convergenceDirectReads = 0;
 	let permit;
 	let currentAuthorityTime = authorityTime;
 	const unsupported = async () => {
@@ -1226,6 +1561,10 @@ async function oneDeletionFixture(t, options) {
 		},
 		async getRelease({ releaseId }) {
 			events.push(`direct:${releaseId}`);
+			convergenceDirectReads += 1;
+			if (options.absenceOnConvergenceAttempt === convergenceDirectReads) {
+				deleted = true;
+			}
 			if (options.convergenceDirectFailure === "timeout") {
 				throw new Error("simulated timeout");
 			}
@@ -1300,6 +1639,7 @@ async function oneDeletionFixture(t, options) {
 	Object.defineProperty(adapters, "captureConsolidationAuthority", {
 		value: Object.freeze(async function capture(input) {
 			assert.equal(input.adapters, adapters);
+			authorityCaptures += 1;
 			events.push(`authority:${input.stage}:${input.targetReleaseId}`);
 			const beforeAuthority = parseConsolidationEnvelope(
 				"journal",
@@ -1308,22 +1648,18 @@ async function oneDeletionFixture(t, options) {
 					DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
 				),
 			);
-			const beforeAuthorityState = deriveConsolidationState(beforeAuthority);
 			currentAuthorityTime = new Date(
 				Date.parse(beforeAuthority.record.updatedAt) + 1_000,
 			).toISOString();
-			const attemptNumber =
-				beforeAuthorityState.phase === "resume-present"
-					? beforeAuthorityState.attemptNumber + 1
-					: beforeAuthorityState.attemptNumber;
 			const networkEpoch = {};
 			Object.defineProperty(networkEpoch, "consume", {
 				value: async (consumption) => {
 					assert.equal(consumption.targetReleaseId, targetReleaseId);
-					assert.equal(
-						deriveConsolidationState(consumption.currentJournal).phase,
-						"delete-authority-observed",
+					const consumptionState = deriveConsolidationState(
+						consumption.currentJournal,
 					);
+					assert.equal(consumptionState.phase, "delete-authority-observed");
+					const attemptNumber = consumptionState.attemptNumber;
 					events.push("durable:authority");
 					journal = appendJournalEvent(
 						consumption.currentJournal,
@@ -1340,10 +1676,16 @@ async function oneDeletionFixture(t, options) {
 						journalPath,
 						canonicalConsolidationEnvelopeBytes("journal", journal),
 					);
+					if (adapterFault === "after-intent-journal") {
+						throw new Error("injected intent journal process loss");
+					}
 					await writePrivateEnvelope(
 						headPath,
 						testJournalHeadBytes(journalPath, journal),
 					);
+					if (adapterFault === "after-intent-head") {
+						throw new Error("injected intent head process loss");
+					}
 					events.push("durable:intent");
 					permit = Object.freeze({});
 					return permit;
@@ -1354,6 +1696,34 @@ async function oneDeletionFixture(t, options) {
 			});
 			Object.freeze(networkEpoch);
 			const freshAuthority = structuredClone(authority);
+			if (
+				authorityCaptures > 1 &&
+				options.freshAuthorityMutation === "asset-included"
+			) {
+				throw new Error("fresh authority rejected included asset drift");
+			}
+			if (
+				authorityCaptures > 1 &&
+				options.freshAuthorityMutation === "volatile"
+			) {
+				const evidence = freshAuthority.targetRead.evidence;
+				evidence.nodeId = `RE_volatile_retry_${authorityCaptures}`;
+				evidence.createdAt = new Date(
+					Date.parse(evidence.createdAt) + authorityCaptures * 1_000,
+				).toISOString();
+				evidence.updatedAt = evidence.createdAt;
+				evidence.assets[0].id = String(999_999_000 + authorityCaptures);
+				evidence.assets[0].nodeId = `RA_volatile_retry_${authorityCaptures}`;
+				evidence.assets[0].createdAt = evidence.createdAt;
+				evidence.assets[0].updatedAt = evidence.updatedAt;
+				evidence.assets[0].downloadCount += 1;
+				freshAuthority.targetRead.evidenceSha256 =
+					canonicalRecordSha256(evidence);
+				const releaseIndex = freshAuthority.releases.findIndex(
+					({ id }) => id === targetReleaseId,
+				);
+				freshAuthority.releases[releaseIndex] = structuredClone(evidence);
+			}
 			freshAuthority.annotatedTag.observedAt = currentAuthorityTime;
 			freshAuthority.workflowAuthority.observedAt = currentAuthorityTime;
 			freshAuthority.npmInventory.startedAt = currentAuthorityTime;
@@ -1393,6 +1763,8 @@ async function oneDeletionFixture(t, options) {
 
 	return {
 		events,
+		waits,
+		requestBudgets,
 		input: {
 			proposedEnvelope: proposal,
 			confirmation,
@@ -1400,21 +1772,77 @@ async function oneDeletionFixture(t, options) {
 			journalPath,
 		},
 		dependencies: Object.freeze({
-			createAdapters: Object.freeze(async () => adapters),
-			wait: Object.freeze(async (_milliseconds, { signal }) => {
+			createAdapters: Object.freeze(async (requestBudget) => {
+				adapterFault = null;
+				if (requestBudget !== undefined) requestBudgets.push(requestBudget);
+				return adapters;
+			}),
+			wait: Object.freeze(async (milliseconds, { signal }) => {
 				assert.equal(signal instanceof AbortSignal, true);
+				waits.push(milliseconds);
 			}),
 		}),
 		dependenciesWithFault(faultAt) {
 			return Object.freeze({
-				createAdapters: Object.freeze(async () => adapters),
-				wait: Object.freeze(async (_milliseconds, { signal }) => {
+				createAdapters: Object.freeze(async (requestBudget) => {
+					adapterFault = faultAt;
+					if (requestBudget !== undefined) requestBudgets.push(requestBudget);
+					return adapters;
+				}),
+				wait: Object.freeze(async (milliseconds, { signal }) => {
 					assert.equal(signal instanceof AbortSignal, true);
+					waits.push(milliseconds);
 				}),
 				faultAt,
 			});
 		},
+		dependenciesWithTimeline(monotonicTimeline) {
+			return Object.freeze({
+				createAdapters: Object.freeze(async (requestBudget) => {
+					adapterFault = null;
+					if (requestBudget !== undefined) requestBudgets.push(requestBudget);
+					return adapters;
+				}),
+				wait: Object.freeze(async (milliseconds, { signal }) => {
+					assert.equal(signal instanceof AbortSignal, true);
+					waits.push(milliseconds);
+				}),
+				monotonicTimeline,
+			});
+		},
 	};
+}
+
+function exactConvergenceTimeline(requestDurations) {
+	assert.equal(requestDurations.length, 12);
+	let now = 0;
+	const values = [now];
+	const requests = [];
+	let requestIndex = 0;
+	for (let attempt = 0; attempt < 6; attempt += 1) {
+		values.push(now);
+		for (const operation of ["release", "releases"]) {
+			values.push(now);
+			requests.push({ operation, timeoutMs: 90_000 - now });
+			now += requestDurations[requestIndex++];
+			values.push(now);
+		}
+		if (attempt < 5) {
+			values.push(now);
+			const delay = Math.min(
+				CONVERGENCE_BACKOFFS[attempt],
+				30_000,
+				90_000 - now,
+			);
+			now += delay;
+			values.push(now);
+		}
+	}
+	return Object.freeze({
+		values: Object.freeze(values),
+		requests: Object.freeze(requests),
+		completedAt: now,
+	});
 }
 
 function testJournalHeadBytes(journalPath, journal) {

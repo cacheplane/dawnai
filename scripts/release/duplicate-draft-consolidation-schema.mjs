@@ -8,7 +8,7 @@ const MEBIBYTE = 1024 * 1024;
 
 export const DUPLICATE_DRAFT_CONSOLIDATION_LIMITS = Object.freeze({
 	proposedBytes: 4 * MEBIBYTE,
-	journalBytes: 64 * MEBIBYTE,
+	journalBytes: 72 * MEBIBYTE,
 	finalReceiptBytes: 96 * MEBIBYTE,
 	authorityStageBytes: 8 * MEBIBYTE,
 	survivorEvidenceBytes: 2 * MEBIBYTE,
@@ -16,6 +16,7 @@ export const DUPLICATE_DRAFT_CONSOLIDATION_LIMITS = Object.freeze({
 	envelopeReserveBytes: MEBIBYTE,
 	maximumDeleteAttempts: 3,
 	maximumTargets: 2,
+	maximumOrphanAuthorityRecoveries: 1,
 	maximumAssetDownloads: 135,
 });
 
@@ -23,7 +24,8 @@ if (
 	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes <
 		(DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumTargets *
 			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumDeleteAttempts +
-			1) *
+			1 +
+			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.maximumOrphanAuthorityRecoveries) *
 			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes +
 			DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes ||
 	DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes <

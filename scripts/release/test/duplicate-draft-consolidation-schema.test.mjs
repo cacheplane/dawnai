@@ -22,7 +22,7 @@ const DUPLICATE_IDS = Object.freeze(["379982100", "379986168"]);
 test("dedicated consolidation limits preserve journal and receipt headroom", () => {
 	assert.deepEqual(DUPLICATE_DRAFT_CONSOLIDATION_LIMITS, {
 		proposedBytes: 4 * MEBIBYTE,
-		journalBytes: 64 * MEBIBYTE,
+		journalBytes: 72 * MEBIBYTE,
 		finalReceiptBytes: 96 * MEBIBYTE,
 		authorityStageBytes: 8 * MEBIBYTE,
 		survivorEvidenceBytes: 2 * MEBIBYTE,
@@ -30,11 +30,13 @@ test("dedicated consolidation limits preserve journal and receipt headroom", () 
 		envelopeReserveBytes: MEBIBYTE,
 		maximumDeleteAttempts: 3,
 		maximumTargets: 2,
+		maximumOrphanAuthorityRecoveries: 1,
 		maximumAssetDownloads: 135,
 	});
 	assert.ok(
 		DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes >=
-			(2 * 3 + 1) * DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes +
+			(2 * 3 + 1 + 1) *
+				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.authorityStageBytes +
 				DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalEventReserveBytes,
 	);
 	assert.ok(
@@ -341,7 +343,7 @@ test("embedded envelopes retain their own proposed and journal byte ceilings", (
 		canonicalEventEnvelope(operation, previousEventSha256),
 	);
 	previousEventSha256 = oversizedJournalRecord.events.at(-1).eventSha256;
-	for (let index = 0; index < 10; index += 1) {
+	for (let index = 0; index < 11; index += 1) {
 		const authority = authorityStage("final", null);
 		authority.annotatedTag.name = "x".repeat(7 * MEBIBYTE);
 		const event = journalEvent("final-authority-observed", { authority });

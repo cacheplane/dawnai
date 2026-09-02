@@ -51,7 +51,8 @@ const NATIVE_PERFORMANCE_NOW = performance.now.bind(performance);
 const FAULT_BOUNDARIES = new Set([
 	"after-authority-journal",
 	"after-authority-head",
-	"after-intent",
+	"after-intent-journal",
+	"after-intent-head",
 	"before-delete",
 	"after-delete",
 	"after-outcome-journal",
@@ -75,6 +76,7 @@ export async function performOneDuplicateDeletion(input, dependencies) {
 		assertDeletionBinding(context, current.journal);
 		const completed = completedDeletionResult(context, current.journal);
 		if (completed !== null) return completed;
+		let preparedAttempt = null;
 
 		for (;;) {
 			const state = deriveConsolidationState(current.journal);
@@ -98,6 +100,7 @@ export async function performOneDuplicateDeletion(input, dependencies) {
 				);
 				if (resolved.result !== null) return resolved.result;
 				current = { journal: resolved.journal };
+				preparedAttempt = resolved.preparedAttempt;
 				continue;
 			}
 
@@ -113,18 +116,14 @@ export async function performOneDuplicateDeletion(input, dependencies) {
 				throw new Error("Journal is not at a legal one-target mutation state");
 			}
 
-			const sourceAdapters = await context.createAdapters();
-			const adapters = bindAdapters(sourceAdapters);
+			const prepared =
+				preparedAttempt ?? (await captureFreshDeleteAuthority(context, state));
+			preparedAttempt = null;
+			const { adapters, captured } = prepared;
 			const attemptNumber =
 				state.phase === "resume-present"
 					? state.attemptNumber + 1
 					: state.attemptNumber;
-			const captured = await captureConsolidationAuthority({
-				stage: deletionStage(state),
-				proposal: context.proposal.record,
-				targetReleaseId: context.targetReleaseId,
-				adapters: sourceAdapters,
-			});
 			current = await appendDurableEvent(
 				context,
 				current.journal,
@@ -154,7 +153,6 @@ export async function performOneDuplicateDeletion(input, dependencies) {
 			) {
 				throw new Error("Durable delete intent did not become current");
 			}
-			injectFault(context, "after-intent");
 			injectFault(context, "before-delete");
 			const outcome = exactPlain(
 				await adapters.writer.deleteDuplicate({
@@ -189,10 +187,23 @@ export async function performOneDuplicateDeletion(input, dependencies) {
 			);
 			if (resolved.result !== null) return resolved.result;
 			current = { journal: resolved.journal };
+			preparedAttempt = resolved.preparedAttempt;
 		}
 	} catch {
 		throw new Error("One duplicate deletion failed.");
 	}
+}
+
+async function captureFreshDeleteAuthority(context, state) {
+	const sourceAdapters = await context.createAdapters();
+	const adapters = bindAdapters(sourceAdapters);
+	const captured = await captureConsolidationAuthority({
+		stage: deletionStage(state),
+		proposal: context.proposal.record,
+		targetReleaseId: context.targetReleaseId,
+		adapters: sourceAdapters,
+	});
+	return Object.freeze({ adapters, captured });
 }
 
 function normalizeDeletionInvocation(input, dependencies) {
@@ -227,7 +238,7 @@ function normalizeDeletionInvocation(input, dependencies) {
 	const runtime = exactOptionalFields(
 		dependencies,
 		["createAdapters", "wait"],
-		["faultAt"],
+		["faultAt", "monotonicTimeline"],
 		"one-target deletion dependencies",
 	);
 	const createAdapters = safeFunction(
@@ -235,6 +246,7 @@ function normalizeDeletionInvocation(input, dependencies) {
 		"deletion adapter factory",
 	);
 	const wait = safeFunction(runtime.wait, "convergence waiter");
+	const convergenceAuditNow = deletionMonotonicClock(runtime.monotonicTimeline);
 	if (
 		runtime.faultAt !== undefined &&
 		(typeof runtime.faultAt !== "string" ||
@@ -249,6 +261,7 @@ function normalizeDeletionInvocation(input, dependencies) {
 		journalPath: value.journalPath,
 		createAdapters,
 		wait,
+		convergenceAuditNow,
 		faultAt: runtime.faultAt ?? null,
 	});
 }
@@ -373,6 +386,7 @@ async function resolveConvergence(context, journal, state, observation) {
 			"Present target is not eligible for another delete attempt",
 		);
 	}
+	const preparedAttempt = await captureFreshDeleteAuthority(context, state);
 	const current = await appendDurableEvent(
 		context,
 		journal,
@@ -381,46 +395,41 @@ async function resolveConvergence(context, journal, state, observation) {
 			targetReleaseId: context.targetReleaseId,
 			attemptNumber: state.attemptNumber,
 			classification: "present-unchanged-retryable",
-			releaseEvidence: observation.releaseEvidence,
-			observedAt: observation.completedAt,
+			releaseEvidence: preparedAttempt.captured.authority.targetRead.evidence,
+			observedAt: preparedAttempt.captured.authority.observedAt,
 		},
-		observation.completedAt,
+		preparedAttempt.captured.authority.observedAt,
 		"resume",
 	);
-	return { journal: current.journal, result: null };
+	return { journal: current.journal, result: null, preparedAttempt };
 }
 
 async function observeConvergence(context, state) {
-	const started = monotonicMilliseconds();
-	const deadline = started + CONVERGENCE_CEILING_MS;
+	const budget = createConvergenceBudget(
+		NATIVE_PERFORMANCE_NOW,
+		context.convergenceAuditNow,
+	);
 	let lastPresent = null;
 	for (let attempt = 1; attempt <= MAXIMUM_CONVERGENCE_ATTEMPTS; attempt += 1) {
-		if (monotonicMilliseconds() > deadline) {
-			throw new Error("Convergence wall-clock ceiling expired");
-		}
-		const adapters = bindAdapters(
-			await withinConvergenceDeadline(() => context.createAdapters(), deadline),
-		);
-		const direct = await withinConvergenceDeadline(
-			() =>
+		budget.checkpoint();
+		const direct = await runConvergenceRequest(
+			context,
+			budget,
+			"release",
+			(adapters) =>
 				adapters.github.getRelease({
 					releaseId: context.targetReleaseId,
 				}),
-			deadline,
 		);
 		const directCompletedAt = currentIsoTimestamp();
 		const list = exactPlain(
-			await withinConvergenceDeadline(
-				() => adapters.github.listReleases(),
-				deadline,
+			await runConvergenceRequest(context, budget, "releases", (adapters) =>
+				adapters.github.listReleases(),
 			),
 			["status", "operation", "httpStatus", "code", "value"],
 			"convergence Release enumeration",
 		);
 		const listCompletedAt = currentIsoTimestamp();
-		if (monotonicMilliseconds() > deadline) {
-			throw new Error("Convergence read pair exceeded its wall-clock ceiling");
-		}
 		if (
 			list.status !== "PRESENT" ||
 			list.operation !== "releases" ||
@@ -489,14 +498,10 @@ async function observeConvergence(context, state) {
 			});
 		}
 		if (attempt === MAXIMUM_CONVERGENCE_ATTEMPTS) break;
-		const remaining = Math.floor(deadline - monotonicMilliseconds());
-		const delay = Math.min(CONVERGENCE_BACKOFF_MS[attempt - 1], remaining);
-		if (delay <= 0 || delay > 30_000) {
-			throw new Error("Convergence backoff exceeded its bounded window");
-		}
-		await withinConvergenceDeadline(
-			(signal) => context.wait(delay, { signal }),
-			deadline,
+		await runConvergenceWait(
+			context,
+			budget,
+			CONVERGENCE_BACKOFF_MS[attempt - 1],
 		);
 	}
 	if (lastPresent === null) {
@@ -724,16 +729,120 @@ function currentIsoTimestamp() {
 	return new NATIVE_DATE().toISOString();
 }
 
-function monotonicMilliseconds() {
-	return NATIVE_PERFORMANCE_NOW();
+function deletionMonotonicClock(timeline) {
+	if (timeline === undefined) return null;
+	const descriptors =
+		Array.isArray(timeline) && !utilTypes.isProxy(timeline)
+			? Object.getOwnPropertyDescriptors(timeline)
+			: null;
+	if (
+		descriptors === null ||
+		!Object.isFrozen(timeline) ||
+		timeline.length < 2 ||
+		timeline.length > 256 ||
+		!isDeepStrictEqual(Object.keys(descriptors), [
+			...Array.from({ length: timeline.length }, (_, index) => String(index)),
+			"length",
+		])
+	) {
+		throw new TypeError("Deletion monotonic test timeline is invalid");
+	}
+	const values = [];
+	for (let index = 0; index < timeline.length; index += 1) {
+		const descriptor = descriptors[String(index)];
+		if (
+			descriptor?.enumerable !== true ||
+			!("value" in descriptor) ||
+			descriptor.get !== undefined ||
+			descriptor.set !== undefined ||
+			!Number.isSafeInteger(descriptor.value) ||
+			descriptor.value < 0
+		) {
+			throw new TypeError("Deletion monotonic test timeline is invalid");
+		}
+		values.push(descriptor.value);
+	}
+	let index = 0;
+	return Object.freeze(() => {
+		if (index >= values.length) {
+			throw new Error("Deletion monotonic test timeline is exhausted");
+		}
+		const value = values[index];
+		index += 1;
+		return value;
+	});
 }
 
-async function withinConvergenceDeadline(operation, deadline) {
-	const remaining = Math.floor(deadline - monotonicMilliseconds());
-	if (remaining <= 0) {
-		throw new Error("Convergence wall-clock ceiling expired");
+function createConvergenceBudget(trustedNow, auditNow) {
+	const clocks = [monotonicBudgetClock(trustedNow)];
+	if (auditNow !== null) clocks.push(monotonicBudgetClock(auditNow));
+	const checkpoint = () => {
+		for (const clock of clocks) clock.read();
+	};
+	return Object.freeze({
+		checkpoint,
+		start() {
+			const remaining = Math.min(
+				...clocks.map((clock) => Math.floor(clock.deadline - clock.read())),
+			);
+			if (remaining <= 0) {
+				throw new Error("Convergence wall-clock ceiling expired");
+			}
+			return remaining;
+		},
+		complete: checkpoint,
+	});
+}
+
+function monotonicBudgetClock(now) {
+	let previous = now();
+	const deadline = previous + CONVERGENCE_CEILING_MS;
+	return Object.freeze({
+		deadline,
+		read() {
+			const current = now();
+			if (current < previous) {
+				throw new Error("Convergence monotonic clock reversed");
+			}
+			if (current > deadline) {
+				throw new Error("Convergence wall-clock ceiling expired");
+			}
+			previous = current;
+			return current;
+		},
+	});
+}
+
+async function runConvergenceRequest(context, budget, operation, request) {
+	const timeoutMs = budget.start();
+	const signal = AbortSignal.timeout(timeoutMs);
+	const requestBudget = Object.freeze({ operation, timeoutMs, signal });
+	const value = await raceConvergenceOperation(
+		() =>
+			Promise.resolve(context.createAdapters(requestBudget)).then((source) =>
+				request(bindAdapters(source)),
+			),
+		signal,
+	);
+	budget.complete();
+	return value;
+}
+
+async function runConvergenceWait(context, budget, policyDelayMs) {
+	const timeoutMs = budget.start();
+	const delay = Math.min(policyDelayMs, 30_000, timeoutMs);
+	if (delay <= 0) {
+		throw new Error("Convergence backoff exceeded its bounded window");
 	}
-	const signal = AbortSignal.timeout(remaining);
+	const signal = AbortSignal.timeout(timeoutMs);
+	await raceConvergenceOperation(
+		() => context.wait(delay, { signal, timeoutMs }),
+		signal,
+	);
+	budget.complete();
+}
+
+async function raceConvergenceOperation(operation, signal) {
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		const finish = (callback, value) => {
@@ -746,7 +855,7 @@ async function withinConvergenceDeadline(operation, deadline) {
 			finish(reject, new Error("Convergence wall-clock ceiling expired"));
 		signal.addEventListener("abort", onAbort, { once: true });
 		Promise.resolve()
-			.then(() => operation(signal))
+			.then(operation)
 			.then(
 				(value) => finish(resolve, value),
 				(error) => finish(reject, error),
