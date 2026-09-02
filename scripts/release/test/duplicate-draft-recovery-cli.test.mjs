@@ -866,11 +866,12 @@ test("production recovery observer rejects an alternate sole Release ID and a fo
 
 test("production recovery observer rejects bracket drift around normal classification", async () => {
   assert.equal(typeof recoveryCliModule.createProductionRecoveryObserver, "function")
+  const after = observerCanonicalSnapshot()
+  after.assets = after.assets.map((asset, index) =>
+    index === 0 ? { ...asset, size: asset.size + 1 } : asset,
+  )
   const reader = productionObserverReader({
-    snapshots: [
-      observerCanonicalSnapshot(),
-      { ...observerCanonicalSnapshot(), title: "Dawn v0.8.22 changed" },
-    ],
+    snapshots: [observerCanonicalSnapshot(), after],
   })
   const observer = recoveryCliModule.createProductionRecoveryObserver(
     productionObserverInput(reader),
@@ -892,7 +893,7 @@ test("production recovery observer rejects bracket drift around normal classific
         commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8",
       },
     }),
-    /drift|Release|identity|exact/iu,
+    /binding drifted during final authorization/iu,
   )
 })
 

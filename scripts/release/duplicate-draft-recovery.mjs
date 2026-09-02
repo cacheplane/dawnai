@@ -2021,9 +2021,9 @@ function normalizeQuarantineMutationReceipt(
 }
 
 function normalizeWriterFence(value, expectedTagObjectSha, label) {
-  // Task 4 owns the complete Release projection (including fields absent from
-  // the core capture model). This boundary preserves its digest exactly while
-  // independently validating the tag binding and truthful timeline.
+  // Core capture and the writer share the complete Release projection. This
+  // boundary preserves its digest exactly while independently validating the
+  // tag binding and truthful timeline.
   const fence = exactObject(
     value,
     ["observedAt", "projectionSha256", "tagObjectSha"],
