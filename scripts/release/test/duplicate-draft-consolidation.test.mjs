@@ -25,6 +25,7 @@ import {
   readPrivateEnvelope,
   readTrackedReceipt,
   writePrivateEnvelope,
+  writeTrackedReceipt,
 } from "../duplicate-draft-consolidation-files.mjs"
 import {
   appendJournalEvent,
@@ -178,7 +179,164 @@ test("perform resumes a failed receipt publication without another DELETE and re
   const result = await performDuplicateDraftConsolidation(harness.input, harness.dependencies)
   assert.equal(result.receiptSha256, expected.recordSha256)
   assert.equal(harness.calls.filter((entry) => entry.startsWith("delete:")).length, 2)
-  assert.equal(harness.calls.filter((entry) => entry === "final").length, 1)
+  assert.equal(harness.calls.filter((entry) => entry === "final").length, 2)
+})
+
+test("perform receipt resume freshly rechecks final authority and stops on every live drift", async (t) => {
+  for (const drift of [
+    "main",
+    "npm-publication",
+    "survivor",
+    "asset",
+    "duplicate-reappeared",
+    "extra-release",
+    "workflow",
+    "run",
+    "tag",
+  ]) {
+    await t.test(drift, async (t) => {
+      const harness = await performFixture(t, {
+        failReceiptOnce: true,
+        resumeFinalDrift: drift,
+      })
+      await assert.rejects(
+        performDuplicateDraftConsolidation(harness.input, harness.dependencies),
+        /failed/iu,
+      )
+      await assert.rejects(
+        performDuplicateDraftConsolidation(harness.input, harness.dependencies),
+        /failed/iu,
+      )
+      assert.equal(harness.calls.filter((entry) => entry.startsWith("delete:")).length, 2)
+      assert.equal(harness.calls.filter((entry) => entry === "receipt").length, 1)
+    })
+  }
+})
+
+test("perform accepts an existing byte-identical canonical receipt without overwrite or network", async (t) => {
+  const harness = await performFixture(t)
+  const first = await performDuplicateDraftConsolidation(harness.input, harness.dependencies)
+  const calls = [...harness.calls]
+  const second = await performDuplicateDraftConsolidation(harness.input, harness.dependencies)
+  assert.deepEqual(second, first)
+  assert.deepEqual(harness.calls, calls)
+})
+
+test("perform never overwrites malformed, different canonical, or unsafe existing receipts", async (t) => {
+  for (const kind of ["malformed", "different", "unsafe"]) {
+    await t.test(kind, async (t) => {
+      const harness = await performFixture(t)
+      await performDuplicateDraftConsolidation(harness.input, harness.dependencies)
+      const beforeCalls = [...harness.calls]
+      if (kind === "malformed") {
+        await writeTrackedReceipt(harness.receiptPath, Buffer.from("malformed\n", "utf8"))
+      } else if (kind === "different") {
+        const receipt = parseConsolidationEnvelope(
+          "final",
+          await readTrackedReceipt(
+            harness.receiptPath,
+            DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes,
+          ),
+        )
+        const different = createConsolidationEnvelope("final", {
+          ...receipt.record,
+          completedAt: new Date(Date.parse(receipt.record.completedAt) + 1_000).toISOString(),
+        })
+        await writeTrackedReceipt(
+          harness.receiptPath,
+          canonicalConsolidationEnvelopeBytes("final", different),
+        )
+      } else {
+        await rm(harness.receiptPath)
+        await symlink(harness.proposalPath, harness.receiptPath)
+      }
+      await assert.rejects(
+        performDuplicateDraftConsolidation(harness.input, harness.dependencies),
+        /failed/iu,
+      )
+      assert.deepEqual(harness.calls, beforeCalls)
+    })
+  }
+})
+
+test("perform rejects a canonical completed history that omitted perform-initial proof", async (t) => {
+  const harness = await performFixture(t)
+  const confirmationSha256 = createHash("sha256")
+    .update(harness.input.confirmation, "utf8")
+    .digest("hex")
+  const genesis = createConsolidationJournal({
+    proposedEnvelope: harness.proposal,
+    confirmationSha256,
+    recordedAt: harness.proposal.record.inspectedAt,
+  })
+  await harness.persistJournal(genesis)
+  await harness.dependencies.performOneDeletion({ targetReleaseId: DUPLICATE_DRAFT_IDS[0] })
+  await harness.dependencies.performOneDeletion({ targetReleaseId: DUPLICATE_DRAFT_IDS[1] })
+  harness.calls.length = 0
+  await assert.rejects(
+    performDuplicateDraftConsolidation(harness.input, harness.dependencies),
+    /failed/iu,
+  )
+  assert.deepEqual(harness.calls, [])
+})
+
+test("journal replay rejects reordered, duplicate, and wrong-target perform-initial histories", async (t) => {
+  const harness = await performFixture(t)
+  const confirmationSha256 = createHash("sha256")
+    .update(harness.input.confirmation, "utf8")
+    .digest("hex")
+  const genesis = createConsolidationJournal({
+    proposedEnvelope: harness.proposal,
+    confirmationSha256,
+    recordedAt: harness.proposal.record.inspectedAt,
+  })
+  const inventory = harness.performInventory()
+  const correct = appendJournalEvent(
+    genesis,
+    "npm-observed",
+    { targetReleaseId: DUPLICATE_DRAFT_IDS[0], attemptNumber: 1, inventory },
+    inventory.completedAt,
+  )
+  assert.throws(
+    () =>
+      appendJournalEvent(
+        correct,
+        "npm-observed",
+        { targetReleaseId: DUPLICATE_DRAFT_IDS[0], attemptNumber: 1, inventory },
+        inventory.completedAt,
+      ),
+    /npm|state|legal/iu,
+  )
+  assert.throws(
+    () =>
+      appendJournalEvent(
+        genesis,
+        "npm-observed",
+        { targetReleaseId: DUPLICATE_DRAFT_IDS[1], attemptNumber: 1, inventory },
+        inventory.completedAt,
+      ),
+    /target|current/iu,
+  )
+  const authority = harness.deletionAuthority(0)
+  assert.throws(
+    () =>
+      appendJournalEvent(
+        appendJournalEvent(
+          genesis,
+          "delete-authority-observed",
+          {
+            targetReleaseId: DUPLICATE_DRAFT_IDS[0],
+            attemptNumber: 1,
+            authority,
+          },
+          authority.observedAt,
+        ),
+        "npm-observed",
+        { targetReleaseId: DUPLICATE_DRAFT_IDS[0], attemptNumber: 1, inventory },
+        new Date(Date.parse(authority.observedAt) + 1_000).toISOString(),
+      ),
+    /npm|state|legal/iu,
+  )
 })
 
 test("perform resumes the durable initial npm stage by repeating payload proof before any DELETE", async (t) => {
@@ -1698,6 +1856,7 @@ async function performFixture(t, options = {}) {
   const calls = []
   let failReceipt = options.failReceiptOnce === true
   let failInitialVerification = options.failInitialVerificationOnce === true
+  let finalCaptures = 0
   let tick = Date.parse(proposal.record.inspectedAt) + 1_000
   const nextTime = () => {
     const value = new Date(tick).toISOString()
@@ -1792,8 +1951,9 @@ async function performFixture(t, options = {}) {
   }
   const captureFinal = async () => {
     calls.push("final")
+    finalCaptures += 1
     const observedAt = nextTime()
-    return {
+    const authority = {
       stage: "final",
       controller: structuredClone(proposal.record.controller),
       annotatedTag: { ...structuredClone(proposal.record.annotatedTag), observedAt },
@@ -1807,12 +1967,61 @@ async function performFixture(t, options = {}) {
       targetRead: null,
       observedAt: nextTime(),
     }
+    if (finalCaptures > 1) {
+      if (options.resumeFinalDrift === "main") authority.controller.headSha = "c".repeat(40)
+      if (options.resumeFinalDrift === "npm-publication") {
+        authority.npmInventory.packages[0].status = "PRESENT"
+        authority.npmInventory.packages[0].httpStatus = 200
+        authority.npmInventory.packages[0].code = null
+      }
+      if (options.resumeFinalDrift === "survivor") {
+        authority.releases[0].semantic.name = "changed survivor"
+      }
+      if (options.resumeFinalDrift === "asset") authority.releases[0].assets[0].label = "changed"
+      if (options.resumeFinalDrift === "duplicate-reappeared") {
+        authority.releases.push(structuredClone(proposal.record.releases[1]))
+      }
+      if (options.resumeFinalDrift === "extra-release") {
+        const extra = structuredClone(proposal.record.releases[1])
+        extra.id = "400000001"
+        authority.releases.push(extra)
+      }
+      if (options.resumeFinalDrift === "workflow") authority.workflowAuthority.state = "active"
+      if (options.resumeFinalDrift === "run") {
+        authority.workflowAuthority.nonterminalRuns.push({
+          id: "1",
+          runAttempt: 1,
+          status: "queued",
+          event: "workflow_dispatch",
+          headSha: proposal.record.controller.headSha,
+          headBranch: "main",
+        })
+      }
+      if (options.resumeFinalDrift === "tag") authority.annotatedTag.targetSha = "d".repeat(40)
+    }
+    return authority
   }
   return {
     proposal,
+    proposalPath,
     journalPath,
     receiptPath,
     calls,
+    persistJournal,
+    performInventory: () => inventory("perform-initial"),
+    deletionAuthority(targetIndex) {
+      const targetEvidence = proposal.record.releases[targetIndex + 1]
+      return deletionAuthorityFixture({
+        proposal,
+        stage: targetIndex === 0 ? "pre-delete-1" : "pre-delete-2",
+        targetEvidence,
+        observedAt: nextTime(),
+        releases:
+          targetIndex === 0
+            ? proposal.record.releases
+            : [proposal.record.releases[0], proposal.record.releases[2]],
+      })
+    },
     input: {
       proposal: ".dawn/release/duplicate-draft-consolidation.proposed.json",
       proposalSha256: proposal.recordSha256,

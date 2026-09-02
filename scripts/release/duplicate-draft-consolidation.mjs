@@ -14,6 +14,7 @@ import {
 } from "./duplicate-draft-consolidation-evidence.mjs"
 import {
   readPrivateEnvelope,
+  readTrackedReceipt,
   writePrivateEnvelope,
   writeTrackedReceipt,
 } from "./duplicate-draft-consolidation-files.mjs"
@@ -28,6 +29,7 @@ import {
 import { classifyConsolidationReleases } from "./duplicate-draft-consolidation-release-classifier.mjs"
 import {
   canonicalConsolidationEnvelopeBytes,
+  canonicalEventEnvelope,
   createConsolidationEnvelope,
   DUPLICATE_DRAFT_CONSOLIDATION_LIMITS,
   parseConsolidationEnvelope,
@@ -85,6 +87,7 @@ export async function performDuplicateDraftConsolidation(input, dependencies) {
     let current = await loadOrCreatePerformJournal(context)
     assertPerformJournalBinding(context, current.journal)
     let state = deriveConsolidationState(current.journal)
+    const resumedFromFinalAuthority = state.phase === "final-authority-observed"
 
     if (state.phase === "operation-started") {
       const inventory = await context.capturePerformInitial(context)
@@ -102,6 +105,7 @@ export async function performDuplicateDraftConsolidation(input, dependencies) {
       )
       state = deriveConsolidationState(current.journal)
     }
+    assertMandatoryPerformHistory(current.journal, context.proposal)
     if (state.phase === "npm-observed") {
       if (state.lastRetryNpmInventory === null) {
         throw new Error("Perform initial npm evidence is unavailable")
@@ -150,6 +154,7 @@ export async function performDuplicateDraftConsolidation(input, dependencies) {
     if (state.phase !== "final-authority-observed" || state.lastAuthority === null) {
       throw new Error("Perform journal is not ready for its final receipt")
     }
+    assertMandatoryPerformHistory(current.journal, context.proposal)
     const receipt = createFinalConsolidationReceipt({
       proposedEnvelope: context.proposal,
       journalEnvelope: current.journal,
@@ -157,16 +162,136 @@ export async function performDuplicateDraftConsolidation(input, dependencies) {
       completedAt: state.lastAuthority.observedAt,
     })
     const receiptBytes = canonicalConsolidationEnvelopeBytes("final", receipt)
+    if (await exactExistingReceipt(context.receiptPath, receiptBytes)) {
+      return completedPerformResult(receipt)
+    }
+    if (resumedFromFinalAuthority) {
+      const freshFinalAuthority = await context.captureFinalAuthority(context)
+      assertFreshFinalAuthority(freshFinalAuthority, state.lastAuthority, context.proposal.record)
+    }
     await context.publishReceipt(context.receiptPath, receiptBytes)
-    return deepFreeze({
-      status: "complete",
-      survivor: SURVIVOR,
-      deleted: [...DUPLICATES],
-      receipt: RECEIPT_OUTPUT,
-      receiptSha256: receipt.recordSha256,
-    })
+    return completedPerformResult(receipt)
   } catch {
     throw new Error("Duplicate-draft perform failed.")
+  }
+}
+
+function completedPerformResult(receipt) {
+  return deepFreeze({
+    status: "complete",
+    survivor: SURVIVOR,
+    deleted: [...DUPLICATES],
+    receipt: RECEIPT_OUTPUT,
+    receiptSha256: receipt.recordSha256,
+  })
+}
+
+async function exactExistingReceipt(receiptPath, expectedBytes) {
+  let current
+  try {
+    current = await readTrackedReceipt(
+      receiptPath,
+      DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.finalReceiptBytes,
+    )
+  } catch (error) {
+    if (error?.code === "ENOENT") return false
+    throw error
+  }
+  if (!current.equals(expectedBytes)) {
+    throw new Error("Existing consolidation receipt differs from the canonical result")
+  }
+  parseConsolidationEnvelope("final", current)
+  return true
+}
+
+function assertMandatoryPerformHistory(journal, proposal) {
+  const parsed = parseConsolidationJournal(journal)
+  if (
+    proposal.record.npmInventories.length !== 2 ||
+    proposal.record.npmInventories[0].stage !== "inspect-initial" ||
+    proposal.record.npmInventories[1].stage !== "inspect-ready"
+  ) {
+    throw new Error("Proposal does not contain the mandatory inspection npm stages")
+  }
+  const events = parsed.record.events.map(({ event }) => event)
+  const initial = events[1]
+  if (
+    initial?.type !== "npm-observed" ||
+    initial.payload.targetReleaseId !== DUPLICATES[0] ||
+    initial.payload.attemptNumber !== 1 ||
+    initial.payload.inventory.stage !== "perform-initial"
+  ) {
+    throw new Error("Journal omitted the mandatory perform-initial proof")
+  }
+  const authorityStages = []
+  for (let index = 2; index < events.length; index += 1) {
+    const event = events[index]
+    if (event.type === "npm-observed" && event.payload.inventory.stage !== "perform-initial") {
+      throw new Error("Retry npm history contains an invalid stage")
+    }
+    if (event.type === "delete-authority-observed") {
+      authorityStages.push(event.payload.authority.stage)
+    }
+    if (event.type === "final-authority-observed") authorityStages.push("final")
+  }
+  const state = deriveConsolidationState(parsed)
+  if (
+    state.phase === "final-authority-observed" &&
+    !isDeepStrictEqual(
+      authorityStages.filter((stage, index) => stage !== authorityStages[index - 1]),
+      ["pre-delete-1", "pre-delete-2", "final"],
+    )
+  ) {
+    throw new Error("Final history does not contain all mandatory npm authority stages")
+  }
+}
+
+function assertFreshFinalAuthority(value, recorded, proposal) {
+  const normalized = canonicalEventEnvelope(
+    {
+      schemaVersion: 1,
+      sequence: 1,
+      previousEventSha256: null,
+      type: "final-authority-observed",
+      recordedAt: value?.observedAt,
+      payload: { authority: value },
+    },
+    null,
+  ).event.payload.authority
+  if (
+    normalized.stage !== "final" ||
+    normalized.targetRead !== null ||
+    !isDeepStrictEqual(normalized.controller, proposal.controller) ||
+    !isDeepStrictEqual(
+      withoutObservationTime(normalized.annotatedTag),
+      withoutObservationTime(proposal.annotatedTag),
+    ) ||
+    !isDeepStrictEqual(
+      withoutObservationTime(normalized.workflowAuthority),
+      withoutObservationTime(proposal.workflowAuthority),
+    ) ||
+    !isDeepStrictEqual(
+      stableNpmObservation(normalized.npmInventory),
+      stableNpmObservation(recorded.npmInventory),
+    ) ||
+    normalized.releases.length !== 1 ||
+    normalized.releases[0].id !== SURVIVOR ||
+    !isDeepStrictEqual(normalized.payloadProof, proposal.payloadProof) ||
+    Date.parse(normalized.observedAt) < Date.parse(recorded.observedAt)
+  ) {
+    throw new Error("Fresh final authority drifted from the completed operation")
+  }
+  assertEvidenceEqualsProposal(normalized.releases[0], proposal.releases[0])
+}
+
+function withoutObservationTime({ observedAt: _observedAt, ...value }) {
+  return value
+}
+
+function stableNpmObservation({ startedAt: _startedAt, completedAt: _completedAt, ...inventory }) {
+  return {
+    ...inventory,
+    packages: inventory.packages.map(({ observedAt: _observedAt, ...entry }) => entry),
   }
 }
 
