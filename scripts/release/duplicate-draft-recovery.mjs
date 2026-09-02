@@ -324,7 +324,7 @@ export async function applyDuplicateDraftRecovery({
   const performed = new Map()
   const results = []
   let writer
-  let lastAuthorizationMs = startedAtMs
+  let chronologyWatermarkMs = startedAtMs
 
   for (const [index, configured] of DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.entries()) {
     let lastAuthorization
@@ -340,9 +340,9 @@ export async function applyDuplicateDraftRecovery({
         sealed,
         fresh,
         authorizationMs,
-        previousAuthorizationMs: lastAuthorizationMs,
+        previousAuthorizationMs: chronologyWatermarkMs,
       })
-      lastAuthorizationMs = authorizationMs
+      chronologyWatermarkMs = authorizationMs
       lastAuthorization = fresh
       const duplicate = fresh.releases.duplicates[index]
       if (duplicate.releaseId !== configured.releaseId) {
@@ -359,9 +359,9 @@ export async function applyDuplicateDraftRecovery({
         sealed,
         fresh,
         authorizationMs: mutationAuthorizationMs,
-        previousAuthorizationMs: lastAuthorizationMs,
+        previousAuthorizationMs: chronologyWatermarkMs,
       })
-      lastAuthorizationMs = mutationAuthorizationMs
+      chronologyWatermarkMs = mutationAuthorizationMs
       if (duplicate.state === "untouched") {
         const receipt = await writer.uploadEvidenceAssetIfAbsentAndEqual({
           expectedSnapshot: duplicateSource(duplicate),
@@ -430,6 +430,7 @@ export async function applyDuplicateDraftRecovery({
           mutationAuthorizationMs,
         )
         performed.set(duplicate.releaseId, mutation)
+        chronologyWatermarkMs = Date.parse(mutation.postWriteFence.observedAt)
         expectedSources[index] = {
           ...duplicateSource(duplicate),
           body: duplicate.noticeBytes,
@@ -463,7 +464,7 @@ export async function applyDuplicateDraftRecovery({
     }),
   )
   const appliedAtMs = readApplyTime(now)
-  assertFinalReceiptTimeline(results, lastAuthorizationMs, appliedAtMs)
+  assertFinalReceiptTimeline(results, chronologyWatermarkMs, appliedAtMs)
   const appliedAt = new Date(appliedAtMs).toISOString()
   return deepFreeze({
     schemaVersion: 1,
@@ -1982,8 +1983,8 @@ function normalizeFinalRecoveryObservation(value) {
   })
 }
 
-function assertFinalReceiptTimeline(results, lastAuthorizationMs, appliedAtMs) {
-  if (appliedAtMs < lastAuthorizationMs) {
+function assertFinalReceiptTimeline(results, chronologyWatermarkMs, appliedAtMs) {
+  if (appliedAtMs < chronologyWatermarkMs) {
     throw new Error("Duplicate draft recovery final receipt timeline regressed")
   }
   for (const result of results) {

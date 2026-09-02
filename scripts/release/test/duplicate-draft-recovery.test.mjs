@@ -16,6 +16,7 @@ import {
 } from "../duplicate-draft-recovery.mjs"
 import {
   createDuplicateDraftRecoveryReader,
+  createDuplicateDraftRecoveryWriter,
   DuplicateDraftRecoveryReadError,
 } from "../duplicate-draft-recovery-adapters.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
@@ -860,7 +861,10 @@ test("apply converges every resumable state in ID order with fresh authorization
   }
 })
 
-test("apply accepts exact Task 4 existing receipts for both evidence transitions and reauthorizes", async () => {
+test("apply validates the exact injected existing receipt union and reauthorizes", async () => {
+  // The production Task 4 writer rejects an asset that appears after capture as
+  // expectedSnapshot drift. This seam isolates Task 5's receipt-union contract;
+  // the real Task 4 composition below exercises a reachable transition.
   const statuses = []
   const harness = createApplyHarness({
     states: ["untouched", "quarantined"],
@@ -875,6 +879,99 @@ test("apply accepts exact Task 4 existing receipts for both evidence transitions
   assert.deepEqual(harness.liveStates, ["quarantined", "quarantined"])
   assert.equal(receipt.duplicates[0].outcome, "performed")
   assert.equal(harness.events.filter(([kind]) => kind === "authorize").length, 5)
+})
+
+test("apply composes with the real Task 4 writer over an in-memory quarantine transition", async () => {
+  const releaseId = POLICY.duplicates[0].releaseId
+  const harness = createApplyHarness({ states: ["receipt-archived", "quarantined"] })
+  const calls = []
+
+  function currentSnapshot() {
+    return recoverySnapshotForState(releaseId, harness.liveStates[0])
+  }
+
+  function rawRelease() {
+    const current = currentSnapshot()
+    return {
+      id: releaseId,
+      tag_name: current.tagName,
+      name: "Dawn v0.8.22",
+      body: current.body,
+      draft: true,
+      prerelease: false,
+      immutable: false,
+      target_commitish: "main",
+    }
+  }
+
+  function evidenceBytes(asset) {
+    if (asset.name.includes("-original-body-")) return Buffer.from(ORIGINAL_BODY, "utf8")
+    if (asset.name === recoveryReceiptAssetName(releaseId)) return Buffer.from(asset.bytes, "utf8")
+    return Buffer.from("x")
+  }
+
+  const fetchImpl = async (url, init) => {
+    calls.push([url, init.method])
+    if (url === `${GITHUB_BASE}/git/ref/tags%2Fv0.8.22`) {
+      return jsonResponse({
+        ref: "refs/tags/v0.8.22",
+        object: { type: "tag", sha: TAG_OBJECT_SHA },
+      })
+    }
+    if (url === `${GITHUB_BASE}/git/tags/${TAG_OBJECT_SHA}`) {
+      return jsonResponse({
+        sha: TAG_OBJECT_SHA,
+        tag: "v0.8.22",
+        object: { type: "commit", sha: POLICY.candidateSha },
+      })
+    }
+    if (url === `${GITHUB_BASE}/releases/${releaseId}/assets?per_page=100`) {
+      return jsonResponse(
+        currentSnapshot().assets.map((asset) => ({
+          id: asset.id,
+          name: asset.name,
+          digest: `sha256:${asset.sha256}`,
+          size: evidenceBytes(asset).byteLength,
+        })),
+      )
+    }
+    const download = new RegExp(`^${GITHUB_BASE}/releases/assets/(\\d+)$`, "u").exec(url)
+    if (download !== null) {
+      const asset = currentSnapshot().assets.find(({ id }) => id === Number(download[1]))
+      assert.ok(asset)
+      return new Response(evidenceBytes(asset), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      })
+    }
+    if (url === `${GITHUB_BASE}/releases/${releaseId}` && init.method === "GET") {
+      return jsonResponse(rawRelease())
+    }
+    if (url === `${GITHUB_BASE}/releases/${releaseId}` && init.method === "PATCH") {
+      assert.deepEqual(JSON.parse(init.body), {
+        body: harness.evidence.releases.duplicates[0].noticeBytes,
+      })
+      harness.liveStates[0] = "quarantined"
+      return jsonResponse(rawRelease())
+    }
+    assert.fail(`unexpected in-memory Task 4 URL ${url}`)
+  }
+
+  const receipt = await runApply(harness, {
+    createWriter: () =>
+      createDuplicateDraftRecoveryWriter({
+        token: "task-4-seam-token",
+        fetchImpl,
+        now: () => RECOVERY_NOW,
+      }),
+  })
+
+  assert.deepEqual(harness.liveStates, ["quarantined", "quarantined"])
+  assert.equal(receipt.duplicates[0].outcome, "performed")
+  assert.deepEqual(
+    calls.filter(([, method]) => method !== "GET"),
+    [[`${GITHUB_BASE}/releases/${releaseId}`, "PATCH"]],
+  )
 })
 
 test("apply rejects stale or regressing authorization clocks before writer construction", async () => {
@@ -910,6 +1007,23 @@ test("apply rejects stale or regressing authorization clocks before writer const
   await assert.rejects(runApply(constructionDelay), /expired|fresh/iu)
   assert.equal(constructionDelay.writerConstructions, 1)
   assert.equal(constructionDelay.mutationCount, 0)
+})
+
+test("apply advances chronology through a validated quarantine post-write fence", async () => {
+  const harness = createApplyHarness({
+    states: ["receipt-archived", "untouched"],
+    fenceTimes: ["2026-09-01T00:10:00.000Z", "2026-09-01T00:10:05.000Z"],
+  })
+
+  await assert.rejects(runApply(harness), /timeline regressed/iu)
+  assert.equal(harness.mutationCount, 1)
+  assert.deepEqual(harness.liveStates, ["quarantined", "untouched"])
+  assert.equal(
+    harness.events.some(
+      (event) => event[0] === "mutate" && event[3] === POLICY.duplicates[1].releaseId,
+    ),
+    false,
+  )
 })
 
 test("apply resumes an expired partial run without restoring a live marker or inventing prior fences", async () => {
