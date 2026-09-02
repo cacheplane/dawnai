@@ -1925,6 +1925,22 @@ test("candidate Release discovery includes every marker-backed candidate history
   )
 })
 
+test("candidate Release discovery ignores unrelated Release titles", async () => {
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async () =>
+      jsonResponse([
+        releaseRow(400000010, {
+          name: "An unrelated historical Release",
+          tag_name: "v0.8.21",
+        }),
+      ]),
+  })
+
+  assert.deepEqual(await reader.listCandidateReleases(), [])
+})
+
 test("npm absence performs exact-version E404 plus package metadata confirmation", async () => {
   const calls = []
   const packageName = "@dawn-ai/sdk"
@@ -1994,7 +2010,36 @@ test("release snapshots read complete assets and required recovery bytes through
   })
   assert.deepEqual(snapshot.evidenceAssets, ["body"])
   assert.equal(snapshot.assets[1].sha256, archiveSha)
+  assert.equal(snapshot.assets[1].size, archiveBytes.byteLength)
   assert.equal(Object.hasOwn(snapshot.assets[1], "bytes"), false)
+})
+
+test("release capture rejects canonical and duplicate title drift", async () => {
+  for (const releaseId of [379991871, DUPLICATE_ID, SECOND_DUPLICATE_ID]) {
+    const reader = createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: async (url) => {
+        if (url === `${BASE}/releases/${releaseId}`) {
+          return jsonResponse({
+            ...releaseFixture({ releaseId, body: "canonical body\n" }),
+            name: "Dawn v0.8.22 changed",
+          })
+        }
+        if (url === `${BASE}/releases/${releaseId}/assets?per_page=100`) {
+          return jsonResponse([asset(1, "base.tgz", Buffer.from("base"))])
+        }
+        assert.fail(`unexpected URL ${url}`)
+      },
+    })
+
+    await assert.rejects(
+      reader.readReleaseSnapshot(releaseId, {
+        ...(releaseId === 379991871 ? {} : { expectedOriginalBody: "canonical body\n" }),
+      }),
+      (error) => error.code === "RELEASE_MALFORMED" || error.code === "RELEASE_TITLE_CONFLICT",
+    )
+  }
 })
 
 test("downloaded recovery evidence rejects configured credential bytes and preserves anonymous bytes", async () => {
@@ -2536,16 +2581,18 @@ function writerFixture({ releaseId = DUPLICATE_ID, tagName = DUPLICATE_TAG } = {
     ...manifest.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.sha256 })),
   ]
   const normalizedAssets = [
-    { id: 1, name: "release-record.json", sha256: "e".repeat(64) },
+    { id: 1, name: "release-record.json", sha256: "e".repeat(64), size: 1 },
     ...subjects.map(({ name, sha256: digest }, index) => ({
       id: index + 2,
       name,
       sha256: digest,
+      size: 1,
     })),
     ...subjects.map(({ name }, index) => ({
       id: subjects.length + index + 2,
       name: `${name}.intoto.jsonl`,
       sha256: "f".repeat(64),
+      size: 1,
     })),
   ]
   assert.equal(normalizedAssets.length, 45)
@@ -2611,26 +2658,37 @@ function writerFixture({ releaseId = DUPLICATE_ID, tagName = DUPLICATE_TAG } = {
     receiptAssetName: receiptName,
     receiptSha256,
   })
-  const rawAssets = normalizedAssets.map(({ id, name, sha256: digest }) => ({
+  const rawAssets = normalizedAssets.map(({ id, name, sha256: digest, size }) => ({
     id,
     name,
     digest: `sha256:${digest}`,
-    size: 1,
+    size,
   }))
   const archiveRawAsset = asset(1001, archiveName, archiveBytes)
   const receiptRawAsset = asset(1002, receiptName, receiptBytes)
   const snapshotBase = {
     releaseId,
     tagName,
+    title: WRITER_TITLE,
+    targetCommitish: "main",
+    draft: true,
+    prerelease: false,
+    immutable: false,
     body,
     marker: parseReleaseMarker(body),
     assets: normalizedAssets,
   }
-  const archiveAsset = { id: archiveRawAsset.id, name: archiveName, sha256: archiveSha256 }
+  const archiveAsset = {
+    id: archiveRawAsset.id,
+    name: archiveName,
+    sha256: archiveSha256,
+    size: archiveRawAsset.size,
+  }
   const receiptAsset = {
     id: receiptRawAsset.id,
     name: receiptName,
     sha256: receiptSha256,
+    size: receiptRawAsset.size,
     bytes: receiptBytes.toString("utf8"),
   }
   return {
@@ -2721,6 +2779,7 @@ function releaseFixture({ releaseId, body }) {
   return {
     id: releaseId,
     tag_name: "untagged-a13939767dd2419ade01",
+    name: WRITER_TITLE,
     body,
     draft: true,
     prerelease: false,
@@ -2733,6 +2792,7 @@ function releaseRow(id, overrides = {}) {
   return {
     id,
     tag_name: `untagged-unrelated-${id}`,
+    name: WRITER_TITLE,
     body: null,
     draft: true,
     prerelease: false,

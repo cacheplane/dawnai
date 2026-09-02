@@ -13,6 +13,8 @@ import {
   canonicalRecoveryNotice,
   canonicalRecoveryReceipt,
   DUPLICATE_DRAFT_RECOVERY_POLICY,
+  duplicateDraftReleaseProjectionSha256,
+  normalizeDuplicateDraftReleaseProjection,
   originalBodyAssetName,
   recoveryReceiptAssetName,
 } from "./duplicate-draft-recovery.mjs"
@@ -355,9 +357,13 @@ export function createDuplicateDraftRecoveryReader({
           release.tagName === CANDIDATE_TAG ||
           (marker !== null && marker.tag === CANDIDATE_TAG)
         if (identifiesCandidate) {
+          if (release.title !== WRITER_TITLE) {
+            fail("RELEASE_LIST_MALFORMED", "Candidate Release title is not exact")
+          }
           candidates.push({
             releaseId: release.id,
             tagName: release.tagName,
+            title: release.title,
             draft: release.draft,
             prerelease: release.prerelease,
             immutable: release.immutable,
@@ -472,6 +478,7 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
         id: created.id,
         name: args.name,
         sha256: args.sha256,
+        size: args.bytes.byteLength,
         ...(kind === "receipt" ? { bytes: args.bytes.toString("utf8") } : {}),
       }
       const expectedAfter = {
@@ -678,10 +685,23 @@ function normalizeExpectedWriterSnapshot(value) {
   } catch {
     throw new TypeError("Expected recovery snapshot is invalid")
   }
-  const fields = ["releaseId", "tagName", "body", "marker", "assets", "evidenceAssets"]
+  const fields = [
+    "releaseId",
+    "tagName",
+    "title",
+    "targetCommitish",
+    "draft",
+    "prerelease",
+    "immutable",
+    "body",
+    "marker",
+    "assets",
+    "evidenceAssets",
+  ]
   if (!hasExactFields(snapshot, fields)) {
     throw new TypeError("Expected recovery snapshot schema is invalid")
   }
+  normalizeDuplicateDraftReleaseProjection(snapshot)
   const expectedTag = DUPLICATE_TAG_BY_ID.get(snapshot.releaseId)
   if (expectedTag === undefined || snapshot.tagName !== expectedTag) {
     throw new TypeError("Recovery mutation target is not an approved duplicate Release")
@@ -706,18 +726,20 @@ function normalizeExpectedWriterSnapshot(value) {
   for (const asset of snapshot.assets) {
     if (
       !isObject(asset) ||
-      ![3, 4].includes(Object.keys(asset).length) ||
+      ![4, 5].includes(Object.keys(asset).length) ||
       !hasExactFields(
         asset,
         Object.hasOwn(asset, "bytes")
-          ? ["id", "name", "sha256", "bytes"]
-          : ["id", "name", "sha256"],
+          ? ["id", "name", "sha256", "size", "bytes"]
+          : ["id", "name", "sha256", "size"],
       ) ||
       !Number.isSafeInteger(asset.id) ||
       asset.id < 1 ||
       typeof asset.name !== "string" ||
       !ASSET_NAME_PATTERN.test(asset.name) ||
       !SHA256_PATTERN.test(asset.sha256) ||
+      !Number.isSafeInteger(asset.size) ||
+      asset.size < 1 ||
       names.has(asset.name) ||
       ids.has(asset.id) ||
       (Object.hasOwn(asset, "bytes") && typeof asset.bytes !== "string")
@@ -1058,9 +1080,6 @@ async function readCurrentWriterObservation(context, releaseId, originalBody) {
       "Release snapshot could not be verified",
     )
     const raw = safeWriterRemoteSnapshot(release, context.token, "RELEASE_MALFORMED")
-    if (raw.name !== WRITER_TITLE) {
-      writeFail("RELEASE_TITLE_CONFLICT", "Duplicate Release title is not exact")
-    }
     const rawAssets = await readStrictPages(context, {
       path: `/repos/${OWNER}/${REPOSITORY}/releases/${releaseId}/assets?per_page=100`,
       operation: "RECOVERY_WRITE_ASSETS",
@@ -1075,7 +1094,7 @@ async function readCurrentWriterObservation(context, releaseId, originalBody) {
     })
     return deepFreeze({
       snapshot,
-      projection: normalizeWriterProjection(raw, rawAssets, snapshot),
+      projection: normalizeDuplicateDraftReleaseProjection(snapshot),
     })
   } catch (error) {
     if (error instanceof DuplicateDraftRecoveryWriteError) throw error
@@ -1105,25 +1124,6 @@ async function readQuarantinePreWriteFence(
   })
 }
 
-function normalizeWriterProjection(raw, rawAssets, snapshot) {
-  return deepFreeze({
-    releaseId: snapshot.releaseId,
-    tagName: snapshot.tagName,
-    title: raw.name,
-    targetCommitish: raw.target_commitish,
-    draft: raw.draft,
-    prerelease: raw.prerelease,
-    immutable: raw.immutable,
-    body: snapshot.body,
-    assets: rawAssets.map((asset) => ({
-      id: asset.id,
-      name: asset.name,
-      sha256: asset.digest.slice(7),
-      size: asset.size,
-    })),
-  })
-}
-
 function writerObservedAt(context) {
   let milliseconds
   try {
@@ -1146,7 +1146,7 @@ function writerObservedAt(context) {
 function canonicalWriterFence(observedAt, projection, tagObjectSha) {
   return deepFreeze({
     observedAt,
-    projectionSha256: sha256(Buffer.from(JSON.stringify(canonicalize(projection)), "utf8")),
+    projectionSha256: duplicateDraftReleaseProjectionSha256(projection),
     tagObjectSha,
   })
 }
@@ -1970,6 +1970,7 @@ function normalizeReleaseRow(value) {
     !Number.isSafeInteger(release.id) ||
     release.id < 1 ||
     !isBoundedText(release.tag_name, 1024) ||
+    !(release.name === null || isBoundedText(release.name, 1024)) ||
     !(release.body === null || isBoundedText(release.body, 512 * 1024, true)) ||
     typeof release.draft !== "boolean" ||
     typeof release.prerelease !== "boolean" ||
@@ -1981,6 +1982,7 @@ function normalizeReleaseRow(value) {
   return {
     id: release.id,
     tagName: release.tag_name,
+    title: release.name,
     body: release.body,
     draft: release.draft,
     prerelease: release.prerelease,
@@ -2049,6 +2051,7 @@ async function normalizeReleaseSnapshot({
     !isObject(raw) ||
     raw.id !== releaseId ||
     !isBoundedText(raw.tag_name, 1024) ||
+    raw.name !== WRITER_TITLE ||
     !isBoundedText(raw.body, 512 * 1024, true) ||
     raw.draft !== true ||
     raw.prerelease !== false ||
@@ -2080,7 +2083,12 @@ async function normalizeReleaseSnapshot({
     }
     assetIds.add(asset.id)
     assetNames.add(asset.name)
-    const normalized = { id: asset.id, name: asset.name, sha256: asset.digest.slice(7) }
+    const normalized = {
+      id: asset.id,
+      name: asset.name,
+      sha256: asset.digest.slice(7),
+      size: asset.size,
+    }
     const kind = recoveryEvidenceKind(asset.name, releaseId)
     if (kind !== null) {
       if (expectedOriginalBody === undefined) {
@@ -2128,6 +2136,11 @@ async function normalizeReleaseSnapshot({
   return deepFreeze({
     releaseId,
     tagName: raw.tag_name,
+    title: raw.name,
+    targetCommitish: raw.target_commitish,
+    draft: raw.draft,
+    prerelease: raw.prerelease,
+    immutable: raw.immutable,
     body: raw.body,
     marker,
     assets,

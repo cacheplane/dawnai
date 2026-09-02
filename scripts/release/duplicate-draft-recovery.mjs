@@ -12,6 +12,18 @@ const MARKER_DELIMITER = "DAWN_RELEASE_CONTROLLER_MARKER"
 const MAX_NOTICE_BYTES = 16 * 1024
 const MAX_RECEIPT_BYTES = 64 * 1024
 const MAX_DUPLICATE_DRAFT_EVIDENCE_BYTES = 512 * 1024
+const RECOVERY_RELEASE_TITLE = "Dawn v0.8.22"
+const RELEASE_PROJECTION_FIELDS = [
+  "releaseId",
+  "tagName",
+  "title",
+  "targetCommitish",
+  "draft",
+  "prerelease",
+  "immutable",
+  "body",
+  "assets",
+]
 const DUPLICATE_EVIDENCE_FIELDS = [
   "schemaVersion",
   "capturedAt",
@@ -27,14 +39,7 @@ const DUPLICATE_EVIDENCE_FIELDS = [
 const DUPLICATE_OBSERVATION_FIELDS = DUPLICATE_EVIDENCE_FIELDS.filter(
   (field) => field !== "schemaVersion",
 )
-const DUPLICATE_SOURCE_FIELDS = [
-  "releaseId",
-  "tagName",
-  "body",
-  "marker",
-  "assets",
-  "evidenceAssets",
-]
+const DUPLICATE_SOURCE_FIELDS = [...RELEASE_PROJECTION_FIELDS, "marker", "evidenceAssets"]
 const DUPLICATE_DERIVED_FIELDS = [
   "originalBodySha256",
   "originalAssets",
@@ -160,6 +165,76 @@ export class DuplicateDraftRecoveryCaptureError extends Error {
   }
 }
 
+/**
+ * Project a normalized recovery Release snapshot onto the exact application-
+ * owned fields fenced by the writer. Recovery-only bytes and evidence kinds
+ * are intentionally excluded.
+ */
+export function normalizeDuplicateDraftReleaseProjection(value) {
+  const source = snapshotJson(value)
+  if (!isRecord(source)) throw new TypeError("Recovery Release projection is invalid")
+  assertReleaseId(source.releaseId, "Recovery Release ID")
+  if (
+    typeof source.tagName !== "string" ||
+    source.tagName.length === 0 ||
+    source.title !== RECOVERY_RELEASE_TITLE ||
+    source.targetCommitish !== "main" ||
+    source.draft !== true ||
+    source.prerelease !== false ||
+    source.immutable !== false ||
+    typeof source.body !== "string" ||
+    !Array.isArray(source.assets)
+  ) {
+    throw new TypeError("Recovery Release projection metadata is not exact")
+  }
+  const assets = source.assets.map((asset, index) => {
+    const normalized = snapshotJson(asset)
+    if (
+      !isRecord(normalized) ||
+      !Number.isSafeInteger(normalized.id) ||
+      normalized.id < 1 ||
+      typeof normalized.name !== "string" ||
+      !ASSET_NAME_PATTERN.test(normalized.name) ||
+      typeof normalized.sha256 !== "string" ||
+      !SHA256_PATTERN.test(normalized.sha256) ||
+      !Number.isSafeInteger(normalized.size) ||
+      normalized.size < 1
+    ) {
+      throw new TypeError(`Recovery Release projection asset[${index}] is invalid`)
+    }
+    return {
+      id: normalized.id,
+      name: normalized.name,
+      sha256: normalized.sha256,
+      size: normalized.size,
+    }
+  })
+  assertUniqueAssets(assets, "recovery Release projection assets")
+  return deepFreeze({
+    releaseId: source.releaseId,
+    tagName: source.tagName,
+    title: source.title,
+    targetCommitish: source.targetCommitish,
+    draft: source.draft,
+    prerelease: source.prerelease,
+    immutable: source.immutable,
+    body: source.body,
+    assets,
+  })
+}
+
+/** Hash the exact canonical writer-fence projection without transport fields. */
+export function duplicateDraftReleaseProjectionSha256(value) {
+  const projection = normalizeDuplicateDraftReleaseProjection(value)
+  return sha256(JSON.stringify(canonicalize(projection)))
+}
+
+/** Validate and preserve the exact frozen recovery-reader capability surface. */
+export function assertDuplicateDraftRecoveryReader(value) {
+  assertCaptureReader(value)
+  return value
+}
+
 /** Collect and seal one complete, read-only production recovery observation. */
 export async function captureDuplicateDraftRecoveryEvidence({
   reviewedCommit,
@@ -167,7 +242,7 @@ export async function captureDuplicateDraftRecoveryEvidence({
   now = Date.now,
 }) {
   assertGitSha(reviewedCommit, "Reviewed recovery commit")
-  assertCaptureReader(reader)
+  assertDuplicateDraftRecoveryReader(reader)
   if (typeof now !== "function") throw new TypeError("Duplicate draft capture clock is invalid")
   const capturedAtMs = now()
   if (!Number.isSafeInteger(capturedAtMs) || capturedAtMs < 0) {
@@ -383,6 +458,7 @@ export async function applyDuplicateDraftRecovery({
               id: normalized.assetId,
               name: normalized.name,
               sha256: normalized.sha256,
+              size: Buffer.byteLength(sealed.releases.canonical.body, "utf8"),
             },
           ],
           evidenceAssets: ["body"],
@@ -410,6 +486,7 @@ export async function applyDuplicateDraftRecovery({
               id: normalized.assetId,
               name: normalized.name,
               sha256: normalized.sha256,
+              size: Buffer.byteLength(duplicate.receiptBytes, "utf8"),
               bytes: duplicate.receiptBytes,
             },
           ],
@@ -450,7 +527,7 @@ export async function applyDuplicateDraftRecovery({
           outcome: "preexisting-quarantined",
           priorFenceObservations: null,
           verifiedAt: lastAuthorization.capturedAt,
-          projectionSha256: duplicateProjectionSha256(duplicateSource(exactDuplicate)),
+          projectionSha256: duplicateDraftReleaseProjectionSha256(exactDuplicate),
         }),
     )
   }
@@ -545,11 +622,8 @@ export function verifyDuplicateDraftEvidence({ evidence, current, now = Date.now
 }
 
 export function classifyDuplicateDraft(value, expected) {
-  const snapshot = exactObject(
-    value,
-    ["releaseId", "tagName", "body", "marker", "assets", "evidenceAssets"],
-    "duplicate Release snapshot",
-  )
+  const snapshot = exactObject(value, DUPLICATE_SOURCE_FIELDS, "duplicate Release snapshot")
+  normalizeDuplicateDraftReleaseProjection(snapshot)
   const requirements = exactObject(
     expected,
     [
@@ -648,7 +722,7 @@ export function classifyDuplicateDraft(value, expected) {
     throw new Error("Duplicate Release asset namespace is not exact")
   }
   const originalActual = assets.slice(0, originalAssets.length)
-  if (!sameJson(assetNamespace(originalActual), assetNamespace(originalAssets))) {
+  if (!sameJson(assetSizeNamespace(originalActual), assetSizeNamespace(originalAssets))) {
     throw new Error("Duplicate Release original asset namespace changed")
   }
   const evidence = assets.slice(originalAssets.length)
@@ -667,6 +741,7 @@ export function classifyDuplicateDraft(value, expected) {
       if (
         asset.name !== bodyAssetName ||
         asset.sha256 !== requirements.originalBodySha256 ||
+        asset.size !== Buffer.byteLength(requirements.canonicalBody, "utf8") ||
         (notice !== null &&
           (asset.name !== notice.archiveAssetName || asset.sha256 !== notice.originalBodySha256))
       ) {
@@ -675,6 +750,7 @@ export function classifyDuplicateDraft(value, expected) {
     } else if (
       asset.name !== receiptAssetName ||
       asset.sha256 !== recoveryReceiptSha256 ||
+      asset.size !== recoveryReceiptBytes.byteLength ||
       typeof asset.bytes !== "string" ||
       asset.bytes !== recoveryReceiptBytes.toString("utf8") ||
       (notice !== null && asset.sha256 !== notice.receiptSha256)
@@ -1086,6 +1162,7 @@ function normalizeRecoveryReleases(value, { reviewedAuthority, candidate }) {
 
 function normalizeRecoveryDuplicateSource(value, originalAssets) {
   const source = exactObject(value, DUPLICATE_SOURCE_FIELDS, "recovery duplicate Release")
+  const projection = normalizeDuplicateDraftReleaseProjection(source)
   const evidenceKinds = normalizeEvidenceKinds(source.evidenceAssets)
   if (
     !Array.isArray(source.assets) ||
@@ -1110,21 +1187,16 @@ function normalizeRecoveryDuplicateSource(value, originalAssets) {
     )
   assertUniqueAssets([...original, ...evidence], "recovery duplicate Release assets")
   return {
-    releaseId: source.releaseId,
-    tagName: source.tagName,
-    body: source.body,
-    marker: source.marker,
+    ...projection,
     assets: [...original, ...evidence],
+    marker: source.marker,
     evidenceAssets: evidenceKinds,
   }
 }
 
 function normalizeCanonicalRecoveryRelease(value, candidate) {
-  const source = exactObject(
-    value,
-    ["releaseId", "tagName", "body", "marker", "assets"],
-    "canonical Release",
-  )
+  const source = exactObject(value, [...RELEASE_PROJECTION_FIELDS, "marker"], "canonical Release")
+  const projection = normalizeDuplicateDraftReleaseProjection(source)
   assertReleaseId(source.releaseId, "Canonical Release ID")
   if (
     source.releaseId !== DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ||
@@ -1153,7 +1225,7 @@ function normalizeCanonicalRecoveryRelease(value, candidate) {
   ) {
     throw new TypeError("Canonical Release marker is not exact")
   }
-  return { releaseId: source.releaseId, tagName: source.tagName, body: source.body, marker, assets }
+  return { ...projection, marker, assets }
 }
 
 function assertCaptureReader(value) {
@@ -1393,12 +1465,22 @@ function normalizeCandidateReleaseInventory(value) {
     .map((raw) => {
       const release = exactObject(
         raw,
-        ["releaseId", "tagName", "draft", "prerelease", "immutable", "targetCommitish", "marker"],
+        [
+          "releaseId",
+          "tagName",
+          "title",
+          "draft",
+          "prerelease",
+          "immutable",
+          "targetCommitish",
+          "marker",
+        ],
         "candidate Release summary",
       )
       assertReleaseId(release.releaseId, "Candidate Release ID")
       if (
         typeof release.tagName !== "string" ||
+        release.title !== RECOVERY_RELEASE_TITLE ||
         release.draft !== true ||
         release.prerelease !== false ||
         release.immutable !== false ||
@@ -1586,8 +1668,8 @@ function normalizeAssets(value, label, allowBytes) {
     const normalized = exactObject(
       source,
       allowBytes && Object.hasOwn(source, "bytes")
-        ? ["id", "name", "sha256", "bytes"]
-        : ["id", "name", "sha256"],
+        ? ["id", "name", "sha256", "size", "bytes"]
+        : ["id", "name", "sha256", "size"],
       `${label}[${index}]`,
     )
     assertReleaseId(normalized.id, `${label}[${index}] id`)
@@ -1595,6 +1677,7 @@ function normalizeAssets(value, label, allowBytes) {
       throw new TypeError(`${label}[${index}] name is invalid`)
     }
     assertSha256(normalized.sha256, `${label}[${index}] SHA-256`)
+    assertPositiveInteger(normalized.size, `${label}[${index}] size`)
     if (Object.hasOwn(normalized, "bytes") && typeof normalized.bytes !== "string") {
       throw new TypeError(`${label}[${index}] bytes are invalid`)
     }
@@ -2030,10 +2113,6 @@ function assertNoProxyGraph(value, label, seen = new Set()) {
   }
 }
 
-function duplicateProjectionSha256(value) {
-  return sha256(`${JSON.stringify(canonicalize(value))}\n`)
-}
-
 function isCanonicalNotice(value) {
   if (typeof value !== "string" || !value.endsWith("\n") || value.includes(MARKER_DELIMITER))
     return false
@@ -2158,6 +2237,10 @@ function assetSetSha256(assets) {
 
 function assetNamespace(assets) {
   return assets.map(({ name, sha256: digest }) => ({ name, sha256: digest }))
+}
+
+function assetSizeNamespace(assets) {
+  return assets.map(({ name, sha256: digest, size }) => ({ name, sha256: digest, size }))
 }
 
 function sha256Bytes(value) {

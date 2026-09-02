@@ -33,12 +33,14 @@ const POLICY = {
   ],
 }
 const CANONICAL_OPAQUE_TAG = "untagged-be0ff4bee4ba43b521a9"
+const RELEASE_TITLE = "Dawn v0.8.22"
 const GITHUB_BASE = "https://api.github.com/repos/cacheplane/dawnai"
 
 const ORIGINAL_ASSETS = Array.from({ length: 45 }, (_, index) => ({
   id: 101 + index,
   name: `asset-${String(index + 1).padStart(2, "0")}.json`,
   sha256: "0123456789abcdef"[index % 16].repeat(64),
+  size: index + 1,
 }))
 const BASE_ASSET_SET_SHA256 = assetSetSha256(ORIGINAL_ASSETS)
 const MANIFEST = createManifest()
@@ -185,11 +187,20 @@ function snapshot(overrides = {}, releaseId = POLICY.duplicates[0].releaseId) {
         ? originalBodyAssetName(expected.releaseId, expected.originalBodySha256)
         : recoveryReceiptAssetName(expected.releaseId),
     sha256: kind === "body" ? expected.originalBodySha256 : receiptSha256,
+    size:
+      kind === "body"
+        ? Buffer.byteLength(expected.canonicalBody, "utf8")
+        : Buffer.byteLength(receiptBytes, "utf8"),
     ...(kind === "receipt" ? { bytes: receiptBytes } : {}),
   }))
   return {
     releaseId: expected.releaseId,
     tagName: expected.tagName,
+    title: RELEASE_TITLE,
+    targetCommitish: "main",
+    draft: true,
+    prerelease: false,
+    immutable: false,
     body: overrides.quarantined ? expected.recoveryNotice : expected.canonicalBody,
     marker: overrides.quarantined ? null : expected.canonicalMarker,
     assets: [...duplicateOriginalAssets, ...evidence],
@@ -931,7 +942,7 @@ test("apply composes with the real Task 4 writer over an in-memory quarantine tr
           id: asset.id,
           name: asset.name,
           digest: `sha256:${asset.sha256}`,
-          size: evidenceBytes(asset).byteLength,
+          size: asset.size,
         })),
       )
     }
@@ -1065,6 +1076,28 @@ test("apply resumes an expired partial run without restoring a live marker or in
       assert.match(receipt.duplicates[index].projectionSha256, /^[0-9a-f]{64}$/u)
     }
   }
+})
+
+test("preexisting quarantine hashes the same complete projection as writer fences", async () => {
+  const harness = createApplyHarness({ states: ["quarantined", "quarantined"] })
+  const receipt = await runApply(harness)
+  const snapshot = recoverySnapshotForState(POLICY.duplicates[0].releaseId, "quarantined")
+  const writerProjection = {
+    releaseId: snapshot.releaseId,
+    tagName: snapshot.tagName,
+    title: snapshot.title,
+    targetCommitish: snapshot.targetCommitish,
+    draft: snapshot.draft,
+    prerelease: snapshot.prerelease,
+    immutable: snapshot.immutable,
+    body: snapshot.body,
+    assets: snapshot.assets.map(({ id, name, sha256, size }) => ({ id, name, sha256, size })),
+  }
+  const expectedSha256 = createHash("sha256")
+    .update(JSON.stringify(canonicalize(writerProjection)), "utf8")
+    .digest("hex")
+
+  assert.equal(receipt.duplicates[0].projectionSha256, expectedSha256)
 })
 
 test("apply rejects malformed acknowledgements before reads, writer construction, or mutation", async () => {
@@ -1209,6 +1242,35 @@ test("apply fails closed on stale evidence and adversarial live authorization dr
   const fourth = createApplyHarness({ fourthCandidate: true })
   await assert.rejects(runApply(fourth), /inventory/iu)
   assert.equal(fourth.writerConstructions, 0)
+})
+
+test("apply rejects partial, quarantined, and asset-size projection drift before mutation", async () => {
+  const cases = [
+    {
+      states: ["body-archived", "untouched"],
+      drift(current) {
+        current.releases.duplicates[0].title = "Dawn v0.8.22 changed"
+      },
+    },
+    {
+      states: ["quarantined", "quarantined"],
+      drift(current) {
+        current.releases.duplicates[0].title = "Dawn v0.8.22 changed"
+      },
+    },
+    {
+      states: ["body-archived", "untouched"],
+      drift(current) {
+        current.releases.duplicates[0].assets[0].size += 1
+      },
+    },
+  ]
+  for (const { states, drift } of cases) {
+    const harness = createApplyHarness({ states, drift })
+    await assert.rejects(runApply(harness), /Release|state|drift|exact/iu)
+    assert.equal(harness.writerConstructions, 0)
+    assert.equal(harness.mutationCount, 0)
+  }
 })
 
 test("apply never retries failed, ambiguous, or malformed writer outcomes and never starts the next mutation", async () => {
@@ -1364,6 +1426,11 @@ function recoveryObservation({
       canonical: {
         releaseId: POLICY.canonicalReleaseId,
         tagName: CANONICAL_OPAQUE_TAG,
+        title: RELEASE_TITLE,
+        targetCommitish: "main",
+        draft: true,
+        prerelease: false,
+        immutable: false,
         body: ORIGINAL_BODY,
         marker: ORIGINAL_MARKER,
         assets: ORIGINAL_ASSETS,
@@ -1463,10 +1530,11 @@ function releaseSummary(release) {
   return {
     releaseId: release.releaseId,
     tagName: release.tagName,
-    draft: true,
-    prerelease: false,
-    immutable: false,
-    targetCommitish: "main",
+    title: release.title,
+    draft: release.draft,
+    prerelease: release.prerelease,
+    immutable: release.immutable,
+    targetCommitish: release.targetCommitish,
     marker: release.marker,
   }
 }
@@ -1505,6 +1573,33 @@ test("captures canonical frozen evidence through only the read boundary", async 
   }
 })
 
+test("capture rejects canonical and partial duplicate title drift", async () => {
+  for (const { states, releaseId } of [
+    { states: ["untouched", "untouched"], releaseId: POLICY.canonicalReleaseId },
+    { states: ["body-archived", "untouched"], releaseId: POLICY.duplicates[0].releaseId },
+  ]) {
+    const { reader: baseReader } = captureReader({ states })
+    const reader = Object.freeze({
+      ...baseReader,
+      async readReleaseSnapshot(observedReleaseId, options) {
+        const release = structuredClone(
+          await baseReader.readReleaseSnapshot(observedReleaseId, options),
+        )
+        if (observedReleaseId === releaseId) release.title = "Dawn v0.8.22 changed"
+        return release
+      },
+    })
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      /Release|evidence|exact|conflict/iu,
+    )
+  }
+})
+
 test("adapter canonical and duplicate snapshots compose directly into capture", async () => {
   const tags = new Map([
     [POLICY.canonicalReleaseId, CANONICAL_OPAQUE_TAG],
@@ -1534,6 +1629,7 @@ test("adapter canonical and duplicate snapshots compose directly into capture", 
       return jsonResponse({
         id: releaseId,
         tag_name: tags.get(releaseId),
+        name: RELEASE_TITLE,
         body: ORIGINAL_BODY,
         draft: true,
         prerelease: false,

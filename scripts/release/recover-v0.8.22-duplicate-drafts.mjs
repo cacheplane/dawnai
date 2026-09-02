@@ -15,11 +15,13 @@ import { createGitHubReader } from "./adapters/github.mjs"
 import { createNpmReader } from "./adapters/npm.mjs"
 import { createCliAttestationVerifier } from "./artifact-store.mjs"
 import {
+  assertDuplicateDraftRecoveryReader,
   DUPLICATE_DRAFT_RECOVERY_POLICY,
   applyDuplicateDraftRecovery as defaultApplyDuplicateDraftRecovery,
   canonicalDuplicateDraftEvidence as defaultCanonicalDuplicateDraftEvidence,
   captureDuplicateDraftRecoveryEvidence as defaultCaptureDuplicateDraftRecoveryEvidence,
   parseDuplicateDraftEvidence as defaultParseDuplicateDraftEvidence,
+  normalizeDuplicateDraftReleaseProjection,
 } from "./duplicate-draft-recovery.mjs"
 import {
   createDuplicateDraftRecoveryReader as defaultCreateDuplicateDraftRecoveryReader,
@@ -1155,14 +1157,46 @@ function concurrencyAcknowledgement() {
   })
 }
 
-function createProductionRecoveryObserver({
-  root,
-  token,
-  reader,
-  environment,
-  fileSystem,
-  runGit,
-}) {
+export function createProductionRecoveryObserver(
+  { root, token, reader, environment, fileSystem, runGit },
+  testOverrides = undefined,
+) {
+  assertDuplicateDraftRecoveryReader(reader)
+  // Retain the exact repository environment gate used by the normal release
+  // observer without allowing it to supply credentials or candidate identity.
+  const repository = environmentDataProperty(environment, "GITHUB_REPOSITORY")
+  if (repository !== undefined && repository !== "cacheplane/dawnai") {
+    throw new TypeError("Recovery production repository is invalid")
+  }
+  const overriddenObserver = normalizeProductionObserverTestOverride(testOverrides)
+  const normalObserver =
+    overriddenObserver ??
+    createNormalProductionRecoveryObserver({ root, token, fileSystem, runGit })
+  return async ({ candidate }) => {
+    assertRecoveryObserverCandidate(candidate)
+    const before = await readRecoveryObserverBinding(reader, candidate)
+    const normal = snapshotJson(await normalObserver({ candidate }))
+    assertExactFields(
+      normal,
+      ["state", "disposition", "nextTransition", "conflicts", "diagnostics"],
+      "Recovery normal observer result",
+    )
+    const after = await readRecoveryObserverBinding(reader, candidate)
+    if (!sameCanonicalData(before, after)) {
+      throw new Error("Recovery production Release binding drifted during final authorization")
+    }
+    return Object.freeze({
+      state: normal.state,
+      disposition: normal.disposition,
+      nextTransition: normal.nextTransition,
+      conflicts: Object.freeze([...normal.conflicts]),
+      diagnostics: Object.freeze([...normal.diagnostics]),
+      releaseId: after.releaseId,
+    })
+  }
+}
+
+function createNormalProductionRecoveryObserver({ root, token, fileSystem, runGit }) {
   const git = createGitReader({ root, run: runGit })
   const github = createGitHubReader({
     owner: "cacheplane",
@@ -1177,15 +1211,6 @@ function createProductionRecoveryObserver({
     token,
     fileSystem,
   })
-  if (reader === null || typeof reader !== "object") {
-    throw new TypeError("Recovery production reader is invalid")
-  }
-  // Retain the exact repository environment gate used by the normal release
-  // observer without allowing it to supply credentials or candidate identity.
-  const repository = environmentDataProperty(environment, "GITHUB_REPOSITORY")
-  if (repository !== undefined && repository !== "cacheplane/dawnai") {
-    throw new TypeError("Recovery production repository is invalid")
-  }
   return async ({ candidate }) => {
     const [managedInventory, marker] = await Promise.all([
       inventory.read({ ref: candidate.commitSha }),
@@ -1205,15 +1230,152 @@ function createProductionRecoveryObserver({
       observation: observed.observation,
       mode: "controller",
     })
-    return Object.freeze({
+    return {
       state: plan.state,
       disposition: plan.disposition,
       nextTransition: plan.nextTransition,
       conflicts: plan.conflicts,
       diagnostics: observed.diagnostics,
-      releaseId: DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId,
-    })
+    }
   }
+}
+
+function normalizeProductionObserverTestOverride(value) {
+  if (value === undefined) return null
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    !arraysEqual(Reflect.ownKeys(value), ["normalObserver"])
+  ) {
+    throw new TypeError("Recovery production observer override is invalid")
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, "normalObserver")
+  if (
+    descriptor?.enumerable !== true ||
+    !("value" in descriptor) ||
+    typeof descriptor.value !== "function"
+  ) {
+    throw new TypeError("Recovery production observer override is invalid")
+  }
+  return descriptor.value
+}
+
+function assertRecoveryObserverCandidate(candidate) {
+  assertExactFields(candidate, ["version", "commitSha"], "Recovery observer candidate")
+  if (
+    candidate.version !== DUPLICATE_DRAFT_RECOVERY_POLICY.version ||
+    candidate.commitSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha
+  ) {
+    throw new Error("Recovery observer candidate identity is not exact")
+  }
+}
+
+async function readRecoveryObserverBinding(reader, candidate) {
+  const inventory = snapshotJson(await reader.listCandidateReleases())
+  if (!Array.isArray(inventory) || inventory.length !== 3) {
+    throw new Error("Recovery production candidate inventory is not exact")
+  }
+  const expected = [
+    ...DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates,
+    {
+      releaseId: DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId,
+      tagName: "untagged-be0ff4bee4ba43b521a9",
+    },
+  ].sort((left, right) => left.releaseId - right.releaseId)
+  inventory.sort((left, right) => left?.releaseId - right?.releaseId)
+  let canonicalSummary = null
+  for (const [index, release] of inventory.entries()) {
+    assertExactFields(
+      release,
+      [
+        "releaseId",
+        "tagName",
+        "title",
+        "draft",
+        "prerelease",
+        "immutable",
+        "targetCommitish",
+        "marker",
+      ],
+      "Recovery production candidate Release",
+    )
+    if (
+      release.releaseId !== expected[index].releaseId ||
+      release.tagName !== expected[index].tagName ||
+      release.title !== `Dawn v${candidate.version}` ||
+      release.draft !== true ||
+      release.prerelease !== false ||
+      release.immutable !== false ||
+      release.targetCommitish !== "main"
+    ) {
+      throw new Error("Recovery production candidate Release identity is not exact")
+    }
+    if (release.releaseId === DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId) {
+      if (!isExactRecoveryCandidateMarker(release.marker, candidate)) {
+        throw new Error("Recovery production canonical Release marker is not exact")
+      }
+      canonicalSummary = release
+    } else if (release.marker !== null) {
+      throw new Error("Recovery production duplicate Release remains controller-visible")
+    }
+  }
+  if (canonicalSummary === null) {
+    throw new Error("Recovery production canonical Release identity is unavailable")
+  }
+  const snapshot = snapshotJson(
+    await reader.readReleaseSnapshot(DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId),
+  )
+  assertExactFields(
+    snapshot,
+    [
+      "releaseId",
+      "tagName",
+      "title",
+      "targetCommitish",
+      "draft",
+      "prerelease",
+      "immutable",
+      "body",
+      "marker",
+      "assets",
+    ],
+    "Recovery production canonical Release snapshot",
+  )
+  const projection = normalizeDuplicateDraftReleaseProjection(snapshot)
+  if (
+    projection.releaseId !== canonicalSummary.releaseId ||
+    projection.tagName !== canonicalSummary.tagName ||
+    projection.title !== canonicalSummary.title ||
+    projection.targetCommitish !== canonicalSummary.targetCommitish ||
+    projection.draft !== canonicalSummary.draft ||
+    projection.prerelease !== canonicalSummary.prerelease ||
+    projection.immutable !== canonicalSummary.immutable ||
+    !sameCanonicalData(snapshot.marker, canonicalSummary.marker)
+  ) {
+    throw new Error("Recovery production canonical Release identity is not exact")
+  }
+  return {
+    releaseId: projection.releaseId,
+    inventory,
+    projection,
+    marker: snapshot.marker,
+  }
+}
+
+function isExactRecoveryCandidateMarker(value, candidate) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    value.version === candidate.version &&
+    value.commitSha === candidate.commitSha &&
+    value.tag === `v${candidate.version}`
+  )
+}
+
+function sameCanonicalData(left, right) {
+  return JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right))
 }
 
 export async function readCandidateControllerMarker({ git, candidate }) {

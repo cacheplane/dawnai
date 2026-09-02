@@ -492,9 +492,9 @@ assets, performs at most one body-only `PATCH` per duplicate, never retries an
 ambiguous write, and emits the local write-once final authorization receipt
 only after both duplicates and the final normal-controller observation pass.
 
-On any nonzero exit, preserve every capture, output, temporary file, GitHub
-asset, and the operator freeze. Record the exit, UTC time, and the exact known
-or ambiguous state. Exit code `3` specifically means output cleanup is
+On any nonzero exit, preserve every remaining file, GitHub asset, and the
+operator freeze. Record the exit, UTC time, and the exact known or ambiguous
+state. Exit code `3` specifically means output cleanup is
 uncertain: do not delete, rename, reuse, or infer the contents of that apply
 path. Do not rerun `apply` blindly after a timeout, transport error, retryable
 HTTP response, malformed response, or otherwise ambiguous outcome.

@@ -792,6 +792,110 @@ test("requires owned non-writable directory parents and exact recovery mode 0700
   }
 })
 
+test("production recovery observer derives the canonical numeric Release ID from bracketed recovery reads", async () => {
+  assert.equal(typeof recoveryCliModule.createProductionRecoveryObserver, "function")
+  const calls = []
+  const reader = productionObserverReader({ calls })
+  const normalResult = {
+    state: "CANDIDATE_ESCROWED",
+    disposition: "would-transition",
+    nextTransition: "publish-npm-packages",
+    conflicts: [],
+    diagnostics: [],
+  }
+  const observer = recoveryCliModule.createProductionRecoveryObserver(
+    productionObserverInput(reader),
+    {
+      normalObserver: async (input) => {
+        calls.push(["normal", input])
+        return normalResult
+      },
+    },
+  )
+
+  assert.deepEqual(
+    await observer({
+      candidate: {
+        version: "0.8.22",
+        commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8",
+      },
+    }),
+    { ...normalResult, releaseId: 379991871 },
+  )
+  assert.deepEqual(
+    calls.map(([kind]) => kind),
+    ["list", "snapshot", "normal", "list", "snapshot"],
+  )
+})
+
+test("production recovery observer rejects an alternate sole Release ID and a fourth candidate", async () => {
+  assert.equal(typeof recoveryCliModule.createProductionRecoveryObserver, "function")
+  const alternate = observerCandidate(400000000, {
+    tagName: "untagged-alternate",
+    marker: observerMarker(),
+  })
+  for (const inventory of [[alternate], [...observerInventory(), alternate]]) {
+    let normalCalls = 0
+    const observer = recoveryCliModule.createProductionRecoveryObserver(
+      productionObserverInput(productionObserverReader({ inventories: [inventory] })),
+      {
+        normalObserver: async () => {
+          normalCalls += 1
+          return {
+            state: "CANDIDATE_ESCROWED",
+            disposition: "would-transition",
+            nextTransition: "publish-npm-packages",
+            conflicts: [],
+            diagnostics: [],
+          }
+        },
+      },
+    )
+    await assert.rejects(
+      observer({
+        candidate: {
+          version: "0.8.22",
+          commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8",
+        },
+      }),
+      /candidate|inventory|Release|identity/iu,
+    )
+    assert.equal(normalCalls, 0)
+  }
+})
+
+test("production recovery observer rejects bracket drift around normal classification", async () => {
+  assert.equal(typeof recoveryCliModule.createProductionRecoveryObserver, "function")
+  const reader = productionObserverReader({
+    snapshots: [
+      observerCanonicalSnapshot(),
+      { ...observerCanonicalSnapshot(), title: "Dawn v0.8.22 changed" },
+    ],
+  })
+  const observer = recoveryCliModule.createProductionRecoveryObserver(
+    productionObserverInput(reader),
+    {
+      normalObserver: async () => ({
+        state: "CANDIDATE_ESCROWED",
+        disposition: "would-transition",
+        nextTransition: "publish-npm-packages",
+        conflicts: [],
+        diagnostics: [],
+      }),
+    },
+  )
+
+  await assert.rejects(
+    observer({
+      candidate: {
+        version: "0.8.22",
+        commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8",
+      },
+    }),
+    /drift|Release|identity|exact/iu,
+  )
+})
+
 async function successfulApply(
   root,
   { fileSystem: injectedFileSystem, onApply, output = APPLY_PATH, runGit, stdout = sink() } = {},
@@ -875,6 +979,85 @@ function sink() {
       return true
     },
   }
+}
+
+function productionObserverInput(reader) {
+  return {
+    root: "/workspace",
+    token: "test-token",
+    reader,
+    environment: {},
+    fileSystem: {},
+    runGit: async () => "",
+  }
+}
+
+function observerMarker() {
+  return {
+    version: "0.8.22",
+    commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8",
+    tag: "v0.8.22",
+  }
+}
+
+function observerCandidate(
+  releaseId,
+  { tagName = "untagged-be0ff4bee4ba43b521a9", marker = null } = {},
+) {
+  return {
+    releaseId,
+    tagName,
+    title: "Dawn v0.8.22",
+    draft: true,
+    prerelease: false,
+    immutable: false,
+    targetCommitish: "main",
+    marker,
+  }
+}
+
+function observerInventory() {
+  return [
+    observerCandidate(379982100, { tagName: "untagged-a13939767dd2419ade01" }),
+    observerCandidate(379986168, { tagName: "untagged-20706099efa3c38335a8" }),
+    observerCandidate(379991871, { marker: observerMarker() }),
+  ]
+}
+
+function observerCanonicalSnapshot() {
+  return {
+    ...observerCandidate(379991871, { marker: observerMarker() }),
+    body: "canonical body\n",
+    assets: [{ id: 1, name: "base.tgz", sha256: "a".repeat(64), size: 4 }],
+  }
+}
+
+function productionObserverReader({ calls = [], inventories, snapshots } = {}) {
+  let inventoryRead = 0
+  let snapshotRead = 0
+  const methods = {
+    async readReviewedMergeAuthority() {},
+    async readRepositoryState() {},
+    async readCandidateTag() {},
+    async readWorkflowState() {},
+    async readImmutableReleases() {},
+    async readReleaseRuns() {},
+    async readCandidatePublishJobs() {},
+    async readNpmAbsence() {},
+    async readReleaseSnapshot(releaseId) {
+      calls.push(["snapshot", releaseId])
+      const snapshot = snapshots?.[snapshotRead] ?? observerCanonicalSnapshot()
+      snapshotRead += 1
+      return snapshot
+    },
+    async listCandidateReleases() {
+      calls.push(["list"])
+      const inventory = inventories?.[inventoryRead] ?? observerInventory()
+      inventoryRead += 1
+      return inventory
+    },
+  }
+  return Object.freeze(methods)
 }
 
 const REVIEWED_COMMITS = new Map()
