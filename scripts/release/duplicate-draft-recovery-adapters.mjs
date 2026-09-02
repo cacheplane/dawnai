@@ -321,10 +321,7 @@ export function createDuplicateDraftRecoveryReader({
         const identifiesCandidate =
           CANDIDATE_RELEASE_IDS.has(release.id) ||
           release.tagName === CANDIDATE_TAG ||
-          (marker !== null &&
-            release.draft === true &&
-            release.immutable === false &&
-            marker.tag === CANDIDATE_TAG)
+          (marker !== null && marker.tag === CANDIDATE_TAG)
         if (identifiesCandidate) {
           candidates.push({
             releaseId: release.id,

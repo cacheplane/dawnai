@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import test from "node:test"
 
 import { createDuplicateDraftRecoveryReader } from "../duplicate-draft-recovery-adapters.mjs"
-import { canonicalReleaseBody, isManagedReleaseForTag } from "../metadata.mjs"
+import { canonicalReleaseBody } from "../metadata.mjs"
 
 const EXPECTED_METHODS = [
   "listCandidateReleases",
@@ -525,27 +525,24 @@ test("skipped publish jobs preserve production scheduler timestamps without exec
   }
 })
 
-test("candidate Release discovery matches managed mutable-marker ownership", async () => {
+test("candidate Release discovery includes every marker-backed candidate history row", async () => {
   const wrongShaBody = attachingBody("e".repeat(40))
   const rows = [
     releaseRow(400000001, { tag_name: "v0.8.22", draft: false, immutable: true }),
     releaseRow(400000002, { body: wrongShaBody }),
     releaseRow(400000003, { body: wrongShaBody, draft: false, immutable: true }),
-    releaseRow(400000004),
+    releaseRow(400000004, { body: wrongShaBody, immutable: true }),
+    releaseRow(400000005),
   ]
   const reader = createDuplicateDraftRecoveryReader({
     root: "/workspace",
     run: async () => `${REVIEWED_COMMIT}\n`,
     fetchImpl: async () => jsonResponse(rows),
   })
-  const expectedIds = rows
-    .filter((release) => isManagedReleaseForTag(release, "v0.8.22"))
-    .map(({ id }) => id)
   assert.deepEqual(
     (await reader.listCandidateReleases()).map(({ releaseId }) => releaseId),
-    expectedIds,
+    [400000001, 400000002, 400000003, 400000004],
   )
-  assert.deepEqual(expectedIds, [400000001, 400000002])
 })
 
 test("npm absence performs exact-version E404 plus package metadata confirmation", async () => {

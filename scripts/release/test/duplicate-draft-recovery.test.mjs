@@ -1068,6 +1068,54 @@ test("capture accepts skipped scheduler timestamps and blocks publishers that ma
   }
 })
 
+test("capture composes all five sanitized terminal runs with skipped publishers", async () => {
+  const publishers = [
+    [33348528971, "2026-08-31T01:55:53Z", "2026-08-31T01:55:53Z"],
+    [33349661741, "2026-08-31T02:07:47Z", "2026-08-31T02:07:46Z"],
+    [33406670822, "2026-08-31T15:08:27Z", "2026-08-31T15:08:27Z"],
+    [33410175329, "2026-08-31T15:45:12Z", "2026-08-31T15:45:12Z"],
+    [33418085547, "2026-08-31T17:20:32Z", "2026-08-31T17:20:31Z"],
+  ]
+  const candidateRuns = publishers.map(([id]) => ({
+    id,
+    runAttempt: 1,
+    status: "completed",
+    conclusion: "failure",
+    headSha: POLICY.candidateSha,
+    createdAt: RECOVERY_CAPTURED_AT,
+    startedAt: RECOVERY_CAPTURED_AT,
+    updatedAt: RECOVERY_CAPTURED_AT,
+  }))
+  const { reader, calls } = captureReader({
+    candidateRuns,
+    jobs: (runId) => {
+      const [, startedAt, completedAt] = publishers.find(([id]) => id === runId)
+      return [
+        {
+          id: runId * 10,
+          runId,
+          runAttempt: 1,
+          name: "publish-npm",
+          status: "completed",
+          conclusion: "skipped",
+          startedAt,
+          completedAt,
+        },
+      ]
+    },
+  })
+
+  await captureDuplicateDraftRecoveryEvidence({
+    reviewedCommit: MERGE_COMMIT_SHA,
+    reader,
+    now: () => Date.parse(RECOVERY_CAPTURED_AT),
+  })
+  assert.deepEqual(
+    calls.filter(([method]) => method === "readCandidatePublishJobs"),
+    publishers.map(([id]) => ["readCandidatePublishJobs", id, 1]),
+  )
+})
+
 test("capture requires calendar-valid run and job timestamps while accepting canonical boundaries", async () => {
   for (const timestamp of [
     "2026-02-31T00:00:00Z",
@@ -1254,27 +1302,33 @@ test("capture reconciles the exhaustive and candidate-filtered workflow run sets
   }
 })
 
-test("capture refuses a fourth marker-backed candidate Release with conflicting identity", async () => {
+test("capture refuses non-draft and immutable fourth marker-backed candidate Releases", async () => {
   const observation = recoveryObservation()
-  const releases = [
-    releaseSummary(observation.releases.canonical),
-    ...observation.releases.duplicates.map(releaseSummary),
-    {
-      ...releaseSummary(observation.releases.canonical),
-      releaseId: 400000000,
-      tagName: "untagged-fourth-candidate",
-      marker: { ...ORIGINAL_MARKER, commitSha: "e".repeat(40) },
-    },
-  ]
-  const { reader } = captureReader({ candidateReleases: releases })
-  await assert.rejects(
-    captureDuplicateDraftRecoveryEvidence({
-      reviewedCommit: MERGE_COMMIT_SHA,
-      reader,
-      now: () => Date.parse(RECOVERY_CAPTURED_AT),
-    }),
-    (error) => error.code === "CANDIDATE_RELEASE_INVENTORY_CONFLICT",
-  )
+  for (const state of [
+    { draft: false, immutable: false },
+    { draft: true, immutable: true },
+  ]) {
+    const releases = [
+      releaseSummary(observation.releases.canonical),
+      ...observation.releases.duplicates.map(releaseSummary),
+      {
+        ...releaseSummary(observation.releases.canonical),
+        ...state,
+        releaseId: 400000000,
+        tagName: "untagged-fourth-candidate",
+        marker: { ...ORIGINAL_MARKER, commitSha: "e".repeat(40) },
+      },
+    ]
+    const { reader } = captureReader({ candidateReleases: releases })
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => error.code === "CANDIDATE_RELEASE_INVENTORY_CONFLICT",
+    )
+  }
 })
 
 test("capture and evidence reject exact-tag or arbitrary canonical raw tag names", async () => {
