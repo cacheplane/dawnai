@@ -11,6 +11,7 @@ const SURVIVOR_ID = "379991871";
 const DUPLICATE_IDS = Object.freeze(["379982100", "379986168"]);
 const INCIDENT_IDS = Object.freeze([SURVIVOR_ID, ...DUPLICATE_IDS]);
 const ID_PATTERN = /^[1-9][0-9]*$/u;
+const DAWN_MARKER_IDENTITY = "DAWN_RELEASE_CONTROLLER_MARKER";
 
 const STAGE_RULES = Object.freeze({
 	"pre-delete-1": Object.freeze({
@@ -60,11 +61,20 @@ export function classifyConsolidationReleases(rawReleases, proposal, stage) {
 		const exactMarker = markerMatches(marker, APPROVED_CANDIDATE);
 		const exactTag = release.tag_name === APPROVED_CANDIDATE.tag;
 		const incidentId = INCIDENT_IDS.includes(id);
+		const suspiciousMarkerBody = isSuspiciousMarkerBody(
+			release.body,
+			APPROVED_CANDIDATE,
+		);
 		const partialMarker = markerSharesCandidateIdentity(
 			marker,
 			APPROVED_CANDIDATE,
 		);
-		const managed = exactMarker || exactTag || incidentId || partialMarker;
+		const managed =
+			exactMarker ||
+			exactTag ||
+			incidentId ||
+			partialMarker ||
+			suspiciousMarkerBody;
 
 		if (!managed) {
 			entries.push({ index, id, classification: "unrelated", release });
@@ -151,6 +161,15 @@ function markerSharesCandidateIdentity(marker, candidate) {
 		(marker.version === candidate.version ||
 			marker.commitSha === candidate.commitSha ||
 			marker.tag === candidate.tag)
+	);
+}
+
+function isSuspiciousMarkerBody(body, candidate) {
+	return (
+		typeof body === "string" &&
+		(body.includes(DAWN_MARKER_IDENTITY) ||
+			body.includes(candidate.commitSha) ||
+			body.includes(candidate.tag))
 	);
 }
 

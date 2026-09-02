@@ -1,4 +1,5 @@
-import { randomUUID as defaultRandomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomUUID as defaultRandomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import * as defaultFileSystem from "node:fs/promises";
 import path from "node:path";
@@ -19,11 +20,14 @@ const READ_FILE_SYSTEM_METHODS = Object.freeze(["lstat", "open"]);
 const WRITE_FILE_SYSTEM_METHODS = Object.freeze([
 	...READ_FILE_SYSTEM_METHODS,
 	"rename",
+	"unlink",
 ]);
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const PRIVATE_READ_IDENTITIES = new WeakMap();
-const PRIVATE_IDENTITY_PROPERTY = "consolidationPrivateFileIdentity";
+const PRIVATE_READ_PROVENANCE = new WeakMap();
+const PRIVATE_TRANSACTION_CONTEXT = new AsyncLocalStorage();
+const JOURNAL_BASENAME = "duplicate-draft-consolidation.journal.json";
+const JOURNAL_HEAD_BASENAME = "duplicate-draft-consolidation.journal.head.json";
 
 const POLICIES = Object.freeze({
 	private: Object.freeze({ label: "private envelope", mode: PRIVATE_MODE }),
@@ -44,14 +48,54 @@ export async function writePrivateEnvelope(
 	dependencies,
 	expectedCurrent,
 ) {
-	return writeEvidence(
-		filePath,
-		bytes,
-		dependencies,
-		POLICIES.private,
-		expectedCurrent,
+	const target = snapshotPath(filePath);
+	return withPrivateWriteLock(target, dependencies, () =>
+		writeEvidence(
+			target,
+			bytes,
+			dependencies,
+			POLICIES.private,
+			expectedCurrent,
+		),
 	);
 }
+
+Object.defineProperty(readPrivateEnvelope, "authenticate", {
+	value(value, expectedPath) {
+		const target = snapshotPath(expectedPath);
+		const provenance =
+			value !== null && typeof value === "object"
+				? PRIVATE_READ_PROVENANCE.get(value)
+				: undefined;
+		if (
+			provenance === undefined ||
+			provenance.path !== target ||
+			!Buffer.isBuffer(value) ||
+			sha256(value) !== provenance.sha256
+		) {
+			throw new TypeError(
+				"Authenticated private read provenance or byte digest is invalid",
+			);
+		}
+		return provenance;
+	},
+	enumerable: false,
+	writable: false,
+	configurable: false,
+});
+
+Object.defineProperty(writePrivateEnvelope, "withExclusiveTransaction", {
+	value(filePath, operation, dependencies) {
+		const target = snapshotPath(filePath);
+		if (typeof operation !== "function" || utilTypes.isProxy(operation)) {
+			throw new TypeError("Private envelope transaction callback is invalid");
+		}
+		return withPrivateWriteLock(target, dependencies, operation);
+	},
+	enumerable: false,
+	writable: false,
+	configurable: false,
+});
 
 export async function readTrackedReceipt(filePath, maximumBytes, dependencies) {
 	return readEvidence(filePath, maximumBytes, dependencies, POLICIES.tracked);
@@ -147,16 +191,7 @@ async function readEvidence(filePath, maximumBytes, dependencies, policy) {
 			policy.label,
 		);
 		result = Buffer.from(bytes);
-		if (policy === POLICIES.private) {
-			const identity = fileIdentity(after);
-			PRIVATE_READ_IDENTITIES.set(result, identity);
-			Object.defineProperty(result, PRIVATE_IDENTITY_PROPERTY, {
-				value: identity,
-				enumerable: false,
-				writable: false,
-				configurable: false,
-			});
-		}
+		if (policy === POLICIES.private) recordPrivateRead(result, target, after);
 	} catch (error) {
 		primaryError = error;
 	}
@@ -191,7 +226,7 @@ async function writeEvidence(
 ) {
 	const target = snapshotPath(filePath);
 	const bytes = snapshotWriteBytes(inputBytes, policy.label);
-	const expected = snapshotExpectedCurrent(expectedCurrent, policy);
+	const expected = snapshotExpectedCurrent(expectedCurrent, policy, target);
 	const runtime = snapshotDependencies(dependencies, true);
 	requireNoFollowSupport(true);
 	const identifier = runtime.randomUUID();
@@ -565,7 +600,7 @@ function snapshotWriteBytes(value, label) {
 	}
 }
 
-function snapshotExpectedCurrent(value, policy) {
+function snapshotExpectedCurrent(value, policy, target) {
 	if (value === undefined) return null;
 	if (policy !== POLICIES.private) {
 		throw new TypeError(
@@ -573,26 +608,182 @@ function snapshotExpectedCurrent(value, policy) {
 		);
 	}
 	if (value === null) return Object.freeze({ absent: true });
-	const identity =
+	const provenance =
 		value !== null && typeof value === "object"
-			? PRIVATE_READ_IDENTITIES.get(value)
-			: undefined;
-	const descriptor =
-		value !== null && typeof value === "object"
-			? Object.getOwnPropertyDescriptor(value, PRIVATE_IDENTITY_PROPERTY)
+			? PRIVATE_READ_PROVENANCE.get(value)
 			: undefined;
 	if (
-		identity === undefined ||
-		descriptor?.value !== identity ||
-		descriptor.enumerable !== false ||
-		descriptor.writable !== false ||
-		descriptor.configurable !== false
+		provenance === undefined ||
+		provenance.path !== target ||
+		!Buffer.isBuffer(value) ||
+		sha256(value) !== provenance.sha256
 	) {
 		throw new TypeError(
 			"Authenticated private replacement requires the exact no-follow read result",
 		);
 	}
-	return Object.freeze({ bytes: Buffer.from(value), identity });
+	return Object.freeze({
+		bytes: Buffer.from(value),
+		identity: provenance.identity,
+	});
+}
+
+function recordPrivateRead(bytes, target, status) {
+	const provenance = Object.freeze({
+		path: target,
+		identity: fileIdentity(status),
+		sha256: sha256(bytes),
+	});
+	PRIVATE_READ_PROVENANCE.set(bytes, provenance);
+	return bytes;
+}
+
+function sha256(bytes) {
+	return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function withPrivateWriteLock(target, dependencies, operation) {
+	const lockTarget = privateLockTarget(target);
+	if (lockTarget === null) return operation();
+	const active = PRIVATE_TRANSACTION_CONTEXT.getStore();
+	if (active?.lockTarget === lockTarget) return operation();
+	if (active !== undefined) {
+		throw new Error("Private envelope transaction cannot acquire another lock");
+	}
+	const runtime = snapshotDependencies(dependencies, true);
+	const identifier = runtime.randomUUID();
+	if (typeof identifier !== "string" || !UUID_PATTERN.test(identifier)) {
+		throw new TypeError("Private envelope lock identity is invalid");
+	}
+	const parentPath = path.dirname(lockTarget);
+	const parentChain = await captureParentChain(
+		runtime.operations,
+		parentPath,
+		"private envelope lock",
+	);
+	const parentGuard = await openParentGuard(
+		runtime.operations,
+		parentPath,
+		parentChain,
+		"private envelope lock",
+		true,
+	);
+	let handle;
+	let operations;
+	let identity;
+	let primaryError = null;
+	let result;
+	try {
+		handle = await openNoFollow(
+			runtime.operations,
+			lockTarget,
+			fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL,
+			"private envelope lock",
+			PRIVATE_MODE,
+		);
+		operations = snapshotHandleOperations(handle, [
+			"chmod",
+			"close",
+			"stat",
+			"sync",
+			"write",
+		]);
+		await operations.chmod(PRIVATE_MODE);
+		const lockBytes = Buffer.from(
+			`${JSON.stringify({ schemaVersion: 1, pid: process.pid, owner: identifier })}\n`,
+			"utf8",
+		);
+		const written = await operations.write(
+			lockBytes,
+			0,
+			lockBytes.byteLength,
+			0,
+		);
+		if (
+			resultCount(
+				written,
+				"bytesWritten",
+				lockBytes.byteLength,
+				"lock write",
+			) !== lockBytes.byteLength
+		) {
+			throw new Error("Private envelope lock write is incomplete");
+		}
+		await operations.sync();
+		identity = await operations.stat({ bigint: true });
+		assertTemporaryFile(
+			identity,
+			runtime.effectiveUserId,
+			POLICIES.private,
+			lockBytes.byteLength,
+		);
+		const current = await runtime.operations.lstat(lockTarget, {
+			bigint: true,
+		});
+		if (!sameFileState(identity, current))
+			throw new Error("Private envelope lock path changed during acquisition");
+		await parentGuard.operations.sync();
+		result = await PRIVATE_TRANSACTION_CONTEXT.run(
+			Object.freeze({ lockTarget }),
+			operation,
+		);
+	} catch (error) {
+		primaryError = error;
+	}
+
+	const cleanupErrors = [];
+	if (operations !== undefined) {
+		try {
+			await operations.close();
+			handle = undefined;
+		} catch (error) {
+			cleanupErrors.push(error);
+		}
+	}
+	if (identity !== undefined) {
+		try {
+			const current = await runtime.operations.lstat(lockTarget, {
+				bigint: true,
+			});
+			if (!sameFileState(identity, current)) {
+				throw new Error(
+					"Private envelope lock ownership changed; retained fail-closed",
+				);
+			}
+			const releasedPath = `${lockTarget}.${identifier}.released`;
+			await runtime.operations.rename(lockTarget, releasedPath);
+			const released = await runtime.operations.lstat(releasedPath, {
+				bigint: true,
+			});
+			if (!sameFileObject(identity, released)) {
+				throw new Error(
+					"Private envelope lock release identity changed; retained fail-closed",
+				);
+			}
+			await runtime.operations.unlink(releasedPath);
+			await parentGuard.operations.sync();
+		} catch (error) {
+			cleanupErrors.push(error);
+		}
+	}
+	try {
+		await parentGuard.operations.close();
+	} catch (error) {
+		cleanupErrors.push(error);
+	}
+	throwCombined(
+		primaryError,
+		cleanupErrors,
+		"Private envelope transaction and lock cleanup both failed",
+	);
+	return result;
+}
+
+function privateLockTarget(target) {
+	const basename = path.basename(target);
+	if (basename !== JOURNAL_BASENAME && basename !== JOURNAL_HEAD_BASENAME)
+		return null;
+	return path.join(path.dirname(target), `.${JOURNAL_BASENAME}.lock`);
 }
 
 function requireNoFollowSupport(needsWrite) {
@@ -1009,6 +1200,16 @@ function sameFileState(before, after) {
 		after.nlink === before.nlink &&
 		after.mtimeNs === before.mtimeNs &&
 		after.ctimeNs === before.ctimeNs
+	);
+}
+
+function sameFileObject(before, after) {
+	return (
+		after.isFile() &&
+		after.dev === before.dev &&
+		after.ino === before.ino &&
+		after.size === before.size &&
+		after.nlink === before.nlink
 	);
 }
 

@@ -192,12 +192,12 @@ test("terminal authority exposes no publicly callable permit issuer", async () =
 	const epoch = terminal.seal();
 	assert.equal(Object.hasOwn(epoch, "issueDeletePermit"), false);
 	assert.equal(Object.hasOwn(epoch, "mintPermit"), false);
+	assert.equal(Object.hasOwn(epoch, "armTransition"), false);
 	assert.deepEqual(Reflect.ownKeys(epoch), [
 		"now",
 		"journalPath",
 		"validate",
 		"bindAuthority",
-		"armTransition",
 		"toJSON",
 	]);
 	await assert.rejects(

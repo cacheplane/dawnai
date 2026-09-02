@@ -456,6 +456,84 @@ test("burns a delayed permit at the absolute npm-authority expiry with zero DELE
 	);
 });
 
+test("the raw writer enforces expiry on its final pre-send clock", async () => {
+	const fixture = await authorityFixture();
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const permit = await captured.networkEpoch.consume(
+		await journalIntentConsumption(captured, fixture),
+	);
+	const expiry =
+		Date.parse(captured.authority.npmInventory.completedAt) + 120_000;
+	let reads = 0;
+	fixture.setClock(() => {
+		reads += 1;
+		return new Date(expiry + (reads >= 3 ? 1 : 0)).toISOString();
+	});
+
+	await assert.rejects(
+		fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		/expired|final|pre-send|authority|permit/iu,
+	);
+	assert.equal(
+		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
+	);
+});
+
+test("missing or replaced committed journal heads burn the permit before DELETE", async (t) => {
+	for (const mutation of ["missing", "replaced"]) {
+		await t.test(mutation, async () => {
+			const fixture = await authorityFixture();
+			const captured = await captureConsolidationAuthority(fixture.input);
+			const permit = await captured.networkEpoch.consume(
+				await journalIntentConsumption(captured, fixture),
+			);
+			if (mutation === "missing") {
+				await rm(fixture.journalHeadPath);
+			} else {
+				const bytes = await readPrivateEnvelope(
+					fixture.journalHeadPath,
+					16 * 1024,
+				);
+				await writePrivateEnvelope(fixture.journalHeadPath, bytes);
+			}
+
+			await assert.rejects(
+				fixture.adapters.writer.deleteDuplicate({
+					releaseId: DUPLICATE_DRAFT_IDS[0],
+					permit,
+				}),
+				/head|anchor|identity|missing|replace/iu,
+			);
+			assert.equal(
+				fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+				false,
+			);
+		});
+	}
+});
+
+test("a nested adapter call during DELETE invalidates an outer 204", async () => {
+	let fixture;
+	fixture = await authorityFixture({
+		deleteHook: async () => fixture.adapters.github.getRepository(),
+	});
+	const captured = await captureConsolidationAuthority(fixture.input);
+	const permit = await captured.networkEpoch.consume(
+		await journalIntentConsumption(captured, fixture),
+	);
+	await assert.rejects(
+		fixture.adapters.writer.deleteDuplicate({
+			releaseId: DUPLICATE_DRAFT_IDS[0],
+			permit,
+		}),
+		/reentrant|invalid|sealed|delete|adapter/iu,
+	);
+});
+
 test("rejects replacement of the committed journal before DELETE even when bytes match", async () => {
 	const fixture = await authorityFixture();
 	const captured = await captureConsolidationAuthority(fixture.input);
@@ -511,8 +589,6 @@ test("rejects a constant-counter bypass and concurrent terminal-read race", asyn
 });
 
 test("a fabricated authority cannot arm DELETE after only terminal reads", async () => {
-	const source = await authorityFixture();
-	const captured = await captureConsolidationAuthority(source.input);
 	const victim = await authorityFixture();
 	const terminal = victim.adapters.authorityEpoch.beginTerminalRead({
 		releaseId: DUPLICATE_DRAFT_IDS[0],
@@ -522,69 +598,7 @@ test("a fabricated authority cannot arm DELETE after only terminal reads", async
 		releaseId: DUPLICATE_DRAFT_IDS[0],
 	});
 	const epoch = terminal.seal();
-	const proposedEnvelope = createConsolidationEnvelope(
-		"proposed",
-		victim.proposal,
-	);
-	const confirmation = exactConfirmation(proposedEnvelope);
-	const confirmationSha256 = createHash("sha256")
-		.update(confirmation, "utf8")
-		.digest("hex");
-	let predecessor = createConsolidationJournal({
-		proposedEnvelope,
-		confirmationSha256,
-		recordedAt: captured.authority.observedAt,
-	});
-	predecessor = appendJournalEvent(
-		predecessor,
-		"delete-authority-observed",
-		{
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			attemptNumber: 1,
-			authority: captured.authority,
-		},
-		captured.authority.observedAt,
-	);
-	await writePrivateEnvelope(
-		victim.journalPath,
-		canonicalConsolidationEnvelopeBytes("journal", predecessor),
-	);
-	const predecessorRead = await readPrivateEnvelope(
-		victim.journalPath,
-		64 * 1024 * 1024,
-	);
-	const predecessorState = deriveConsolidationState(predecessor);
-	const committed = appendJournalEvent(
-		predecessor,
-		"delete-intent",
-		{
-			targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-			attemptNumber: 1,
-			authorityEventSha256: predecessorState.lastEventSha256,
-		},
-		captured.authority.observedAt,
-	);
-	await writePrivateEnvelope(
-		victim.journalPath,
-		canonicalConsolidationEnvelopeBytes("journal", committed),
-	);
-	const committedRead = await readPrivateEnvelope(
-		victim.journalPath,
-		64 * 1024 * 1024,
-	);
-
-	assert.throws(
-		() =>
-			epoch.armTransition({
-				targetReleaseId: DUPLICATE_DRAFT_IDS[0],
-				authority: captured.authority,
-				proposedEnvelope,
-				confirmation,
-				predecessorJournal: predecessorRead,
-				committedJournal: committedRead,
-			}),
-		/capture|trace|provenance|authority|session/iu,
-	);
+	assert.equal(Object.hasOwn(epoch, "armTransition"), false);
 	assert.equal(
 		victim.networkOperations.some((entry) => entry.startsWith("delete:")),
 		false,
@@ -688,6 +702,78 @@ test("raw authority capture rejects a complete Release trace that violates its s
 		fixture.remainingReleases.push(extra);
 		await assertRawReleaseTraceRejected(fixture);
 	});
+
+	for (const body of [
+		"<!-- DAWN_RELEASE_CONTROLLER_MARKER\r\nmalformed -->",
+		"prefix\u0000DAWN_RELEASE_CONTROLLER_MARKER-near-prefix",
+		`incident ${DUPLICATE_DRAFT_CANDIDATE.commitSha}`,
+	]) {
+		await t.test(
+			"rejects a suspicious malformed marker on an unexpected id",
+			async () => {
+				const fixture = await authorityFixture();
+				const suspicious = structuredClone(fixture.remainingReleases[0]);
+				suspicious.id = 999_999_997;
+				suspicious.node_id = "RE_kwDO-suspicious-unexpected";
+				suspicious.tag_name = "unrelated-tag";
+				suspicious.body = body;
+				fixture.remainingReleases.push(suspicious);
+				await assertRawReleaseTraceRejected(fixture);
+			},
+		);
+	}
+
+	await t.test("allows an ordinary unrelated Release", async () => {
+		const fixture = await authorityFixture();
+		fixture.remainingReleases.push({
+			id: 999_999_996,
+			node_id: "RE_kwDO-ordinary-unrelated",
+			tag_name: "v0.8.21",
+			name: "ordinary unrelated release",
+			target_commitish: "main",
+			draft: false,
+			immutable: true,
+			prerelease: false,
+			published_at: "2026-08-01T00:00:00Z",
+			created_at: "2026-08-01T00:00:00Z",
+			updated_at: "2026-08-01T00:00:00Z",
+			body: "ordinary unrelated body",
+			author: { login: "other", id: 1, node_id: "U_other" },
+			assets: [],
+		});
+		await captureConsolidationAuthority(fixture.input);
+	});
+});
+
+test("attestation trace rejects arbitrary arguments despite an expected-looking result", async () => {
+	let fixture;
+	fixture = await authorityFixture({
+		attestationVerify: async () =>
+			fixture.proposal.payloadProof.attestationVerification,
+	});
+	const capture = await rawCaptureThroughReleaseList(fixture);
+	for (const name of CANONICAL_RELEASE_PACKAGE_ORDER) {
+		await capture.npm.observePackageVersion({
+			name,
+			version: fixture.proposal.candidate.version,
+		});
+	}
+	const first = fixture.remainingReleases[0];
+	const expected = fixture.proposal.releases.find(
+		({ id }) => id === String(first.id),
+	);
+	for (const rawAsset of first.assets) {
+		const asset = expected.assets.find(({ id }) => id === String(rawAsset.id));
+		await capture.github.downloadReleaseAsset({
+			releaseId: String(first.id),
+			assetId: asset.id,
+			maximumBytes: asset.size,
+		});
+	}
+	await assert.rejects(
+		capture.attestations.verify({ arbitrary: "caller-authored" }),
+		/attestation|argument|trace|proposal|guard/iu,
+	);
 });
 
 test("a missing durable head bootstraps only exact operation genesis", async (t) => {
@@ -1607,6 +1693,24 @@ test("redacts dependency failures instead of exposing untrusted controls", async
 });
 
 async function assertRawReleaseTraceRejected(fixture) {
+	const capture = await rawCaptureBeforeReleaseList(fixture);
+	await assert.rejects(
+		capture.github.listReleases(),
+		/release|managed|candidate|duplicate|published|trace|authority/iu,
+	);
+	assert.equal(
+		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
+		false,
+	);
+}
+
+async function rawCaptureThroughReleaseList(fixture) {
+	const capture = await rawCaptureBeforeReleaseList(fixture);
+	await capture.github.listReleases();
+	return capture;
+}
+
+async function rawCaptureBeforeReleaseList(fixture) {
 	const capture = fixture.adapters.authorityEpoch.beginAuthorityCapture({
 		stage: fixture.input.stage,
 		proposal: fixture.proposal,
@@ -1621,19 +1725,14 @@ async function assertRawReleaseTraceRejected(fixture) {
 	await capture.github.getAnnotatedTag({
 		name: fixture.proposal.candidate.tag,
 	});
-	await assert.rejects(
-		capture.github.listReleases(),
-		/release|managed|candidate|duplicate|published|trace|authority/iu,
-	);
-	assert.equal(
-		fixture.networkOperations.some((entry) => entry.startsWith("delete:")),
-		false,
-	);
+	return capture;
 }
 
 async function authorityFixture({
 	stage = "pre-delete-1",
 	terminalGate = null,
+	deleteHook = null,
+	attestationVerify = null,
 } = {}) {
 	const evidenceFixture = createDuplicateDraftConsolidationFixture();
 	const inspected = await inspectEquivalentDrafts({
@@ -1761,6 +1860,7 @@ async function authorityFixture({
 			fetchImpl: async (url, init) => {
 				const parsed = new URL(url);
 				if (init.method === "DELETE") {
+					if (deleteHook !== null) await deleteHook();
 					log(`delete:${parsed.pathname.split("/").at(-1)}`);
 					return new Response(null, { status: 204 });
 				}
@@ -1894,7 +1994,10 @@ async function authorityFixture({
 				},
 			}),
 			createCliAttestationVerifier: () => ({
-				verify: (input) => evidenceFixture.attestations.verify(input),
+				verify: (input) =>
+					attestationVerify === null
+						? evidenceFixture.attestations.verify(input)
+						: attestationVerify(input),
 			}),
 		},
 	});

@@ -50,6 +50,115 @@ test("private envelopes round trip through exact mode 0600 without aliasing call
 	assert.deepEqual(await readFile(target), Buffer.from("private evidence\n"));
 });
 
+test("private-read provenance is non-forgeable and bound to its exact path", async (t) => {
+	const repository = await temporaryRepository(t);
+	const first = path.join(repository, ".dawn", "first.json");
+	const second = path.join(repository, ".dawn", "second.json");
+	await mkdir(path.dirname(first), { mode: 0o700 });
+	const bytes = Buffer.from("same private bytes\n");
+	await writePrivateEnvelope(first, bytes);
+	await writePrivateEnvelope(second, bytes);
+	const authenticated = await readPrivateEnvelope(first, MAXIMUM_BYTES);
+
+	assert.equal(
+		Reflect.ownKeys(authenticated).includes("consolidationPrivateFileIdentity"),
+		false,
+	);
+	await assert.rejects(
+		writePrivateEnvelope(
+			second,
+			Buffer.from("replacement\n"),
+			undefined,
+			authenticated,
+		),
+		/path|provenance|authenticated|current/iu,
+	);
+});
+
+test("an existing exact journal lock fails closed before replacement", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(
+		repository,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+	await writePrivateEnvelope(target, Buffer.from("original\n"));
+	const current = await readPrivateEnvelope(target, MAXIMUM_BYTES);
+	const lockPath = path.join(
+		path.dirname(target),
+		`.${path.basename(target)}.lock`,
+	);
+	await writeFile(lockPath, '{"schemaVersion":1,"owner":"other"}\n', {
+		mode: 0o600,
+	});
+
+	await assert.rejects(
+		writePrivateEnvelope(
+			target,
+			Buffer.from("replacement\n"),
+			undefined,
+			current,
+		),
+		/lock|exclusive|exist|transaction/iu,
+	);
+	assert.deepEqual(await readFile(target), Buffer.from("original\n"));
+});
+
+test("journal serialization blocks a final-check to rename overwrite race", async (t) => {
+	const repository = await temporaryRepository(t);
+	const target = path.join(
+		repository,
+		".dawn",
+		"release",
+		"duplicate-draft-consolidation.journal.json",
+	);
+	await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+	await writePrivateEnvelope(target, Buffer.from("original\n"));
+	const current = await readPrivateEnvelope(target, MAXIMUM_BYTES);
+	let releaseFirstRename;
+	let signalFirstRename;
+	const firstRenameReached = new Promise((resolve) => {
+		signalFirstRename = resolve;
+	});
+	const firstRenameGate = new Promise((resolve) => {
+		releaseFirstRename = resolve;
+	});
+	let journalRenames = 0;
+	const fileSystem = fileSystemWith({
+		async rename(source, destination) {
+			if (destination === target) {
+				journalRenames += 1;
+				if (journalRenames === 1) {
+					signalFirstRename();
+					await firstRenameGate;
+				}
+			}
+			return rename(source, destination);
+		},
+	});
+	const first = writePrivateEnvelope(
+		target,
+		Buffer.from("first\n"),
+		{ fileSystem },
+		current,
+	);
+	await firstRenameReached;
+	const second = writePrivateEnvelope(
+		target,
+		Buffer.from("second\n"),
+		{ fileSystem },
+		current,
+	);
+	await assert.rejects(second, /lock|exclusive|exist|transaction/iu);
+	releaseFirstRename();
+	await first;
+
+	assert.equal(journalRenames, 1);
+	assert.deepEqual(await readFile(target), Buffer.from("first\n"));
+});
+
 test("tracked receipts accept ordinary nonexecutable Git mode 0644", async (t) => {
 	const repository = await temporaryRepository(t);
 	const target = path.join(repository, "receipt.json");

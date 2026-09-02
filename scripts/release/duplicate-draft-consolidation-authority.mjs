@@ -320,8 +320,27 @@ export async function captureConsolidationAuthority(input) {
 		assertFreshWriterAuthority(authority, proposal, observedAt);
 	}
 
+	let transitionBoundary = null;
+	const acceptTransitionBoundary = (boundary) => {
+		if (
+			transitionBoundary !== null ||
+			typeof boundary !== "function" ||
+			utilTypes.isProxy(boundary) ||
+			!Object.isFrozen(boundary)
+		) {
+			throw new TypeError("Task6 transition boundary registration failed");
+		}
+		transitionBoundary = boundary;
+	};
+	Object.freeze(acceptTransitionBoundary);
 	try {
-		await adapterEpoch.bindAuthority({ authority, proposal });
+		await adapterEpoch.bindAuthority({
+			authority,
+			proposal,
+			acceptTransitionBoundary,
+		});
+		if (transitionBoundary === null)
+			throw new Error("Task6 transition boundary was not registered");
 		adapterEpoch.validate();
 	} catch {
 		throw new Error("Network epoch was invalidated after terminal completion");
@@ -331,6 +350,7 @@ export async function captureConsolidationAuthority(input) {
 		proposal,
 		targetReleaseId: stageRule.targetReleaseId,
 		adapterEpoch,
+		transitionBoundary,
 	});
 	const result = { authority };
 	Object.defineProperty(result, "networkEpoch", {
@@ -842,6 +862,7 @@ function createNetworkEpoch({
 	proposal,
 	targetReleaseId,
 	adapterEpoch,
+	transitionBoundary,
 }) {
 	const authoritySha256 = canonicalRecordSha256(authority);
 	const proposalSha256 = canonicalRecordSha256(proposal);
@@ -929,143 +950,151 @@ function createNetworkEpoch({
 						"Current journal does not bind proposal confirmation and controller",
 					);
 				}
-				let currentBytes;
-				try {
-					currentBytes = await readPrivateEnvelope(
-						intentPath,
-						DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
-					);
-				} catch {
-					throw new Error(
-						"Exact current private journal could not be authenticated; do not DELETE",
-					);
-				}
-				const currentEnvelope = parseConsolidationJournal(currentBytes);
-				const expectedCurrentBytes = canonicalConsolidationEnvelopeBytes(
-					"journal",
-					expectedCurrent,
-				);
-				if (
-					!currentBytes.equals(expectedCurrentBytes) ||
-					!isDeepStrictEqual(currentEnvelope, expectedCurrent)
-				) {
-					throw new Error(
-						"Current journal file differs from the authenticated expected history",
-					);
-				}
-				const journalHeadPath = `${intentPath.slice(0, -"journal.json".length)}journal.head.json`;
-				let currentHeadBytes;
-				try {
-					currentHeadBytes = await reconcileJournalHead({
-						journalHeadPath,
-						journalPath: intentPath,
-						journal: currentEnvelope,
-					});
-				} catch {
-					throw new Error(
-						"Durable journal head anchor is missing, ahead, divergent, or unsafe; do not DELETE",
-					);
-				}
-				if (
-					expectedCurrentState.phase !== "delete-authority-observed" ||
-					expectedCurrentState.currentTargetReleaseId !== consumedTarget ||
-					!isDeepStrictEqual(
-						expectedCurrentState.lastAuthority,
-						consumedAuthority,
-					)
-				) {
-					throw new Error(
-						"Current journal is not the exact legal delete-authority predecessor",
-					);
-				}
-				const beforeWriteTimestamp = readTrustedEpochClock(adapterEpoch);
-				assertFreshWriterAuthority(
-					consumedAuthority,
-					consumedProposal,
-					beforeWriteTimestamp,
-				);
-				assertAdapterEpochSealed(adapterEpoch);
-				const intentEnvelope = appendJournalEvent(
-					currentEnvelope,
-					"delete-intent",
-					{
-						targetReleaseId: consumedTarget,
-						attemptNumber: expectedCurrentState.attemptNumber,
-						authorityEventSha256: expectedCurrentState.lastEventSha256,
+				return writePrivateEnvelope.withExclusiveTransaction(
+					intentPath,
+					async () => {
+						let currentBytes;
+						try {
+							currentBytes = await readPrivateEnvelope(
+								intentPath,
+								DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+							);
+						} catch {
+							throw new Error(
+								"Exact current private journal could not be authenticated; do not DELETE",
+							);
+						}
+						const currentEnvelope = parseConsolidationJournal(currentBytes);
+						const expectedCurrentBytes = canonicalConsolidationEnvelopeBytes(
+							"journal",
+							expectedCurrent,
+						);
+						if (
+							!currentBytes.equals(expectedCurrentBytes) ||
+							!isDeepStrictEqual(currentEnvelope, expectedCurrent)
+						) {
+							throw new Error(
+								"Current journal file differs from the authenticated expected history",
+							);
+						}
+						const journalHeadPath = `${intentPath.slice(0, -"journal.json".length)}journal.head.json`;
+						let currentHeadBytes;
+						try {
+							currentHeadBytes = await reconcileJournalHead({
+								journalHeadPath,
+								journalPath: intentPath,
+								journal: currentEnvelope,
+							});
+						} catch {
+							throw new Error(
+								"Durable journal head anchor is missing, ahead, divergent, or unsafe; do not DELETE",
+							);
+						}
+						if (
+							expectedCurrentState.phase !== "delete-authority-observed" ||
+							expectedCurrentState.currentTargetReleaseId !== consumedTarget ||
+							!isDeepStrictEqual(
+								expectedCurrentState.lastAuthority,
+								consumedAuthority,
+							)
+						) {
+							throw new Error(
+								"Current journal is not the exact legal delete-authority predecessor",
+							);
+						}
+						const beforeWriteTimestamp = readTrustedEpochClock(adapterEpoch);
+						assertFreshWriterAuthority(
+							consumedAuthority,
+							consumedProposal,
+							beforeWriteTimestamp,
+						);
+						assertAdapterEpochSealed(adapterEpoch);
+						const intentEnvelope = appendJournalEvent(
+							currentEnvelope,
+							"delete-intent",
+							{
+								targetReleaseId: consumedTarget,
+								attemptNumber: expectedCurrentState.attemptNumber,
+								authorityEventSha256: expectedCurrentState.lastEventSha256,
+							},
+							beforeWriteTimestamp,
+						);
+						const intentBytes = canonicalConsolidationEnvelopeBytes(
+							"journal",
+							intentEnvelope,
+						);
+						try {
+							await writePrivateEnvelope(
+								intentPath,
+								intentBytes,
+								undefined,
+								currentBytes,
+							);
+						} catch {
+							throw new Error(
+								"Journal intent may already be durable; persistence failed, so do not DELETE or reconsume",
+							);
+						}
+						try {
+							const committedJournal = await readPrivateEnvelope(
+								intentPath,
+								DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
+							);
+							if (!committedJournal.equals(intentBytes)) {
+								throw new Error(
+									"Committed journal bytes differ from the legal intent",
+								);
+							}
+							const parsedCommitted =
+								parseConsolidationJournal(committedJournal);
+							if (!isDeepStrictEqual(parsedCommitted, intentEnvelope)) {
+								throw new Error(
+									"Committed journal envelope differs from the legal intent",
+								);
+							}
+							const committedHeadBytes = canonicalJournalHeadBytes(
+								intentPath,
+								intentEnvelope,
+							);
+							await writePrivateEnvelope(
+								journalHeadPath,
+								committedHeadBytes,
+								undefined,
+								currentHeadBytes,
+							);
+							const committedHead = await readPrivateEnvelope(
+								journalHeadPath,
+								16 * 1024,
+							);
+							if (!committedHead.equals(committedHeadBytes)) {
+								throw new Error(
+									"Committed journal head differs from the legal intent",
+								);
+							}
+							const completedTimestamp = readTrustedEpochClock(adapterEpoch);
+							assertFreshWriterAuthority(
+								consumedAuthority,
+								consumedProposal,
+								completedTimestamp,
+							);
+							adapterEpoch.validate();
+							return transitionBoundary({
+								targetReleaseId: consumedTarget,
+								authority: consumedAuthority,
+								proposedEnvelope,
+								confirmation,
+								predecessorJournal: currentBytes,
+								predecessorHead: currentHeadBytes,
+								committedJournal,
+								committedHead,
+							});
+						} catch {
+							throw new Error(
+								"Journal intent may already be durable; post-write authority failed, so do not DELETE or reconsume",
+							);
+						}
 					},
-					beforeWriteTimestamp,
 				);
-				const intentBytes = canonicalConsolidationEnvelopeBytes(
-					"journal",
-					intentEnvelope,
-				);
-				try {
-					await writePrivateEnvelope(
-						intentPath,
-						intentBytes,
-						undefined,
-						currentBytes,
-					);
-				} catch {
-					throw new Error(
-						"Journal intent may already be durable; persistence failed, so do not DELETE or reconsume",
-					);
-				}
-				try {
-					const committedJournal = await readPrivateEnvelope(
-						intentPath,
-						DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
-					);
-					if (!committedJournal.equals(intentBytes)) {
-						throw new Error(
-							"Committed journal bytes differ from the legal intent",
-						);
-					}
-					const parsedCommitted = parseConsolidationJournal(committedJournal);
-					if (!isDeepStrictEqual(parsedCommitted, intentEnvelope)) {
-						throw new Error(
-							"Committed journal envelope differs from the legal intent",
-						);
-					}
-					const committedHeadBytes = canonicalJournalHeadBytes(
-						intentPath,
-						intentEnvelope,
-					);
-					await writePrivateEnvelope(
-						journalHeadPath,
-						committedHeadBytes,
-						undefined,
-						currentHeadBytes,
-					);
-					const committedHead = await readPrivateEnvelope(
-						journalHeadPath,
-						16 * 1024,
-					);
-					if (!committedHead.equals(committedHeadBytes)) {
-						throw new Error(
-							"Committed journal head differs from the legal intent",
-						);
-					}
-					const completedTimestamp = readTrustedEpochClock(adapterEpoch);
-					assertFreshWriterAuthority(
-						consumedAuthority,
-						consumedProposal,
-						completedTimestamp,
-					);
-					adapterEpoch.validate();
-					return adapterEpoch.armTransition({
-						targetReleaseId: consumedTarget,
-						authority: consumedAuthority,
-						proposedEnvelope,
-						confirmation,
-						predecessorJournal: currentBytes,
-						committedJournal,
-					});
-				} catch {
-					throw new Error(
-						"Journal intent may already be durable; post-write authority failed, so do not DELETE or reconsume",
-					);
-				}
 			},
 		},
 		toJSON: {
@@ -1470,14 +1499,7 @@ function bindAuthorityCapture(value) {
 function bindFinalEpoch(value) {
 	assertHiddenCapability(
 		value,
-		[
-			"now",
-			"journalPath",
-			"validate",
-			"bindAuthority",
-			"armTransition",
-			"toJSON",
-		],
+		["now", "journalPath", "validate", "bindAuthority", "toJSON"],
 		"final adapter epoch",
 	);
 	const now = hiddenDataFunction(value, "now", "final adapter clock");
@@ -1491,17 +1513,11 @@ function bindFinalEpoch(value) {
 		"bindAuthority",
 		"captured authority binder",
 	);
-	const armTransition = hiddenDataFunction(
-		value,
-		"armTransition",
-		"captured transition boundary",
-	);
 	return Object.freeze({
 		now: () => now.call(value),
 		journalPath: hiddenDataValue(value, "journalPath", "final journal path"),
 		validate: () => validate.call(value),
 		bindAuthority: (input) => bindAuthority.call(value, input),
-		armTransition: (input) => armTransition.call(value, input),
 	});
 }
 
@@ -1540,14 +1556,7 @@ function bindTerminalCapability(value) {
 function bindSealedEpoch(value) {
 	assertHiddenCapability(
 		value,
-		[
-			"now",
-			"journalPath",
-			"validate",
-			"bindAuthority",
-			"armTransition",
-			"toJSON",
-		],
+		["now", "journalPath", "validate", "bindAuthority", "toJSON"],
 		"sealed adapter epoch",
 	);
 	const now = hiddenDataFunction(value, "now", "sealed adapter clock");
@@ -1561,17 +1570,11 @@ function bindSealedEpoch(value) {
 		"bindAuthority",
 		"captured authority binder",
 	);
-	const armTransition = hiddenDataFunction(
-		value,
-		"armTransition",
-		"captured transition boundary",
-	);
 	return Object.freeze({
 		now: () => now.call(value),
 		journalPath: hiddenDataValue(value, "journalPath", "sealed journal path"),
 		validate: () => validate.call(value),
 		bindAuthority: (input) => bindAuthority.call(value, input),
-		armTransition: (input) => armTransition.call(value, input),
 	});
 }
 

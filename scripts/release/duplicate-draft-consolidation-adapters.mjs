@@ -125,7 +125,6 @@ const WINDOWS_ENVIRONMENT_MARKERS = new Set([
 ]);
 const DELETE_WRITER_IDENTITIES = new WeakMap();
 const DELETE_PERMIT_BINDINGS = new WeakMap();
-const PRIVATE_IDENTITY_PROPERTY = "consolidationPrivateFileIdentity";
 
 export async function createDuplicateDraftConsolidationAdapters(options) {
 	const root = exactDataOptions(options, ROOT_OPTION_FIELDS, "Adapter options");
@@ -405,6 +404,11 @@ export function createExactDuplicateDeleteEffect(options) {
 			}
 
 			const observedAt = canonicalTimestamp(callClock(now));
+			if (observedAt > permitBinding.authorityExpiresAt) {
+				throw new Error(
+					"Delete permit expired at the writer's final pre-send clock",
+				);
+			}
 			const deadline = deleteDeadline(timeoutMs, callerSignal);
 			let response;
 			try {
@@ -663,10 +667,11 @@ function guardNetworkFacade(source, guard, label) {
 }
 
 function expectedAuthorityTrace(proposal, stage) {
-	const exact = (label, args, validate) => ({
+	const exact = (label, args, validate, validateArgs) => ({
 		label,
 		args: snapshotJson(args),
 		validate,
+		...(validateArgs === undefined ? {} : { validateArgs }),
 	});
 	const equals = (expected, label) => (actual) => {
 		if (!isDeepStrictEqual(actual, expected)) {
@@ -819,18 +824,31 @@ function appendExpectedPayloadTrace(
 							maximumBytes: asset.size,
 						},
 					],
-					(actual) => assertCapturedDownload(actual, asset),
+					(actual, session) => {
+						assertCapturedDownload(actual, asset);
+						if (!session.downloads.has(releaseId))
+							session.downloads.set(releaseId, new Map());
+						session.downloads
+							.get(releaseId)
+							.set(asset.name, Buffer.from(actual.contentBase64, "base64"));
+					},
 				),
 			);
 		}
 		if (stage === "pre-delete-1") {
 			steps.push(
-				exact("attestation verifier", null, (actual) => {
-					equals(
-						proposal.payloadProof.attestationVerification,
-						"Attestation capture",
-					)(actual);
-				}),
+				exact(
+					"attestation verifier",
+					null,
+					(actual) => {
+						equals(
+							proposal.payloadProof.attestationVerification,
+							"Attestation capture",
+						)(actual);
+					},
+					(args, session) =>
+						assertCapturedAttestationArgs(args, proposal, releaseId, session),
+				),
 			);
 		}
 	}
@@ -871,6 +889,69 @@ function assertCapturedDownload(actual, asset) {
 		createHash("sha256").update(bytes).digest("hex") !== asset.downloadSha256
 	) {
 		throw new Error("Release download capture differs from the proposal");
+	}
+}
+
+function assertCapturedAttestationArgs(args, proposal, releaseId, session) {
+	if (!Array.isArray(args) || args.length !== 1) {
+		throw new Error("Attestation capture arguments are missing or ambiguous");
+	}
+	const downloads = session.downloads.get(releaseId);
+	if (downloads === undefined) {
+		throw new Error("Attestation capture is missing guarded Release downloads");
+	}
+	const normalized = normalizeTraceValue(args[0]);
+	const subjects = proposal.payloadProof.attestationVerification.subjects;
+	const recordBytes = downloads.get("release-record.json");
+	if (recordBytes === undefined) {
+		throw new Error(
+			"Attestation capture is missing the guarded release record",
+		);
+	}
+	let record;
+	try {
+		record = JSON.parse(
+			new TextDecoder("utf-8", { fatal: true }).decode(recordBytes),
+		);
+	} catch {
+		throw new Error("Guarded release record is not canonical JSON");
+	}
+	const expectedFiles = subjects.map(({ name }) => {
+		const bytes = downloads.get(name);
+		if (bytes === undefined)
+			throw new Error("Attestation subject was not downloaded by the guard");
+		return { name, bytes: { bufferBase64: bytes.toString("base64") } };
+	});
+	const expectedBundles = subjects.map(({ name }) => {
+		const bundleName = `${name}.intoto.jsonl`;
+		const bytes = downloads.get(bundleName);
+		if (bytes === undefined)
+			throw new Error("Attestation bundle was not downloaded by the guard");
+		const expectedDigest = proposal.payloadProof.baseAssetSet.find(
+			(entry) => entry.name === bundleName,
+		)?.sha256;
+		if (
+			expectedDigest === undefined ||
+			createHash("sha256").update(bytes).digest("hex") !== expectedDigest
+		) {
+			throw new Error("Attestation bundle digest differs from the proposal");
+		}
+		return {
+			name: bundleName,
+			bytes: { bufferBase64: bytes.toString("base64") },
+		};
+	});
+	const expected = {
+		source: "escrow",
+		record,
+		subjects,
+		files: expectedFiles,
+		bundles: expectedBundles,
+	};
+	if (!isDeepStrictEqual(normalized, expected)) {
+		throw new Error(
+			"Attestation capture arguments differ from guarded proposal evidence",
+		);
 	}
 }
 
@@ -1161,7 +1242,15 @@ function createNetworkGuard({ cwd, now }) {
 		const terminalOwner =
 			state === "terminal" && terminal !== null && owner === terminal.token;
 		const deleteOwner = state === "deleting" && owner === terminal?.deleteToken;
-		if (state !== "open" && !captureOwner && !terminalOwner && !deleteOwner) {
+		const allowedDeleteRequest =
+			deleteOwner &&
+			(label === "approved DELETE" || label === "network transport");
+		if (
+			state !== "open" &&
+			!captureOwner &&
+			!terminalOwner &&
+			!allowedDeleteRequest
+		) {
 			invalidate();
 			throw new Error(`${label} rejected by the sealed network epoch`);
 		}
@@ -1186,12 +1275,20 @@ function createNetworkGuard({ cwd, now }) {
 					`${label} is out of order in the authority capture trace`,
 				);
 			}
+			if (expected.validateArgs !== undefined) {
+				expected.validateArgs(traceArgs, capture);
+			}
 			capture.inFlight = true;
 		}
 		sequence += 1;
 		activeRequests += 1;
 		try {
 			const result = await operation();
+			if (deleteOwner && terminal?.invalidated) {
+				throw new Error(
+					`${label} completed after a reentrant adapter invalidated DELETE`,
+				);
+			}
 			if (traced) {
 				if (capture.invalidated || state === "invalidated") {
 					throw new Error(
@@ -1243,12 +1340,6 @@ function createNetworkGuard({ cwd, now }) {
 			bindAuthority: hiddenMethod((input) =>
 				bindCapturedAuthority(session, input),
 			),
-			armTransition: hiddenMethod((input) => {
-				if (session !== terminal || guardFacade === undefined) {
-					throw new Error("Authority capture epoch is no longer current");
-				}
-				return guardFacade.armTask6Transition(input);
-			}),
 			toJSON: hiddenMethod(() => {
 				throw new TypeError(
 					"Adapter network epoch capability cannot be serialized",
@@ -1273,7 +1364,7 @@ function createNetworkGuard({ cwd, now }) {
 		}
 		const value = exactDataOptions(
 			input,
-			new Set(["authority", "proposal"]),
+			new Set(["authority", "proposal", "acceptTransitionBoundary"]),
 			"Captured authority binding",
 		);
 		const authority = snapshotJson(
@@ -1282,6 +1373,11 @@ function createNetworkGuard({ cwd, now }) {
 		const proposedEnvelope = createConsolidationEnvelope(
 			"proposed",
 			snapshotJson(required(value, "proposal", "Captured proposal")),
+		);
+		const acceptTransitionBoundary = requiredFunction(
+			value,
+			"acceptTransitionBoundary",
+			"Task6 transition boundary receiver",
 		);
 		if (
 			proposedEnvelope.recordSha256 !== capture.proposedEnvelope.recordSha256 ||
@@ -1304,6 +1400,14 @@ function createNetworkGuard({ cwd, now }) {
 			targetReadSha256: traceSha256(normalizeTraceValue(authority.targetRead)),
 			releaseEnumerationSha256,
 		});
+		const transitionBoundary = (input) => {
+			if (session !== terminal || guardFacade === undefined) {
+				throw new Error("Authority capture epoch is no longer current");
+			}
+			return guardFacade.armTask6Transition(input);
+		};
+		Object.freeze(transitionBoundary);
+		acceptTransitionBoundary(transitionBoundary);
 		return undefined;
 	};
 
@@ -1376,6 +1480,7 @@ function createNetworkGuard({ cwd, now }) {
 			entries: [],
 			clockReads: [],
 			keyResults: new Map(),
+			downloads: new Map(),
 			invalidated: false,
 			bound: null,
 		};
@@ -1618,7 +1723,9 @@ function createNetworkGuard({ cwd, now }) {
 						"proposedEnvelope",
 						"confirmation",
 						"predecessorJournal",
+						"predecessorHead",
 						"committedJournal",
+						"committedHead",
 					]),
 					"Task6 journal transition",
 				);
@@ -1640,8 +1747,37 @@ function createNetworkGuard({ cwd, now }) {
 					"committedJournal",
 					"Task6 committed journal",
 				);
-				assertAuthenticatedPrivateRead(predecessorJournal);
-				assertAuthenticatedPrivateRead(committedJournal);
+				const journalHeadPath = `${journalPath.slice(0, -"journal.json".length)}journal.head.json`;
+				const predecessorHead = required(
+					binding,
+					"predecessorHead",
+					"Task6 predecessor journal head",
+				);
+				const committedHead = required(
+					binding,
+					"committedHead",
+					"Task6 committed journal head",
+				);
+				const predecessorProvenance = authenticatedPrivateRead(
+					predecessorJournal,
+					journalPath,
+				);
+				const committedProvenance = authenticatedPrivateRead(
+					committedJournal,
+					journalPath,
+				);
+				authenticatedPrivateRead(predecessorHead, journalHeadPath);
+				authenticatedPrivateRead(committedHead, journalHeadPath);
+				if (
+					predecessorProvenance.identity.dev !==
+						committedProvenance.identity.dev ||
+					predecessorProvenance.identity.ino ===
+						committedProvenance.identity.ino
+				) {
+					throw new Error(
+						"Task6 journal transition did not replace one authenticated predecessor",
+					);
+				}
 				const predecessorEnvelope =
 					parseConsolidationJournal(predecessorJournal);
 				const committedEnvelope = parseConsolidationJournal(committedJournal);
@@ -1690,6 +1826,22 @@ function createNetworkGuard({ cwd, now }) {
 				) {
 					throw new Error(
 						"Task6 authority differs from the sealed guard-owned trace",
+					);
+				}
+				const expectedPredecessorHead = canonicalJournalHeadBytes(
+					journalPath,
+					predecessorEnvelope,
+				);
+				const expectedCommittedHead = canonicalJournalHeadBytes(
+					journalPath,
+					committedEnvelope,
+				);
+				if (
+					!predecessorHead.equals(expectedPredecessorHead) ||
+					!committedHead.equals(expectedCommittedHead)
+				) {
+					throw new Error(
+						"Task6 authenticated journal heads do not bind the legal append",
 					);
 				}
 				if (
@@ -1747,11 +1899,13 @@ function createNetworkGuard({ cwd, now }) {
 					targetReleaseId,
 					used: false,
 					committedJournal,
+					committedHead,
 					authorityExpiresAt,
 				});
 				DELETE_PERMIT_BINDINGS.set(permit, {
 					writerIdentity: boundWriterIdentity,
 					releaseId: targetReleaseId,
+					authorityExpiresAt,
 					armed: false,
 					used: false,
 				});
@@ -1802,10 +1956,30 @@ function createNetworkGuard({ cwd, now }) {
 					DUPLICATE_DRAFT_CONSOLIDATION_LIMITS.journalBytes,
 				);
 				if (
-					!sameAuthenticatedPrivateRead(currentJournal, record.committedJournal)
+					!sameAuthenticatedPrivateRead(
+						currentJournal,
+						record.committedJournal,
+						journalPath,
+					)
 				) {
 					throw new Error(
 						"Delete journal identity or bytes changed after permit issuance",
+					);
+				}
+				const journalHeadPath = `${journalPath.slice(0, -"journal.json".length)}journal.head.json`;
+				const currentHead = await readPrivateEnvelope(
+					journalHeadPath,
+					16 * 1024,
+				);
+				if (
+					!sameAuthenticatedPrivateRead(
+						currentHead,
+						record.committedHead,
+						journalHeadPath,
+					)
+				) {
+					throw new Error(
+						"Delete journal head identity or bytes changed after permit issuance",
 					);
 				}
 				const immediatelyBeforeSend = trustedNow();
@@ -1889,55 +2063,51 @@ function hiddenValue(value) {
 	return { value, enumerable: false, writable: false, configurable: false };
 }
 
-function assertAuthenticatedPrivateRead(value) {
-	if (!Buffer.isBuffer(value)) {
-		throw new TypeError("Committed journal must be a private no-follow read");
+function authenticatedPrivateRead(value, expectedPath) {
+	const authenticate = Object.getOwnPropertyDescriptor(
+		readPrivateEnvelope,
+		"authenticate",
+	)?.value;
+	if (typeof authenticate !== "function") {
+		throw new TypeError("Private no-follow read verifier is unavailable");
 	}
-	const descriptor = Object.getOwnPropertyDescriptor(
-		value,
-		PRIVATE_IDENTITY_PROPERTY,
-	);
-	if (
-		descriptor === undefined ||
-		descriptor.enumerable !== false ||
-		descriptor.writable !== false ||
-		descriptor.configurable !== false ||
-		!isFileIdentity(descriptor.value)
-	) {
-		throw new TypeError("Committed journal file identity is not authenticated");
-	}
+	return authenticate(value, expectedPath);
 }
 
-function sameAuthenticatedPrivateRead(actual, expected) {
-	assertAuthenticatedPrivateRead(actual);
-	assertAuthenticatedPrivateRead(expected);
-	const actualIdentity = Object.getOwnPropertyDescriptor(
+function sameAuthenticatedPrivateRead(actual, expected, expectedPath) {
+	const actualIdentity = authenticatedPrivateRead(
 		actual,
-		PRIVATE_IDENTITY_PROPERTY,
-	).value;
-	const expectedIdentity = Object.getOwnPropertyDescriptor(
+		expectedPath,
+	).identity;
+	const expectedIdentity = authenticatedPrivateRead(
 		expected,
-		PRIVATE_IDENTITY_PROPERTY,
-	).value;
+		expectedPath,
+	).identity;
 	return (
 		actual.equals(expected) &&
 		sameFileIdentity(actualIdentity, expectedIdentity)
 	);
 }
 
-function isFileIdentity(value) {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		["ctimeNs", "dev", "ino", "mtimeNs", "nlink", "size"].every(
-			(name) => typeof value[name] === "bigint",
-		)
-	);
-}
-
 function sameFileIdentity(left, right) {
 	return ["ctimeNs", "dev", "ino", "mtimeNs", "nlink", "size"].every(
 		(name) => left[name] === right[name],
+	);
+}
+
+function canonicalJournalHeadBytes(journalPath, journal) {
+	return Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			journalPath,
+			repository: journal.record.repository,
+			proposedRecordSha256: journal.record.proposedRecordSha256,
+			journalRecordSha256: journal.recordSha256,
+			lastEventSha256: journal.record.events.at(-1).eventSha256,
+			sequence: journal.record.events.length,
+			updatedAt: journal.record.updatedAt,
+		})}\n`,
+		"utf8",
 	);
 }
 
