@@ -249,7 +249,11 @@ numeric IDs, temporary tag names, draft metadata, bodies, and complete
 fourth marker-backed or exact-tag candidate, an unavailable read, or any
 mismatch.
 
-Run only from an isolated checkout of the merged recovery commit. Let
+Run only from a newly cloned, isolated checkout of the merged recovery commit.
+Do not reuse a worktree or clone that has ever contained `node_modules`; if any
+preexisting dependency tree is found in the checkout or its module-resolution
+ancestors, fail and create another isolated checkout rather than deleting or
+overwriting an unknown tree. Let
 `RECOVERY_SHA` be the 40-character lowercase merge SHA, not the pull-request
 branch head, a later `main`, or the candidate commit. Fetch `main`, then require
 local `HEAD`, `origin/main`, and `RECOVERY_SHA` to be identical. The `capture`
@@ -258,16 +262,41 @@ merged pull request targeting `main`, that `CI / validate` succeeded at its
 reviewed head, and that the merge commit tree equals the reviewed head tree.
 Do not continue if any identity or tree check differs.
 
-Before loading credentials, start one fresh zsh session and establish clean
-local execution authority. Replace the placeholder with the reviewed merged
-recovery commit. These checks prove that every tracked byte in the checkout,
-including the reachable recovery scripts and imports, equals that commit; they
-do not make a claim about untracked runtime dependencies.
+Before loading credentials, start one fresh zsh session, create the fresh clone
+and a fresh private pnpm store, and establish clean local execution authority.
+Replace the placeholder with the reviewed merged recovery commit. The install
+is lockfile-frozen, uses the exact `pnpm@10.33.0` declared by the reviewed root
+`package.json`, enables content-store integrity verification, and disables all
+dependency lifecycle scripts. Initial absence plus the uninterrupted install
+and post-install checks prove that the only ignored dependency trees used by
+this procedure were materialized from the reviewed lockfile during this
+session; they do not claim that a registry is trustworthy beyond the
+lockfile's integrity bindings. Never load the GitHub token before this block
+finishes.
 
 ```zsh
 set -euo pipefail
 umask 077
 unset NODE_OPTIONS NODE_PATH
+RECOVERY_PARENT="$(mktemp -d "${TMPDIR%/}/dawn-v0.8.22-recovery.XXXXXXXX")"
+RECOVERY_PARENT="${RECOVERY_PARENT:A}"
+chmod 0700 "$RECOVERY_PARENT"
+RECOVERY_CHECKOUT="$RECOVERY_PARENT/dawn"
+PNPM_STORE_DIR="$RECOVERY_PARENT/pnpm-store"
+test ! -e "$RECOVERY_CHECKOUT"
+test ! -e "$PNPM_STORE_DIR"
+git -c core.hooksPath=/dev/null clone https://github.com/cacheplane/dawnai.git "$RECOVERY_CHECKOUT"
+cd "$RECOVERY_CHECKOUT"
+test "$(pwd -P)" = "$RECOVERY_CHECKOUT"
+test -z "$(find . -name node_modules -prune -print -quit)"
+MODULE_ANCESTOR="${RECOVERY_CHECKOUT:h}"
+while [ "$MODULE_ANCESTOR" != / ]; do
+  test ! -e "$MODULE_ANCESTOR/node_modules"
+  test ! -L "$MODULE_ANCESTOR/node_modules"
+  MODULE_ANCESTOR="${MODULE_ANCESTOR:h}"
+done
+test ! -e /node_modules
+test ! -L /node_modules
 git fetch origin main --tags
 RECOVERY_SHA='<reviewed-merged-recovery-commit>'
 printf '%s\n' "$RECOVERY_SHA" | grep -Eq '^[0-9a-f]{40}$'
@@ -281,9 +310,43 @@ git diff --quiet --exit-code "$RECOVERY_SHA" --
 test -z "${NODE_OPTIONS-}"
 test -z "${NODE_PATH-}"
 PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
-export PATH RECOVERY_SHA
+export PATH RECOVERY_SHA RECOVERY_PARENT RECOVERY_CHECKOUT PNPM_STORE_DIR
 test "$(node --version)" = 'v24.19.0'
 test "$(pnpm --version)" = '10.33.0'
+test "$(node -p 'require("./package.json").packageManager')" = 'pnpm@10.33.0'
+test ! -e "$PNPM_STORE_DIR"
+install -d -m 0700 "$PNPM_STORE_DIR"
+pnpm install --frozen-lockfile --ignore-scripts --verify-store-integrity \
+  --store-dir "$PNPM_STORE_DIR"
+pnpm store status --store-dir "$PNPM_STORE_DIR"
+chmod 0700 "$PNPM_STORE_DIR"
+test -d node_modules
+MODULE_ANCESTOR="${RECOVERY_CHECKOUT:h}"
+while [ "$MODULE_ANCESTOR" != / ]; do
+  test ! -e "$MODULE_ANCESTOR/node_modules"
+  test ! -L "$MODULE_ANCESTOR/node_modules"
+  MODULE_ANCESTOR="${MODULE_ANCESTOR:h}"
+done
+test ! -e /node_modules
+test ! -L /node_modules
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
+git status --ignored --porcelain=v1 --untracked-files=all | node -e '
+  let input = ""
+  process.stdin.setEncoding("utf8")
+  process.stdin.on("data", (chunk) => { input += chunk })
+  process.stdin.on("end", () => {
+    const lines = input.split("\n").filter(Boolean)
+    if (lines.length === 0 || lines.some((line) => !/^!! (?:.+\/)?node_modules\/$/u.test(line))) {
+      throw new Error("Post-install ignored paths are not exclusively node_modules trees")
+    }
+  })
+'
+git diff --quiet --exit-code
+git diff --cached --quiet --exit-code
+git diff --quiet --exit-code "$RECOVERY_SHA" --
+test -z "$(git ls-files --others --exclude-standard)"
+test -z "${NODE_OPTIONS-}"
+test -z "${NODE_PATH-}"
 ```
 
 ### Establish the operator edit freeze and private directory
@@ -338,17 +401,21 @@ With the edit freeze active and all prerequisites still exact, run:
 ```zsh
 set -euo pipefail
 test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
-CAPTURE_01_STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+: "${ATTEMPT:=01}"
+printf '%s\n' "$ATTEMPT" | grep -Eq '^(0[1-9]|[1-9][0-9])$'
+typeset -gA CAPTURE_PATHS CAPTURE_STARTED_AT CAPTURE_FINISHED_AT CAPTURE_EXIT_CODES CAPTURE_SHA256S
+CAPTURE_PATHS[$ATTEMPT]=".dawn/release-recovery/v0.8.22-capture-$ATTEMPT.json"
+test ! -e "${CAPTURE_PATHS[$ATTEMPT]}"
+CAPTURE_STARTED_AT[$ATTEMPT]="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 if env -u NODE_OPTIONS -u NODE_PATH GITHUB_TOKEN="$GITHUB_TOKEN" \
   node scripts/release/recover-v0.8.22-duplicate-drafts.mjs capture \
   --reviewed-commit "$RECOVERY_SHA" \
-  --output .dawn/release-recovery/v0.8.22-capture-01.json; then
-  CAPTURE_01_EXIT_CODE=0
+  --output "${CAPTURE_PATHS[$ATTEMPT]}"; then
+  CAPTURE_EXIT_CODES[$ATTEMPT]=0
 else
-  CAPTURE_01_EXIT_CODE=$?
+  CAPTURE_EXIT_CODES[$ATTEMPT]=$?
 fi
-CAPTURE_01_FINISHED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-readonly CAPTURE_01_STARTED_AT CAPTURE_01_FINISHED_AT CAPTURE_01_EXIT_CODE
+CAPTURE_FINISHED_AT[$ATTEMPT]="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 ```
 
 Capture is read-only and writes one credential-free, canonical evidence file
@@ -357,14 +424,15 @@ JSON before apply:
 
 ```zsh
 set -euo pipefail
-test "$CAPTURE_01_EXIT_CODE" -eq 0
-shasum -a 256 .dawn/release-recovery/v0.8.22-capture-01.json
+test "${CAPTURE_EXIT_CODES[$ATTEMPT]}" -eq 0
+CAPTURE_SHA256S[$ATTEMPT]="$(shasum -a 256 "${CAPTURE_PATHS[$ATTEMPT]}" | awk '{print $1}')"
+printf '%s  %s\n' "${CAPTURE_SHA256S[$ATTEMPT]}" "${CAPTURE_PATHS[$ATTEMPT]}"
 env -u NODE_OPTIONS -u NODE_PATH node -e '
   const fs = require("node:fs")
   const path = process.argv[1]
   const value = JSON.parse(fs.readFileSync(path, "utf8"))
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
-' .dawn/release-recovery/v0.8.22-capture-01.json
+' "${CAPTURE_PATHS[$ATTEMPT]}"
 ```
 
 Require the repository/recovery/candidate identities, tag object and peel,
@@ -396,18 +464,25 @@ flag and a distinct unused output path:
 ```zsh
 set -euo pipefail
 test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
-APPLY_01_STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+printf '%s\n' "$ATTEMPT" | grep -Eq '^(0[1-9]|[1-9][0-9])$'
+typeset -gA APPLY_PATHS APPLY_STARTED_AT APPLY_FINISHED_AT APPLY_EXIT_CODES APPLY_SHA256S
+APPLY_PATHS[$ATTEMPT]=".dawn/release-recovery/v0.8.22-apply-$ATTEMPT.json"
+test ! -e "${APPLY_PATHS[$ATTEMPT]}"
+APPLY_STARTED_AT[$ATTEMPT]="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 if env -u NODE_OPTIONS -u NODE_PATH GITHUB_TOKEN="$GITHUB_TOKEN" \
   node scripts/release/recover-v0.8.22-duplicate-drafts.mjs apply \
-  --evidence .dawn/release-recovery/v0.8.22-capture-01.json \
+  --evidence "${CAPTURE_PATHS[$ATTEMPT]}" \
   --acknowledge-non-atomic-release-edit-freeze \
-  --output .dawn/release-recovery/v0.8.22-apply-01.json; then
-  APPLY_01_EXIT_CODE=0
+  --output "${APPLY_PATHS[$ATTEMPT]}"; then
+  APPLY_EXIT_CODES[$ATTEMPT]=0
 else
-  APPLY_01_EXIT_CODE=$?
+  APPLY_EXIT_CODES[$ATTEMPT]=$?
 fi
-APPLY_01_FINISHED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-readonly APPLY_01_STARTED_AT APPLY_01_FINISHED_AT APPLY_01_EXIT_CODE
+APPLY_FINISHED_AT[$ATTEMPT]="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+if [ "${APPLY_EXIT_CODES[$ATTEMPT]}" -eq 0 ]; then
+  APPLY_SHA256S[$ATTEMPT]="$(shasum -a 256 "${APPLY_PATHS[$ATTEMPT]}" | awk '{print $1}')"
+  SUCCESS_ATTEMPT="$ATTEMPT"
+fi
 ```
 
 The acknowledgement accepts no value, alias, reordered form, environment
@@ -434,6 +509,20 @@ authorization receipt may report a freshly verified
 invent an earlier invocation's pre/post fence observations. If fresh capture
 cannot classify the live state exactly, keep the workflow disabled and the
 edit freeze active, preserve all evidence, and escalate for review.
+
+For a deliberate second attempt, set the next number and paste the capture,
+inspection, and apply blocks above unchanged. This is the copy/paste-safe resume
+selector; it derives new paths and ledger values without reading or overwriting
+attempt `01`:
+
+```zsh
+ATTEMPT='02'
+printf '%s\n' "$ATTEMPT" | grep -Eq '^(0[1-9]|[1-9][0-9])$'
+test ! -e ".dawn/release-recovery/v0.8.22-capture-$ATTEMPT.json"
+test ! -e ".dawn/release-recovery/v0.8.22-apply-$ATTEMPT.json"
+# Paste the three unchanged capture/inspect/apply blocks; a successful apply
+# assigns SUCCESS_ATTEMPT="$ATTEMPT" for independent verification.
+```
 
 Maintain this append-only attempt ledger in the operator freeze record. Add a
 row immediately after every capture/apply pair, including failed or ambiguous
@@ -463,11 +552,23 @@ response and download private. It prints no headers, token, or signed URL.
 
 ```zsh
 set -euo pipefail
-test "$APPLY_01_EXIT_CODE" -eq 0
 test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
-CAPTURE_PATH='.dawn/release-recovery/v0.8.22-capture-01.json'
-APPLY_PATH='.dawn/release-recovery/v0.8.22-apply-01.json'
-VERIFY_DIR='.dawn/release-recovery/v0.8.22-verify-01'
+: "${SUCCESS_ATTEMPT:?set SUCCESS_ATTEMPT to the successful two-digit ledger attempt}"
+printf '%s\n' "$SUCCESS_ATTEMPT" | grep -Eq '^(0[1-9]|[1-9][0-9])$'
+test "${CAPTURE_EXIT_CODES[$SUCCESS_ATTEMPT]}" -eq 0
+test "${APPLY_EXIT_CODES[$SUCCESS_ATTEMPT]}" -eq 0
+CAPTURE_PATH="${CAPTURE_PATHS[$SUCCESS_ATTEMPT]}"
+APPLY_PATH="${APPLY_PATHS[$SUCCESS_ATTEMPT]}"
+VERIFY_DIR=".dawn/release-recovery/v0.8.22-verify-$SUCCESS_ATTEMPT"
+SUCCESS_LEDGER_ATTEMPT="$SUCCESS_ATTEMPT"
+test "$CAPTURE_PATH" = ".dawn/release-recovery/v0.8.22-capture-$SUCCESS_ATTEMPT.json"
+test "$APPLY_PATH" = ".dawn/release-recovery/v0.8.22-apply-$SUCCESS_ATTEMPT.json"
+test -n "${CAPTURE_STARTED_AT[$SUCCESS_LEDGER_ATTEMPT]}"
+test -n "${CAPTURE_FINISHED_AT[$SUCCESS_LEDGER_ATTEMPT]}"
+test -n "${APPLY_STARTED_AT[$SUCCESS_LEDGER_ATTEMPT]}"
+test -n "${APPLY_FINISHED_AT[$SUCCESS_LEDGER_ATTEMPT]}"
+test "$(shasum -a 256 "$CAPTURE_PATH" | awk '{print $1}')" = "${CAPTURE_SHA256S[$SUCCESS_LEDGER_ATTEMPT]}"
+test "$(shasum -a 256 "$APPLY_PATH" | awk '{print $1}')" = "${APPLY_SHA256S[$SUCCESS_LEDGER_ATTEMPT]}"
 test ! -e "$VERIFY_DIR"
 install -d -m 0700 "$VERIFY_DIR"
 chmod 0700 "$VERIFY_DIR"
@@ -568,7 +669,9 @@ receipt.
 
 ```zsh
 set -euo pipefail
+: "${GITHUB_TOKEN:?GITHUB_TOKEN must be nonempty for credential-leak verification}"
 VERIFY_DIR="$VERIFY_DIR" CAPTURE_PATH="$CAPTURE_PATH" APPLY_PATH="$APPLY_PATH" \
+  GITHUB_TOKEN="$GITHUB_TOKEN" \
   env -u NODE_OPTIONS -u NODE_PATH node --input-type=module \
   > "$VERIFY_DIR/independent-verification.json" <<'NODE'
 import { createHash } from "node:crypto"
@@ -577,10 +680,16 @@ import {
   canonicalDuplicateDraftEvidence,
   parseDuplicateDraftEvidence,
 } from "./scripts/release/duplicate-draft-recovery.mjs"
+import { parseReleaseMarker } from "./scripts/release/metadata.mjs"
 
 const verifyDir = process.env.VERIFY_DIR
 const evidenceBytes = readFileSync(process.env.CAPTURE_PATH)
 const receiptBytes = readFileSync(process.env.APPLY_PATH)
+const githubToken = process.env.GITHUB_TOKEN
+if (typeof githubToken !== "string" || githubToken.length === 0) {
+  throw new Error("GitHub token is unavailable for credential-leak verification")
+}
+const githubTokenBytes = Buffer.from(githubToken, "utf8")
 const sha256 = (value) => createHash("sha256").update(value).digest("hex")
 const canonicalize = (value) => Array.isArray(value)
   ? value.map(canonicalize)
@@ -634,7 +743,7 @@ exactKeys(receipt, ["schemaVersion", "atomic", "concurrencyAcknowledgement", "fr
 if (receipt.schemaVersion !== 1 || receipt.atomic !== false || receipt.evidenceCapturedAt !== evidence.capturedAt || !timestamp(receipt.appliedAt) || Date.parse(receipt.appliedAt) < Date.parse(receipt.evidenceCapturedAt)) {
   throw new Error("Final authorization receipt identity is not exact")
 }
-if (receiptBytes.includes(Buffer.from(process.env.GITHUB_TOKEN, "utf8"))) throw new Error("Final authorization receipt contains the configured credential")
+if (receiptBytes.includes(githubTokenBytes)) throw new Error("Final authorization receipt contains the configured credential")
 const expectedScope = [379982100, 379986168]
 exactKeys(receipt.concurrencyAcknowledgement, ["acknowledged", "atomic", "mode", "releaseIds"], "acknowledgement")
 exactKeys(receipt.freezeScope, ["mode", "releaseIds"], "freeze scope")
@@ -663,15 +772,41 @@ const expectedObserver = { state: "CANDIDATE_ESCROWED", disposition: "would-tran
 if (!same(receipt.finalAuthorization, expectedObserver)) throw new Error("Final observer result is not exact")
 
 const listed = arrayPages(`${verifyDir}/releases-pages.json`)
-for (const releaseId of [379991871, ...expectedScope]) {
+const listedIds = new Set()
+for (const release of listed) {
+  if (!Number.isSafeInteger(release?.id) || listedIds.has(release.id)) throw new Error("Complete Release pagination has an invalid or duplicate ID")
+  listedIds.add(release.id)
+}
+const expectedIds = [379991871, ...expectedScope]
+for (const releaseId of expectedIds) {
   if (listed.filter((release) => release?.id === releaseId).length !== 1) throw new Error(`Release ${releaseId} list identity is not unique`)
 }
+const controllerVisible = listed.filter((release) => {
+  if (release?.tag_name === "v0.8.22") return true
+  if (typeof release?.body !== "string" || !release.body.includes("DAWN_RELEASE_CONTROLLER_MARKER")) return false
+  try {
+    const marker = parseReleaseMarker(release.body)
+    return marker.version === "0.8.22" || marker.commitSha === "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8" || marker.tag === "v0.8.22"
+  } catch {
+    throw new Error(`Release ${release?.id ?? "unknown"} has a malformed candidate marker`)
+  }
+})
+if (controllerVisible.length !== 1 || controllerVisible[0].id !== 379991871) {
+  throw new Error("Complete Release inventory does not have exactly one canonical controller-visible candidate")
+}
+if (!same(parseReleaseMarker(controllerVisible[0].body), evidence.releases.canonical.marker)) {
+  throw new Error("The remaining controller-visible candidate marker is not canonical")
+}
 const findings = []
-for (const [index, releaseId] of [379991871, ...expectedScope].entries()) {
+for (const [index, releaseId] of expectedIds.entries()) {
   const release = parseJson(`${verifyDir}/release-${releaseId}.json`)
   const assets = arrayPages(`${verifyDir}/release-${releaseId}-assets-pages.json`)
   const expected = index === 0 ? evidence.releases.canonical : evidence.releases.duplicates[index - 1]
-  if (release.id !== releaseId || release.tag_name !== expected.tagName || release.draft !== true || release.prerelease !== false || release.immutable !== false || release.target_commitish !== "main") throw new Error(`Release ${releaseId} metadata is not exact`)
+  const listedRelease = listed.find((item) => item.id === releaseId)
+  for (const field of ["id", "tag_name", "name", "body", "target_commitish", "draft", "prerelease", "immutable"]) {
+    if (listedRelease[field] !== release[field]) throw new Error(`Release ${releaseId} list/numeric ${field} differs`)
+  }
+  if (release.id !== releaseId || release.tag_name !== expected.tagName || release.name !== "Dawn v0.8.22" || release.draft !== true || release.prerelease !== false || release.immutable !== false || release.target_commitish !== "main") throw new Error(`Release ${releaseId} mutable draft metadata is not exact`)
   if (index === 0) {
     if (release.body !== expected.body || assets.length !== 45) throw new Error("Canonical Release body or asset count changed")
   } else if (release.body !== expected.noticeBytes || release.body.includes("DAWN_RELEASE_CONTROLLER_MARKER") || assets.length !== 47) {
@@ -700,7 +835,7 @@ for (const [index, releaseId] of [379991871, ...expectedScope].entries()) {
       const downloaded = readFileSync(`${verifyDir}/release-${releaseId}-asset-${live.id}.bin`)
       requirePrivate(`${verifyDir}/release-${releaseId}-asset-${live.id}.bin`)
       if (downloaded.length !== live.size || sha256(downloaded) !== item.sha256 || !downloaded.equals(item.bytes)) throw new Error(`Release ${releaseId} recovery asset bytes changed`)
-      if (downloaded.includes(Buffer.from(process.env.GITHUB_TOKEN, "utf8"))) throw new Error(`Release ${releaseId} recovery asset contains the configured credential`)
+      if (downloaded.includes(githubTokenBytes)) throw new Error(`Release ${releaseId} recovery asset contains the configured credential`)
       if (item.name === expected.receiptAssetName) {
         const json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(downloaded))
         if (!canonicalBytes(json).equals(downloaded)) throw new Error(`Release ${releaseId} duplicate recovery receipt asset is not canonical`)
@@ -708,7 +843,7 @@ for (const [index, releaseId] of [379991871, ...expectedScope].entries()) {
       recoveryAssets.push({ id: live.id, name: live.name, size: live.size, sha256: item.sha256 })
     }
   }
-  findings.push({ releaseId, tagName: release.tag_name, draft: release.draft, bodySha256: sha256(Buffer.from(release.body, "utf8")), assetCount: assets.length, recoveryAssets })
+  findings.push({ releaseId, tagName: release.tag_name, name: release.name, targetCommitish: release.target_commitish, draft: release.draft, prerelease: release.prerelease, immutable: release.immutable, bodySha256: sha256(Buffer.from(release.body, "utf8")), assetCount: assets.length, recoveryAssets })
 }
 
 const runs = objectPages(`${verifyDir}/release-run-pages.json`, "workflow_runs")
@@ -746,10 +881,15 @@ shasum -a 256 "$CAPTURE_PATH" "$APPLY_PATH" "$VERIFY_DIR/independent-verificatio
 Require all of the following before releasing the edit freeze:
 
 - canonical Release `379991871` still has its exact original body, temporary
-  tag, mutable draft metadata, and original 45-member asset namespace;
+  tag, title `Dawn v0.8.22`, `target_commitish: main`, draft/prerelease/
+  immutable flags, and original 45-member asset namespace;
 - both duplicate Releases retain their exact opaque temporary tags and all 45
-  original assets, have the exact non-marker recovery notice, and have no
-  `v0.8.22` tag name;
+  original assets, exact title `Dawn v0.8.22`, target and draft flags, have the
+  exact non-marker recovery notice, and have no `v0.8.22` tag name;
+- the complete paginated Release inventory contains exactly one Release with
+  either the exact v0.8.22 controller marker identity or exact tag `v0.8.22`,
+  and it is canonical Release `379991871`; there is no fourth marker-backed or
+  exact-tag candidate;
 - each original-body archive downloads byte-for-byte to the canonical original
   body, and each duplicate recovery receipt asset is canonical with the
   recorded Release ID, asset ID, size, and SHA-256;
@@ -783,221 +923,259 @@ observer is exact, and the edit freeze is released may an owner enable
 `dawn-release-controller` concurrency group queues and never cancels. Activate
 only from `00:00` through `05:59` UTC, away from the 07:17 scheduled edge, and
 still prove no queued or in-progress controller exists immediately before and
-after enablement. If the post-enable read is unavailable, nonterminal, or has
-any run ID absent from the pre-enable snapshot, disable Release immediately and
-stop without dispatch.
+after enablement and again immediately before dispatch. Activation, all
+post-enable reads, dispatch, and durable receipt validation are one trapped
+operation below. Once enablement succeeds, every local error, normal exit, or
+`INT`, `TERM`, or `HUP` before a fully validated durable HTTP-200 receipt first
+attempts to disable Release and read back exact `disabled_manually`. A failed
+disable or failed read-back is a hard escalation: preserve every artifact and
+do not dispatch or retry.
 
 ```zsh
-set -euo pipefail
-test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
-UTC_HHMM="$(date -u '+%H%M')"
-case "$UTC_HHMM" in
-  0[0-5][0-9][0-9]) ;;
-  *) print -u2 'Release activation is outside the approved 00:00-05:59 UTC window'; exit 1 ;;
-esac
-ACTIVATION_DIR='.dawn/release-recovery/v0.8.22-activation-01'
-test ! -e "$ACTIVATION_DIR"
-install -d -m 0700 "$ACTIVATION_DIR"
-chmod 0700 "$ACTIVATION_DIR"
+run_v0822_activation_dispatch() (
+  set -euo pipefail
+  umask 077
+  : "${GITHUB_TOKEN:?GITHUB_TOKEN must be nonempty}"
+  case "$GITHUB_TOKEN" in
+    *$'\r'*|*$'\n'*) print -u2 'GITHUB_TOKEN contains a forbidden newline'; return 1 ;;
+  esac
+  test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
+  UTC_HHMM="$(date -u '+%H%M')"
+  case "$UTC_HHMM" in
+    0[0-5][0-9][0-9]) ;;
+    *) print -u2 'Release activation is outside the approved 00:00-05:59 UTC window'; return 1 ;;
+  esac
 
-disable_release_after_abort() {
-  set +e
-  GH_TOKEN="$GITHUB_TOKEN" gh api --silent --method PUT \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
-    'repos/cacheplane/dawnai/actions/workflows/260503756/disable'
-  DISABLE_EXIT_CODE=$?
+  ACTIVATION_DIR='.dawn/release-recovery/v0.8.22-activation-01'
+  test ! -e "$ACTIVATION_DIR"
+  install -d -m 0700 "$ACTIVATION_DIR"
+  chmod 0700 "$ACTIVATION_DIR"
+  ENABLE_MAY_BE_ACTIVE=false
+  DISPATCH_DURABLE=false
+
+  assert_workflow_state() {
+    WORKFLOW_PATH="$1" EXPECTED_STATE="$2" env -u NODE_OPTIONS -u NODE_PATH node -e '
+      const fs = require("node:fs")
+      const workflow = JSON.parse(fs.readFileSync(process.env.WORKFLOW_PATH, "utf8"))
+      if (workflow.id !== 260503756 || workflow.path !== ".github/workflows/release.yml" || workflow.state !== process.env.EXPECTED_STATE) throw new Error("Release workflow state is not exact")
+    '
+  }
+
+  assert_terminal_release_runs() {
+    RUNS_PATH="$1" env -u NODE_OPTIONS -u NODE_PATH node -e '
+      const fs = require("node:fs")
+      const pages = JSON.parse(fs.readFileSync(process.env.RUNS_PATH, "utf8"))
+      if (!Array.isArray(pages)) throw new Error("Release run pagination is malformed")
+      const runs = pages.flatMap((page) => {
+        if (!page || !Array.isArray(page.workflow_runs)) throw new Error("Release run page is malformed")
+        return page.workflow_runs
+      })
+      const ids = new Set()
+      for (const run of runs) {
+        if (!Number.isSafeInteger(run.id) || ids.has(run.id) || run.status !== "completed") throw new Error("Release run inventory is nonterminal or duplicated")
+        ids.add(run.id)
+      }
+    '
+  }
+
+  assert_same_release_run_ids() {
+    BASELINE_RUNS="$1" CURRENT_RUNS="$2" env -u NODE_OPTIONS -u NODE_PATH node -e '
+      const fs = require("node:fs")
+      const ids = (path) => new Set(JSON.parse(fs.readFileSync(path, "utf8")).flatMap((page) => page.workflow_runs).map((run) => run.id))
+      const baseline = ids(process.env.BASELINE_RUNS)
+      const current = ids(process.env.CURRENT_RUNS)
+      if (baseline.size !== current.size || [...current].some((id) => !baseline.has(id))) throw new Error("Release run inventory changed after enablement")
+    '
+  }
+
+  disable_release_after_abort() {
+    local disable_exit read_exit chmod_exit validate_exit
+    set +e
+    GH_TOKEN="$GITHUB_TOKEN" gh api --silent --method PUT \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      'repos/cacheplane/dawnai/actions/workflows/260503756/disable'
+    disable_exit=$?
+    GH_TOKEN="$GITHUB_TOKEN" gh api \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      'repos/cacheplane/dawnai/actions/workflows/260503756' \
+      > "$ACTIVATION_DIR/workflow-after-abort-disable.json"
+    read_exit=$?
+    chmod 0600 "$ACTIVATION_DIR/workflow-after-abort-disable.json" 2>/dev/null
+    chmod_exit=$?
+    assert_workflow_state "$ACTIVATION_DIR/workflow-after-abort-disable.json" disabled_manually
+    validate_exit=$?
+    set -e
+    if [ "$disable_exit" -ne 0 ] || [ "$read_exit" -ne 0 ] || [ "$chmod_exit" -ne 0 ] || [ "$validate_exit" -ne 0 ]; then
+      print -u2 'HARD ESCALATION: Release may still be active; preserve activation evidence and obtain an independent workflow-state read'
+      return 1
+    fi
+    print -u2 'Release disabled and independently read back as disabled_manually after aborted dispatch'
+  }
+
+  fail_safe_exit() {
+    local original_exit_code=$?
+    trap - EXIT INT TERM HUP
+    if [ "$ENABLE_MAY_BE_ACTIVE" = true ] && [ "$DISPATCH_DURABLE" != true ]; then
+      if ! disable_release_after_abort; then
+        original_exit_code=125
+      elif [ "$original_exit_code" -eq 0 ]; then
+        original_exit_code=1
+      fi
+    fi
+    exit "$original_exit_code"
+  }
+  trap 'fail_safe_exit' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  PRE_RUNS="$ACTIVATION_DIR/pre-enable-runs.json"
+  POST_RUNS="$ACTIVATION_DIR/post-enable-runs.json"
+  PRE_DISPATCH_RUNS="$ACTIVATION_DIR/pre-dispatch-runs.json"
   GH_TOKEN="$GITHUB_TOKEN" gh api \
     -H 'Accept: application/vnd.github+json' \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     'repos/cacheplane/dawnai/actions/workflows/260503756' \
-    > "$ACTIVATION_DIR/workflow-after-abort-disable.json"
-  DISABLE_READ_EXIT_CODE=$?
-  chmod 0600 "$ACTIVATION_DIR/workflow-after-abort-disable.json" 2>/dev/null
-  DISABLE_CHMOD_EXIT_CODE=$?
+    > "$ACTIVATION_DIR/workflow-before-enable.json"
+  chmod 0600 "$ACTIVATION_DIR/workflow-before-enable.json"
+  assert_workflow_state "$ACTIVATION_DIR/workflow-before-enable.json" disabled_manually
+  GH_TOKEN="$GITHUB_TOKEN" gh api --paginate --slurp \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    'repos/cacheplane/dawnai/actions/workflows/260503756/runs?per_page=100' \
+    > "$PRE_RUNS"
+  chmod 0600 "$PRE_RUNS"
+  assert_terminal_release_runs "$PRE_RUNS"
+
+  ENABLED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  ENABLE_MAY_BE_ACTIVE=true
+  GH_TOKEN="$GITHUB_TOKEN" gh api --silent --method PUT \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    'repos/cacheplane/dawnai/actions/workflows/260503756/enable'
+  GH_TOKEN="$GITHUB_TOKEN" gh api \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    'repos/cacheplane/dawnai/actions/workflows/260503756' \
+    > "$ACTIVATION_DIR/workflow-after-enable.json"
+  chmod 0600 "$ACTIVATION_DIR/workflow-after-enable.json"
+  assert_workflow_state "$ACTIVATION_DIR/workflow-after-enable.json" active
+  GH_TOKEN="$GITHUB_TOKEN" gh api --paginate --slurp \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    'repos/cacheplane/dawnai/actions/workflows/260503756/runs?per_page=100' \
+    > "$POST_RUNS"
+  chmod 0600 "$POST_RUNS"
+  assert_terminal_release_runs "$POST_RUNS"
+  assert_same_release_run_ids "$PRE_RUNS" "$POST_RUNS"
+  printf '%s\n' "$ENABLED_AT" > "$ACTIVATION_DIR/enabled-at.txt"
+  chmod 0600 "$ACTIVATION_DIR/enabled-at.txt"
+
+  DISPATCH_BODY="$ACTIVATION_DIR/v0.8.22-dispatch-body.json"
+  DISPATCH_RECEIPT="$ACTIVATION_DIR/v0.8.22-dispatch-receipt.json"
+  DISPATCH_STATUS="$ACTIVATION_DIR/v0.8.22-dispatch-http-status.txt"
+  DISPATCH_HASHES="$ACTIVATION_DIR/v0.8.22-dispatch-sha256.txt"
+  env -u NODE_OPTIONS -u NODE_PATH node -e '
+    const body = { ref: "v0.8.22", inputs: { version: "0.8.22", commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8", operation: "reconcile" } }
+    process.stdout.write(JSON.stringify(body))
+  ' > "$DISPATCH_BODY"
+  chmod 0600 "$DISPATCH_BODY"
+
+  test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
+  UTC_HHMM="$(date -u '+%H%M')"
+  case "$UTC_HHMM" in
+    0[0-5][0-9][0-9]) ;;
+    *) print -u2 'Release dispatch is outside the approved 00:00-05:59 UTC window'; return 1 ;;
+  esac
+  GH_TOKEN="$GITHUB_TOKEN" gh api --paginate --slurp \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    'repos/cacheplane/dawnai/actions/workflows/260503756/runs?per_page=100' \
+    > "$PRE_DISPATCH_RUNS"
+  chmod 0600 "$PRE_DISPATCH_RUNS"
+  assert_terminal_release_runs "$PRE_DISPATCH_RUNS"
+  assert_same_release_run_ids "$PRE_RUNS" "$PRE_DISPATCH_RUNS"
+
+  set +e
+  HTTP_STATUS="$(curl --silent --show-error \
+    --output "$DISPATCH_RECEIPT" \
+    --write-out '%{http_code}' \
+    --request POST \
+    --header @- \
+    'https://api.github.com/repos/cacheplane/dawnai/actions/workflows/260503756/dispatches' \
+    --data-binary "@$DISPATCH_BODY" <<HEADERS
+Accept: application/vnd.github+json
+Authorization: Bearer $GITHUB_TOKEN
+X-GitHub-Api-Version: 2026-03-10
+HEADERS
+  )"
+  CURL_EXIT_CODE=$?
   set -e
-  if [ "$DISABLE_EXIT_CODE" -ne 0 ] || [ "$DISABLE_READ_EXIT_CODE" -ne 0 ] || [ "$DISABLE_CHMOD_EXIT_CODE" -ne 0 ]; then
-    return 1
-  fi
-}
+  printf '%s\n' "$HTTP_STATUS" > "$DISPATCH_STATUS"
+  chmod 0600 "$DISPATCH_STATUS"
+  test "$CURL_EXIT_CODE" -eq 0
+  test "$HTTP_STATUS" = 200
+  test -f "$DISPATCH_RECEIPT"
+  chmod 0600 "$DISPATCH_RECEIPT"
+  shasum -a 256 "$DISPATCH_BODY" "$DISPATCH_RECEIPT" "$DISPATCH_STATUS" > "$DISPATCH_HASHES"
+  chmod 0600 "$DISPATCH_HASHES"
 
-assert_terminal_release_runs() {
-  RUNS_PATH="$1" env -u NODE_OPTIONS -u NODE_PATH node -e '
-    const fs = require("node:fs")
-    const pages = JSON.parse(fs.readFileSync(process.env.RUNS_PATH, "utf8"))
-    if (!Array.isArray(pages)) throw new Error("Release run pagination is malformed")
-    const runs = pages.flatMap((page) => {
-      if (!page || !Array.isArray(page.workflow_runs)) throw new Error("Release run page is malformed")
-      return page.workflow_runs
-    })
-    const ids = new Set()
-    for (const run of runs) {
-      if (!Number.isSafeInteger(run.id) || ids.has(run.id) || run.status !== "completed") {
-        throw new Error("Release run inventory is nonterminal or duplicated")
+  DISPATCH_BODY="$DISPATCH_BODY" DISPATCH_RECEIPT="$DISPATCH_RECEIPT" \
+    DISPATCH_STATUS="$DISPATCH_STATUS" DISPATCH_HASHES="$DISPATCH_HASHES" \
+    GITHUB_TOKEN="$GITHUB_TOKEN" env -u NODE_OPTIONS -u NODE_PATH node -e '
+      const { createHash } = require("node:crypto")
+      const { closeSync, fsyncSync, openSync, readFileSync, statSync } = require("node:fs")
+      const { basename } = require("node:path")
+      const paths = [process.env.DISPATCH_BODY, process.env.DISPATCH_RECEIPT, process.env.DISPATCH_STATUS, process.env.DISPATCH_HASHES]
+      const token = process.env.GITHUB_TOKEN
+      if (typeof token !== "string" || token.length === 0) throw new Error("Dispatch token is unavailable for leak verification")
+      const tokenBytes = Buffer.from(token, "utf8")
+      const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex")
+      for (const path of paths) {
+        const stat = statSync(path)
+        if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) throw new Error(`${path} is not one mode-0600 regular file`)
+        if (readFileSync(path).includes(tokenBytes)) throw new Error(`${path} contains the GitHub token`)
       }
-      ids.add(run.id)
-    }
-  '
-}
+      const expectedBody = { ref: "v0.8.22", inputs: { version: "0.8.22", commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8", operation: "reconcile" } }
+      if (JSON.stringify(JSON.parse(readFileSync(process.env.DISPATCH_BODY, "utf8"))) !== JSON.stringify(expectedBody)) throw new Error("Workflow dispatch body is not exact")
+      if (readFileSync(process.env.DISPATCH_STATUS, "utf8") !== "200\n") throw new Error("Workflow dispatch status is not exact")
+      const receipt = JSON.parse(readFileSync(process.env.DISPATCH_RECEIPT, "utf8"))
+      const keys = Object.keys(receipt).sort().join(",")
+      if (keys !== ["workflow_run_id", "run_url", "html_url"].sort().join(",") || !Number.isSafeInteger(receipt.workflow_run_id) || receipt.workflow_run_id < 1) throw new Error("Workflow dispatch receipt is malformed")
+      const id = receipt.workflow_run_id
+      if (receipt.run_url !== `https://api.github.com/repos/cacheplane/dawnai/actions/runs/${id}` || receipt.html_url !== `https://github.com/cacheplane/dawnai/actions/runs/${id}`) throw new Error("Workflow dispatch receipt URLs are not exact")
+      const hashes = new Map(readFileSync(process.env.DISPATCH_HASHES, "utf8").trim().split("\n").map((line) => {
+        const match = /^([0-9a-f]{64})  (.+)$/u.exec(line)
+        if (!match) throw new Error("Dispatch hash record is malformed")
+        return [basename(match[2]), match[1]]
+      }))
+      for (const path of paths.slice(0, 3)) {
+        if (hashes.get(basename(path)) !== sha256(readFileSync(path))) throw new Error(`${path} hash is not exact`)
+      }
+      for (const path of paths) {
+        const fd = openSync(path, "r")
+        try { fsyncSync(fd) } finally { closeSync(fd) }
+      }
+    '
+  sync
+  DISPATCH_DURABLE=true
+  trap - EXIT INT TERM HUP
+  shasum -a 256 "$DISPATCH_BODY" "$DISPATCH_RECEIPT" "$DISPATCH_STATUS" "$DISPATCH_HASHES"
+)
 
-PRE_RUNS="$ACTIVATION_DIR/pre-enable-runs.json"
-POST_RUNS="$ACTIVATION_DIR/post-enable-runs.json"
-GH_TOKEN="$GITHUB_TOKEN" gh api \
-  -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2022-11-28' \
-  'repos/cacheplane/dawnai/actions/workflows/260503756' \
-  > "$ACTIVATION_DIR/workflow-before-enable.json"
-chmod 0600 "$ACTIVATION_DIR/workflow-before-enable.json"
-WORKFLOW_PATH="$ACTIVATION_DIR/workflow-before-enable.json" \
-  env -u NODE_OPTIONS -u NODE_PATH node -e '
-    const fs = require("node:fs")
-    const workflow = JSON.parse(fs.readFileSync(process.env.WORKFLOW_PATH, "utf8"))
-    if (workflow.id !== 260503756 || workflow.path !== ".github/workflows/release.yml" || workflow.state !== "disabled_manually") throw new Error("Release workflow is not disabled")
-  '
-GH_TOKEN="$GITHUB_TOKEN" gh api --paginate --slurp \
-  -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2022-11-28' \
-  'repos/cacheplane/dawnai/actions/workflows/260503756/runs?per_page=100' \
-  > "$PRE_RUNS"
-chmod 0600 "$PRE_RUNS"
-assert_terminal_release_runs "$PRE_RUNS"
-
-ENABLED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-ENABLE_OK=true
-if ! GH_TOKEN="$GITHUB_TOKEN" gh api --silent --method PUT \
-  -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2022-11-28' \
-  'repos/cacheplane/dawnai/actions/workflows/260503756/enable'; then
-  ENABLE_OK=false
-fi
-if [ "$ENABLE_OK" != true ]; then
-  disable_release_after_abort
-  exit 1
-fi
-
-ACTIVE_OK=true
-if ! GH_TOKEN="$GITHUB_TOKEN" gh api \
-  -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2022-11-28' \
-  'repos/cacheplane/dawnai/actions/workflows/260503756' \
-  > "$ACTIVATION_DIR/workflow-after-enable.json"; then
-  ACTIVE_OK=false
-fi
-if [ "$ACTIVE_OK" = true ] && ! chmod 0600 "$ACTIVATION_DIR/workflow-after-enable.json"; then
-  ACTIVE_OK=false
-fi
-if [ "$ACTIVE_OK" = true ] && ! WORKFLOW_PATH="$ACTIVATION_DIR/workflow-after-enable.json" \
-  env -u NODE_OPTIONS -u NODE_PATH node -e '
-    const fs = require("node:fs")
-    const workflow = JSON.parse(fs.readFileSync(process.env.WORKFLOW_PATH, "utf8"))
-    if (workflow.id !== 260503756 || workflow.path !== ".github/workflows/release.yml" || workflow.state !== "active") throw new Error("Release workflow did not become active")
-  '; then
-  ACTIVE_OK=false
-fi
-
-POST_OK=true
-if ! GH_TOKEN="$GITHUB_TOKEN" gh api --paginate --slurp \
-  -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2022-11-28' \
-  'repos/cacheplane/dawnai/actions/workflows/260503756/runs?per_page=100' \
-  > "$POST_RUNS"; then
-  POST_OK=false
-fi
-if [ -e "$POST_RUNS" ] && ! chmod 0600 "$POST_RUNS"; then
-  POST_OK=false
-elif [ ! -e "$POST_RUNS" ]; then
-  POST_OK=false
-fi
-if [ "$POST_OK" = true ] && ! assert_terminal_release_runs "$POST_RUNS"; then
-  POST_OK=false
-fi
-if [ "$POST_OK" = true ] && ! PRE_RUNS="$PRE_RUNS" POST_RUNS="$POST_RUNS" \
-  env -u NODE_OPTIONS -u NODE_PATH node -e '
-    const fs = require("node:fs")
-    const ids = (path) => new Set(JSON.parse(fs.readFileSync(path, "utf8")).flatMap((page) => page.workflow_runs).map((run) => run.id))
-    const before = ids(process.env.PRE_RUNS)
-    const after = ids(process.env.POST_RUNS)
-    if ([...after].some((id) => !before.has(id))) throw new Error("A new Release workflow run appeared during enablement")
-  '; then
-  POST_OK=false
-fi
-
-if [ "$ACTIVE_OK" != true ] || [ "$POST_OK" != true ]; then
-  disable_release_after_abort
-  exit 1
-fi
-printf '%s\n' "$ENABLED_AT" > "$ACTIVATION_DIR/enabled-at.txt"
-chmod 0600 "$ACTIVATION_DIR/enabled-at.txt"
+run_v0822_activation_dispatch
 ```
 
-The repository's pinned GitHub writer requires the 2026 API's direct HTTP 200
-dispatch receipt. Do not use `gh workflow run`, because it does not durably
-bind the returned run. Dispatch the exact tag and inputs with the same token,
-preserve the response with mode `0600`, and validate the returned
-`workflow_run_id`, `run_url`, and `html_url` directly. A transport failure,
-non-200 status, or malformed receipt is ambiguous: disable Release, preserve
-the artifacts, and stop without retrying or listing recent runs.
-
-```zsh
-set -euo pipefail
-test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
-UTC_HHMM="$(date -u '+%H%M')"
-case "$UTC_HHMM" in
-  0[0-5][0-9][0-9]) ;;
-  *) print -u2 'Release dispatch is outside the approved 00:00-05:59 UTC window'; disable_release_after_abort; exit 1 ;;
-esac
-DISPATCH_BODY="$ACTIVATION_DIR/v0.8.22-dispatch-body.json"
-DISPATCH_RECEIPT="$ACTIVATION_DIR/v0.8.22-dispatch-receipt.json"
-DISPATCH_STATUS="$ACTIVATION_DIR/v0.8.22-dispatch-http-status.txt"
-env -u NODE_OPTIONS -u NODE_PATH node -e '
-  const body = { ref: "v0.8.22", inputs: { version: "0.8.22", commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8", operation: "reconcile" } }
-  process.stdout.write(JSON.stringify(body))
-' > "$DISPATCH_BODY"
-chmod 0600 "$DISPATCH_BODY"
-
-set +e
-HTTP_STATUS="$(curl --silent --show-error \
-  --output "$DISPATCH_RECEIPT" \
-  --write-out '%{http_code}' \
-  --request POST \
-  --header 'Accept: application/vnd.github+json' \
-  --header "Authorization: Bearer $GITHUB_TOKEN" \
-  --header 'X-GitHub-Api-Version: 2026-03-10' \
-  'https://api.github.com/repos/cacheplane/dawnai/actions/workflows/260503756/dispatches' \
-  --data-binary "@$DISPATCH_BODY")"
-CURL_EXIT_CODE=$?
-set -e
-printf '%s\n' "$HTTP_STATUS" > "$DISPATCH_STATUS"
-chmod 0600 "$DISPATCH_STATUS"
-
-DISPATCH_OK=true
-if [ "$CURL_EXIT_CODE" -ne 0 ] || [ "$HTTP_STATUS" != 200 ]; then
-  DISPATCH_OK=false
-fi
-if [ -e "$DISPATCH_RECEIPT" ]; then
-  if ! chmod 0600 "$DISPATCH_RECEIPT"; then
-    DISPATCH_OK=false
-  fi
-else
-  DISPATCH_OK=false
-fi
-if [ "$DISPATCH_OK" = true ] && ! DISPATCH_RECEIPT="$DISPATCH_RECEIPT" env -u NODE_OPTIONS -u NODE_PATH node -e '
-  const fs = require("node:fs")
-  const receipt = JSON.parse(fs.readFileSync(process.env.DISPATCH_RECEIPT, "utf8"))
-  const keys = Object.keys(receipt).sort().join(",")
-  if (keys !== ["workflow_run_id", "run_url", "html_url"].sort().join(",") || !Number.isSafeInteger(receipt.workflow_run_id) || receipt.workflow_run_id < 1) throw new Error("Workflow dispatch receipt is malformed")
-  const id = receipt.workflow_run_id
-  if (receipt.run_url !== `https://api.github.com/repos/cacheplane/dawnai/actions/runs/${id}` || receipt.html_url !== `https://github.com/cacheplane/dawnai/actions/runs/${id}`) throw new Error("Workflow dispatch receipt URLs are not exact")
-'; then
-  DISPATCH_OK=false
-fi
-
-if [ "$DISPATCH_OK" != true ]; then
-  disable_release_after_abort
-  exit 1
-fi
-shasum -a 256 "$DISPATCH_BODY" "$DISPATCH_RECEIPT" "$DISPATCH_STATUS"
-```
+The repository's pinned GitHub writer requires this 2026 API direct HTTP-200
+receipt. Do not use `gh workflow run`, because it does not durably bind the
+returned run. The Authorization header above is read by `curl` from standard
+input and never appears in its argument vector or a dispatch artifact. Any
+transport failure, non-200 status, malformed receipt, chmod/hash/fsync failure,
+identity drift, time-window failure, or new run is ambiguous after enablement;
+the armed trap disables and verifies before returning failure. Never retry or
+list recent runs to infer a dispatch.
 
 Record the direct dispatch receipt and run identity. Do not cancel, generically
 rerun, list recent runs to infer a dispatch, or substitute `main`. Require
@@ -1239,6 +1417,7 @@ fence observations for a `preexisting-quarantined` outcome.
 | Receipt | Value |
 | --- | --- |
 | Recovery PR number / reviewed head SHA / merge SHA | pending |
+| Fresh checkout path / reviewed `packageManager` / pnpm version / lockfile-frozen no-lifecycle install / fresh store integrity result | pending |
 | Operator freeze record: authenticated operator | pending |
 | Operator freeze record: established UTC | pending |
 | Operator freeze record: released UTC | pending |
@@ -1260,8 +1439,8 @@ fence observations for a `preexisting-quarantined` outcome.
 | Final authorization receipt path / SHA-256 | pending |
 | Final authorization receipt per-duplicate `performed` or `preexisting-quarantined` outcomes | pending |
 | Final observer `CANDIDATE_ESCROWED` / `would-transition` / `publish-npm-packages` / Release `379991871` / `conflicts: []` / `diagnostics: []` | pending |
-| Release activation UTC / pre-post run snapshot SHA-256 / no-new-run proof | pending |
-| Direct v0.8.22 dispatch HTTP 200 receipt SHA-256 / `workflow_run_id` / `run_url` / `html_url` | pending |
+| Release activation UTC / pre-enable, post-enable, and immediately-pre-dispatch run snapshot SHA-256 / exact no-new-run proofs | pending |
+| Direct v0.8.22 dispatch HTTP 200 receipt SHA-256 / durable hash record / `workflow_run_id` / `run_url` / `html_url` | pending |
 | v0.8.22 Release run/attempt | pending |
 | v0.8.22 npm integrity/provenance conclusions | pending |
 | v0.8.22 immutable Release ID and re-read | pending (`379991871`) |
