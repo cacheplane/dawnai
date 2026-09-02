@@ -9,6 +9,7 @@ import {
   captureDuplicateDraftRecoveryEvidence,
   classifyDuplicateDraft,
   DUPLICATE_DRAFT_RECOVERY_POLICY,
+  MAX_ARCHIVE_ASSET_BYTES,
   originalBodyAssetName,
   parseDuplicateDraftEvidence,
   recoveryReceiptAssetName,
@@ -841,6 +842,20 @@ test("apply converges every resumable state in ID order with fresh authorization
     const harness = createApplyHarness({ states })
     const receipt = await runApply(harness)
     assert.deepEqual(harness.liveStates, ["quarantined", "quarantined"])
+    if (states.every((state) => state === "quarantined")) {
+      // Byte-identical replay is a no-op: no writer is constructed and no
+      // mutation is issued, and every duplicate is reported as preexisting.
+      assert.equal(harness.writerConstructions, 0)
+      assert.equal(harness.mutationCount, 0)
+      assert.deepEqual(
+        receipt.duplicates.map(({ outcome }) => outcome),
+        ["preexisting-quarantined", "preexisting-quarantined"],
+      )
+      assert.deepEqual(
+        receipt.duplicates.map(({ priorFenceObservations }) => priorFenceObservations),
+        [null, null],
+      )
+    }
     assert.equal(receipt.atomic, false)
     assert.deepEqual(receipt.concurrencyAcknowledgement, concurrencyAcknowledgement())
     assert.equal(Object.isFrozen(receipt), true)
@@ -1444,6 +1459,7 @@ function recoveryObservation({
 
 function captureReader({
   states = ["untouched", "untouched"],
+  canonicalBody = null,
   candidateRuns = [
     {
       id: 700,
@@ -1510,7 +1526,11 @@ function captureReader({
     },
     async readReleaseSnapshot(releaseId, options) {
       calls.push(["readReleaseSnapshot", releaseId, options])
-      if (releaseId === POLICY.canonicalReleaseId) return observation.releases.canonical
+      if (releaseId === POLICY.canonicalReleaseId) {
+        return canonicalBody === null
+          ? observation.releases.canonical
+          : { ...observation.releases.canonical, body: canonicalBody }
+      }
       return observation.releases.duplicates.find((release) => release.releaseId === releaseId)
     },
     async listCandidateReleases() {
@@ -1571,6 +1591,20 @@ test("captures canonical frozen evidence through only the read boundary", async 
       false,
     )
   }
+})
+
+test("capture rejects a canonical body larger than the recovery archive asset limit", async () => {
+  // The canonical body becomes each duplicate's archive asset, so an oversized
+  // body must fail at capture rather than part-way through a frozen window.
+  const { reader } = captureReader({ canonicalBody: "x".repeat(MAX_ARCHIVE_ASSET_BYTES + 1) })
+  await assert.rejects(
+    captureDuplicateDraftRecoveryEvidence({
+      reviewedCommit: MERGE_COMMIT_SHA,
+      reader: Object.freeze({ ...reader }),
+      now: () => Date.parse(RECOVERY_CAPTURED_AT),
+    }),
+    (error) => error.code === "CANONICAL_BODY_OVER_ARCHIVE_LIMIT",
+  )
 })
 
 test("capture rejects canonical and partial duplicate title drift", async () => {

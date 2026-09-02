@@ -168,6 +168,35 @@ test("capture constructs production dependencies only after validation and durab
   assert.deepEqual(await temporaryFiles(root), [])
 })
 
+test("capture refuses to write evidence containing the GitHub credential", async (t) => {
+  // Capture evidence carries the canonical Release body verbatim, so the
+  // credential-free guarantee is enforced on the exact bytes about to be
+  // published rather than left to the read path's scrubbing.
+  const root = await createPrivateRepository(t)
+  const stdout = sink()
+  const stderr = sink()
+  const result = await runDuplicateDraftRecoveryCli({
+    argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
+    cwd: root,
+    environment: { GITHUB_TOKEN: "capture-token" },
+    stdout,
+    stderr,
+    dependencies: {
+      randomUUID: () => UUID,
+      createDuplicateDraftRecoveryReader: () => Object.freeze({ kind: "reader" }),
+      captureDuplicateDraftRecoveryEvidence: async () =>
+        Object.freeze({ schemaVersion: 1, capturedAt: "now" }),
+      canonicalDuplicateDraftEvidence: () =>
+        Buffer.from('{"body":"leaked capture-token","schemaVersion":1}\n', "utf8"),
+    },
+  })
+
+  assert.notEqual(result, 0)
+  assert.equal(stdout.text, "")
+  await assert.rejects(readFile(path.join(root, CAPTURE_PATH)))
+  assert.deepEqual(await temporaryFiles(root), [])
+})
+
 test("apply parses canonical evidence before constructing dependencies and passes the exact frozen acknowledgement", async (t) => {
   const root = await createPrivateRepository(t)
   const evidenceBytes = Buffer.from('{"schemaVersion":1}\n', "utf8")
@@ -803,15 +832,13 @@ test("production recovery observer derives the canonical numeric Release ID from
     conflicts: [],
     diagnostics: [],
   }
-  const observer = recoveryCliModule.createProductionRecoveryObserver(
-    productionObserverInput(reader),
-    {
-      normalObserver: async (input) => {
-        calls.push(["normal", input])
-        return normalResult
-      },
+  const observer = recoveryCliModule.createProductionRecoveryObserver({
+    ...productionObserverInput(reader),
+    createNormalObserver: () => async (input) => {
+      calls.push(["normal", input])
+      return normalResult
     },
-  )
+  })
 
   assert.deepEqual(
     await observer({
@@ -836,21 +863,19 @@ test("production recovery observer rejects an alternate sole Release ID and a fo
   })
   for (const inventory of [[alternate], [...observerInventory(), alternate]]) {
     let normalCalls = 0
-    const observer = recoveryCliModule.createProductionRecoveryObserver(
-      productionObserverInput(productionObserverReader({ inventories: [inventory] })),
-      {
-        normalObserver: async () => {
-          normalCalls += 1
-          return {
-            state: "CANDIDATE_ESCROWED",
-            disposition: "would-transition",
-            nextTransition: "publish-npm-packages",
-            conflicts: [],
-            diagnostics: [],
-          }
-        },
+    const observer = recoveryCliModule.createProductionRecoveryObserver({
+      ...productionObserverInput(productionObserverReader({ inventories: [inventory] })),
+      createNormalObserver: () => async () => {
+        normalCalls += 1
+        return {
+          state: "CANDIDATE_ESCROWED",
+          disposition: "would-transition",
+          nextTransition: "publish-npm-packages",
+          conflicts: [],
+          diagnostics: [],
+        }
       },
-    )
+    })
     await assert.rejects(
       observer({
         candidate: {
@@ -864,6 +889,27 @@ test("production recovery observer rejects an alternate sole Release ID and a fo
   }
 })
 
+test("production recovery observer wires the real normal controller observer by default", async () => {
+  // Guards the gate that runs AFTER both duplicates are already quarantined: a
+  // wiring error here would surface at the worst possible moment. Proves the real
+  // factory composes createGitReader/createGitHubReader/createNpmReader/
+  // createProductionInventoryReader/createCliAttestationVerifier for real, and
+  // that createProductionRecoveryObserver reaches it when no seam is supplied.
+  assert.equal(typeof recoveryCliModule.createNormalProductionRecoveryObserver, "function")
+  const normal = recoveryCliModule.createNormalProductionRecoveryObserver({
+    root: "/workspace",
+    token: "test-token",
+    fileSystem: {},
+    runGit: async () => "",
+  })
+  assert.equal(typeof normal, "function")
+
+  const observer = recoveryCliModule.createProductionRecoveryObserver(
+    productionObserverInput(productionObserverReader({ calls: [] })),
+  )
+  assert.equal(typeof observer, "function")
+})
+
 test("production recovery observer rejects bracket drift around normal classification", async () => {
   assert.equal(typeof recoveryCliModule.createProductionRecoveryObserver, "function")
   const after = observerCanonicalSnapshot()
@@ -873,18 +919,16 @@ test("production recovery observer rejects bracket drift around normal classific
   const reader = productionObserverReader({
     snapshots: [observerCanonicalSnapshot(), after],
   })
-  const observer = recoveryCliModule.createProductionRecoveryObserver(
-    productionObserverInput(reader),
-    {
-      normalObserver: async () => ({
-        state: "CANDIDATE_ESCROWED",
-        disposition: "would-transition",
-        nextTransition: "publish-npm-packages",
-        conflicts: [],
-        diagnostics: [],
-      }),
-    },
-  )
+  const observer = recoveryCliModule.createProductionRecoveryObserver({
+    ...productionObserverInput(reader),
+    createNormalObserver: () => async () => ({
+      state: "CANDIDATE_ESCROWED",
+      disposition: "would-transition",
+      nextTransition: "publish-npm-packages",
+      conflicts: [],
+      diagnostics: [],
+    }),
+  })
 
   await assert.rejects(
     observer({

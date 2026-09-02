@@ -1512,6 +1512,7 @@ test("reviewed authority rejects ambiguity, later main, unmerged PRs, tree drift
       { pulls: [{ ...reviewedPull(), base: { ...reviewedPull().base, ref: "dev" } }] },
     ],
     ["later main", { mainSha: "e".repeat(40) }],
+    ["local HEAD drift", { localHead: "f".repeat(40) }],
     ["unequal trees", { headTree: "e".repeat(40) }],
     ["failed validate", { checkConclusion: "failure" }],
     [
@@ -2405,11 +2406,12 @@ function reviewedReader({
   checkConclusion = "success",
   duplicateCheckId = false,
   duplicateCiRunId = false,
+  localHead = REVIEWED_COMMIT,
 } = {}) {
   return createDuplicateDraftRecoveryReader({
     root: "/workspace",
     token: "secret-token",
-    run: async () => `${REVIEWED_COMMIT}\n`,
+    run: async () => `${localHead}\n`,
     fetchImpl: async (url) => {
       if (url === BASE) return repositoryResponse()
       if (url === `${BASE}/git/ref/heads%2Fmain`) return jsonResponse(mainRef(mainSha))

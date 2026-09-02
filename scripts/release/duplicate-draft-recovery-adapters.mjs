@@ -14,6 +14,7 @@ import {
   canonicalRecoveryReceipt,
   DUPLICATE_DRAFT_RECOVERY_POLICY,
   duplicateDraftReleaseProjectionSha256,
+  MAX_ARCHIVE_ASSET_BYTES,
   normalizeDuplicateDraftReleaseProjection,
   originalBodyAssetName,
   recoveryReceiptAssetName,
@@ -36,7 +37,7 @@ const CANDIDATE_RELEASE_IDS = new Set([
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const MAX_PAGES = 100
 const MAX_RECORDS = 10_000
-const RECOVERY_ASSET_BYTES = 64 * 1024
+const RECOVERY_ASSET_BYTES = MAX_ARCHIVE_ASSET_BYTES
 const WRITER_MAX_TIMEOUT_MS = 300_000
 const WRITER_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 const WRITER_MAX_RESPONSE_CHUNKS = 1_024
@@ -55,6 +56,20 @@ const WRITER_RELEASE_ASSET_PATH_PATTERN =
 const WRITER_TITLE = `Dawn v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}`
 const DUPLICATE_TAG_BY_ID = new Map(
   DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.map(({ releaseId, tagName }) => [releaseId, tagName]),
+)
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+}
+const DUPLICATE_RELEASE_ID_ALTERNATION = DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates
+  .map(({ releaseId }) => String(releaseId))
+  .join("|")
+const WRITER_PATCH_URL_PATTERN = new RegExp(
+  `^${escapeRegExp(`${API_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/`)}(?:${DUPLICATE_RELEASE_ID_ALTERNATION})$`,
+  "u",
+)
+const WRITER_UPLOAD_URL_PATTERN = new RegExp(
+  `^${escapeRegExp(`${UPLOAD_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/`)}(?:${DUPLICATE_RELEASE_ID_ALTERNATION})/assets\\?name=[A-Za-z0-9._~%@+-]{1,512}$`,
+  "u",
 )
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype)
@@ -1502,11 +1517,11 @@ async function requestRecoveryJson(
   context,
   { url, method, body, bytes: suppliedBytes, contentType, maximumRequestBytes },
 ) {
-  const expectedApiUrl = `${API_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/`
-  const expectedUploadUrl = `${UPLOAD_ORIGIN}/repos/${OWNER}/${REPOSITORY}/releases/`
+  // Innermost guard: as narrow as the caller-side pin, so neither the canonical
+  // Release nor an asset endpoint is reachable even if a call site regresses.
   if (
     !["POST", "PATCH"].includes(method) ||
-    (method === "POST" ? !url.startsWith(expectedUploadUrl) : !url.startsWith(expectedApiUrl))
+    !(method === "POST" ? WRITER_UPLOAD_URL_PATTERN : WRITER_PATCH_URL_PATTERN).test(url)
   ) {
     throw new TypeError("Recovery writer URL or method is not allowed")
   }

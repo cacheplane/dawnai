@@ -249,6 +249,28 @@ numeric IDs, temporary tag names, draft metadata, bodies, and complete
 fourth marker-backed or exact-tag candidate, an unavailable read, or any
 mismatch.
 
+Pre-merge production reference (read-only, `2026-09-02`, recorded so the freeze
+window is not the first time these are checked; re-verify them live at capture
+time rather than trusting this table):
+
+| Fact | Observed |
+| --- | --- |
+| Annotated tag `v0.8.22` peels to | `2a80deece2ff958fe7fde8fddeb4f99bed70a1c8` |
+| Draft Releases identifying the candidate | exactly three; no fourth |
+| Release IDs / temporary tag names | exactly the policy values |
+| Body SHA-256 of all three drafts | `54924b7e963e593d3988d9ce1708bfbb2dfec46606cd4a47125987d24ad789f0` (both duplicates `untouched`) |
+| Base assets per draft | 45, mutable, not prerelease |
+| `.github/workflows/release.yml` | `disabled_manually`, no nonterminal runs |
+| Candidate runs | 5, all `completed`; each `publish-npm` job `completed`/`skipped`, one attempt each |
+| Published Release at `v0.8.22` | none |
+| npm | `latest` = `0.8.21`; `0.8.22` returns `E404` for all 21 packages |
+
+Trailing-newline round trip: the recovery notice ends with exactly one `\n`, and
+its byte-exact survival through `PATCH` is not an assumption. `canonicalReleaseBody`
+composes controller bodies that also end with exactly one `\n`, and the shipped
+`updateDraftReleaseIfCurrent` PATCHes such a body and then re-reads it under exact
+body equality. The escrow drafts' stored bodies carry that trailing newline today.
+
 Run only from a newly cloned, isolated checkout of the merged recovery commit.
 Do not reuse a worktree or clone that has ever contained `node_modules`; if any
 preexisting dependency tree is found in the checkout or its module-resolution
@@ -1436,6 +1458,7 @@ fence observations for a `preexisting-quarantined` outcome.
 | Release `379986168` original-body archive asset ID/SHA-256 | pending |
 | Release `379986168` duplicate recovery receipt asset ID/SHA-256 | pending |
 | Post-quarantine body SHA-256 for both duplicates | pending |
+| Evidence `capturedAt` used by the successful apply (must equal `receipt.evidenceCapturedAt`) | pending |
 | Final authorization receipt path / SHA-256 | pending |
 | Final authorization receipt per-duplicate `performed` or `preexisting-quarantined` outcomes | pending |
 | Final observer `CANDIDATE_ESCROWED` / `would-transition` / `publish-npm-packages` / Release `379991871` / `conflicts: []` / `diagnostics: []` | pending |

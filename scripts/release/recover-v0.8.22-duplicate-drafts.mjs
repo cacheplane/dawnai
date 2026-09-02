@@ -46,6 +46,7 @@ const DEPENDENCY_FIELDS = Object.freeze([
   "captureDuplicateDraftRecoveryEvidence",
   "createDuplicateDraftRecoveryReader",
   "createDuplicateDraftRecoveryWriter",
+  "createNormalProductionRecoveryObserver",
   "createProductionRecoveryObserver",
   "fileSystem",
   "parseDuplicateDraftEvidence",
@@ -127,6 +128,7 @@ export async function runDuplicateDraftRecoveryCli({
         reader,
       })
       const bytes = runtime.canonicalDuplicateDraftEvidence(evidence)
+      assertCredentialFreeEvidence(bytes, token)
       await assertPrivatePathBoundary(runtime.fileSystem, root, paths.output)
       await assertReviewedIgnorePolicy({
         fileSystem: runtime.fileSystem,
@@ -187,6 +189,7 @@ export async function runDuplicateDraftRecoveryCli({
       environment: runtime.environment,
       fileSystem: runtime.fileSystem,
       runGit: runtime.runGit,
+      createNormalObserver: runtime.createNormalProductionRecoveryObserver,
     })
     const receipt = await runtime.applyDuplicateDraftRecovery({
       evidence,
@@ -278,6 +281,10 @@ function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {
     createDuplicateDraftRecoveryWriter: dependency(
       "createDuplicateDraftRecoveryWriter",
       defaultCreateDuplicateDraftRecoveryWriter,
+    ),
+    createNormalProductionRecoveryObserver: dependency(
+      "createNormalProductionRecoveryObserver",
+      createNormalProductionRecoveryObserver,
     ),
     createProductionRecoveryObserver: dependency(
       "createProductionRecoveryObserver",
@@ -1111,6 +1118,20 @@ function assertDeepFrozenData(value, label, ancestors = new Set()) {
   ancestors.delete(value)
 }
 
+// Capture evidence legitimately carries the canonical Release body, which contains
+// GitHub URLs, so it cannot use the receipt's stricter transport rule. The design
+// still requires credential-free facts, so enforce that explicitly on the exact
+// bytes about to be published rather than relying on the read path's scrubbing.
+function assertCredentialFreeEvidence(bytes, token) {
+  if (!Buffer.isBuffer(bytes)) throw new Error("Recovery evidence bytes are invalid")
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error("Recovery GitHub credential is unavailable")
+  }
+  if (bytes.toString("utf8").includes(token)) {
+    throw new Error("Recovery evidence contains transport data")
+  }
+}
+
 function assertCredentialFreeReceipt(value, token) {
   if (typeof value === "string") {
     if (value.includes(token) || /https?:\/\//iu.test(value)) {
@@ -1157,10 +1178,15 @@ function concurrencyAcknowledgement() {
   })
 }
 
-export function createProductionRecoveryObserver(
-  { root, token, reader, environment, fileSystem, runGit },
-  testOverrides = undefined,
-) {
+export function createProductionRecoveryObserver({
+  root,
+  token,
+  reader,
+  environment,
+  fileSystem,
+  runGit,
+  createNormalObserver = createNormalProductionRecoveryObserver,
+}) {
   assertDuplicateDraftRecoveryReader(reader)
   // Retain the exact repository environment gate used by the normal release
   // observer without allowing it to supply credentials or candidate identity.
@@ -1168,10 +1194,13 @@ export function createProductionRecoveryObserver(
   if (repository !== undefined && repository !== "cacheplane/dawnai") {
     throw new TypeError("Recovery production repository is invalid")
   }
-  const overriddenObserver = normalizeProductionObserverTestOverride(testOverrides)
-  const normalObserver =
-    overriddenObserver ??
-    createNormalProductionRecoveryObserver({ root, token, fileSystem, runGit })
+  if (typeof createNormalObserver !== "function") {
+    throw new TypeError("Recovery normal observer factory is invalid")
+  }
+  const normalObserver = createNormalObserver({ root, token, fileSystem, runGit })
+  if (typeof normalObserver !== "function") {
+    throw new TypeError("Recovery normal observer is invalid")
+  }
   return async ({ candidate }) => {
     assertRecoveryObserverCandidate(candidate)
     const before = await readRecoveryObserverBinding(reader, candidate)
@@ -1196,7 +1225,7 @@ export function createProductionRecoveryObserver(
   }
 }
 
-function createNormalProductionRecoveryObserver({ root, token, fileSystem, runGit }) {
+export function createNormalProductionRecoveryObserver({ root, token, fileSystem, runGit }) {
   const git = createGitReader({ root, run: runGit })
   const github = createGitHubReader({
     owner: "cacheplane",
@@ -1238,28 +1267,6 @@ function createNormalProductionRecoveryObserver({ root, token, fileSystem, runGi
       diagnostics: observed.diagnostics,
     }
   }
-}
-
-function normalizeProductionObserverTestOverride(value) {
-  if (value === undefined) return null
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
-    !arraysEqual(Reflect.ownKeys(value), ["normalObserver"])
-  ) {
-    throw new TypeError("Recovery production observer override is invalid")
-  }
-  const descriptor = Object.getOwnPropertyDescriptor(value, "normalObserver")
-  if (
-    descriptor?.enumerable !== true ||
-    !("value" in descriptor) ||
-    typeof descriptor.value !== "function"
-  ) {
-    throw new TypeError("Recovery production observer override is invalid")
-  }
-  return descriptor.value
 }
 
 function assertRecoveryObserverCandidate(candidate) {

@@ -9,6 +9,10 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/u
 const ASSET_NAME_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$/u
 const MARKER_DELIMITER = "DAWN_RELEASE_CONTROLLER_MARKER"
+// Single source of truth for the recovery archive/receipt asset bound. The writer
+// enforces it on every upload; capture proves the canonical body fits before any
+// mutation is possible.
+export const MAX_ARCHIVE_ASSET_BYTES = 64 * 1024
 const MAX_NOTICE_BYTES = 16 * 1024
 const MAX_RECEIPT_BYTES = 64 * 1024
 const MAX_DUPLICATE_DRAFT_EVIDENCE_BYTES = 512 * 1024
@@ -338,6 +342,18 @@ export async function captureDuplicateDraftRecoveryEvidence({
     [DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId],
     "CANONICAL_RELEASE_UNAVAILABLE",
   )
+  // The canonical body becomes each duplicate's original-body archive asset, which
+  // the writer bounds at MAX_ARCHIVE_ASSET_BYTES. Prove that here so an oversized
+  // body fails at capture rather than part-way through a frozen production window.
+  if (
+    typeof canonical?.body === "string" &&
+    Buffer.byteLength(canonical.body, "utf8") > MAX_ARCHIVE_ASSET_BYTES
+  ) {
+    captureFail(
+      "CANONICAL_BODY_OVER_ARCHIVE_LIMIT",
+      "Canonical Release body exceeds the recovery archive asset limit",
+    )
+  }
   const duplicates = []
   for (const duplicate of DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates) {
     duplicates.push(
