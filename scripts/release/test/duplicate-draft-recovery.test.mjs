@@ -6,6 +6,7 @@ import {
   canonicalDuplicateDraftEvidence,
   canonicalRecoveryNotice,
   canonicalRecoveryReceipt,
+  captureDuplicateDraftRecoveryEvidence,
   classifyDuplicateDraft,
   DUPLICATE_DRAFT_RECOVERY_POLICY,
   originalBodyAssetName,
@@ -26,6 +27,7 @@ const POLICY = {
     { releaseId: 379986168, tagName: "untagged-20706099efa3c38335a8" },
   ],
 }
+const CANONICAL_OPAQUE_TAG = "untagged-be0ff4bee4ba43b521a9"
 
 const ORIGINAL_ASSETS = Array.from({ length: 45 }, (_, index) => ({
   id: 101 + index,
@@ -568,7 +570,7 @@ function recoveryObservation({
     releases: {
       canonical: {
         releaseId: POLICY.canonicalReleaseId,
-        tagName: `v${POLICY.version}`,
+        tagName: CANONICAL_OPAQUE_TAG,
         body: ORIGINAL_BODY,
         marker: ORIGINAL_MARKER,
         assets: ORIGINAL_ASSETS,
@@ -579,6 +581,228 @@ function recoveryObservation({
     },
   }
 }
+
+function captureReader({
+  states = ["untouched", "untouched"],
+  candidateRuns = [
+    {
+      id: 700,
+      runAttempt: 1,
+      status: "completed",
+      conclusion: "failure",
+      headSha: POLICY.candidateSha,
+    },
+  ],
+  jobs = [{ id: 701, name: "prepare", status: "completed", startedAt: RECOVERY_CAPTURED_AT }],
+  candidateReleases,
+} = {}) {
+  const observation = recoveryObservation({ states })
+  const calls = []
+  const reader = {
+    async readReviewedMergeAuthority(reviewedCommit) {
+      calls.push(["readReviewedMergeAuthority", reviewedCommit])
+      return observation.reviewedAuthority
+    },
+    async readRepositoryState() {
+      calls.push(["readRepositoryState"])
+      return observation.repository
+    },
+    async readCandidateTag() {
+      calls.push(["readCandidateTag"])
+      return observation.candidate
+    },
+    async readWorkflowState() {
+      calls.push(["readWorkflowState"])
+      return observation.workflow
+    },
+    async readImmutableReleases() {
+      calls.push(["readImmutableReleases"])
+      return observation.immutableReleases
+    },
+    async readReleaseRuns() {
+      calls.push(["readReleaseRuns"])
+      return { nonterminalRuns: [], candidateRuns }
+    },
+    async readCandidatePublishJobs(runId) {
+      calls.push(["readCandidatePublishJobs", runId])
+      return jobs
+    },
+    async readNpmAbsence(name) {
+      calls.push(["readNpmAbsence", name])
+      return observation.npm.packages.find((pkg) => pkg.name === name)
+    },
+    async readReleaseSnapshot(releaseId, options) {
+      calls.push(["readReleaseSnapshot", releaseId, options])
+      if (releaseId === POLICY.canonicalReleaseId) return observation.releases.canonical
+      return observation.releases.duplicates.find((release) => release.releaseId === releaseId)
+    },
+    async listCandidateReleases() {
+      calls.push(["listCandidateReleases"])
+      return (
+        candidateReleases ?? [
+          releaseSummary(observation.releases.canonical),
+          ...observation.releases.duplicates.map(releaseSummary),
+        ]
+      )
+    },
+  }
+  return { reader, calls }
+}
+
+function releaseSummary(release) {
+  return {
+    releaseId: release.releaseId,
+    tagName: release.tagName,
+    draft: true,
+    prerelease: false,
+    immutable: false,
+    targetCommitish: "main",
+    marker: release.marker,
+  }
+}
+
+test("captures canonical frozen evidence through only the read boundary", async () => {
+  for (const states of [
+    ["untouched", "untouched"],
+    ["body-archived", "receipt-archived"],
+    ["quarantined", "quarantined"],
+  ]) {
+    const { reader, calls } = captureReader({ states })
+    const evidence = await captureDuplicateDraftRecoveryEvidence({
+      reviewedCommit: MERGE_COMMIT_SHA,
+      reader,
+      now: () => Date.parse(RECOVERY_CAPTURED_AT),
+    })
+
+    assert.equal(Object.isFrozen(evidence), true)
+    assert.equal(evidence.releases.canonical.tagName, CANONICAL_OPAQUE_TAG)
+    assert.deepEqual(
+      evidence.releases.duplicates.map((duplicate) => duplicate.state),
+      states,
+    )
+    assert.deepEqual(
+      calls.filter(([name]) => name === "readNpmAbsence").map(([, packageName]) => packageName),
+      CANONICAL_RELEASE_PACKAGE_ORDER,
+    )
+    assert.deepEqual(
+      calls.filter(([name]) => name === "readCandidatePublishJobs"),
+      [["readCandidatePublishJobs", 700]],
+    )
+    assert.equal(
+      calls.some(([name]) => /write|upload|patch|delete/iu.test(name)),
+      false,
+    )
+  }
+})
+
+test("capture rejects a writer-bearing dependency before any read", async () => {
+  const { reader, calls } = captureReader()
+  reader.writer = Object.freeze({})
+  await assert.rejects(
+    captureDuplicateDraftRecoveryEvidence({
+      reviewedCommit: MERGE_COMMIT_SHA,
+      reader,
+      now: () => Date.parse(RECOVERY_CAPTURED_AT),
+    }),
+    (error) => error.code === "CAPTURE_READER_SURFACE_INVALID",
+  )
+  assert.deepEqual(calls, [])
+})
+
+test("capture checks jobs for every observed candidate run and rejects started publish-npm", async () => {
+  const candidateRuns = [
+    {
+      id: 700,
+      runAttempt: 1,
+      status: "completed",
+      conclusion: "failure",
+      headSha: POLICY.candidateSha,
+    },
+    {
+      id: 800,
+      runAttempt: 2,
+      status: "completed",
+      conclusion: "success",
+      headSha: POLICY.candidateSha,
+    },
+  ]
+  const { reader, calls } = captureReader({
+    candidateRuns,
+    jobs: [
+      {
+        id: 702,
+        name: "publish-npm",
+        status: "completed",
+        conclusion: "failure",
+        startedAt: RECOVERY_CAPTURED_AT,
+      },
+    ],
+  })
+  await assert.rejects(
+    captureDuplicateDraftRecoveryEvidence({
+      reviewedCommit: MERGE_COMMIT_SHA,
+      reader,
+      now: () => Date.parse(RECOVERY_CAPTURED_AT),
+    }),
+    (error) => error.code === "CANDIDATE_PUBLISH_JOB_STARTED",
+  )
+  assert.deepEqual(
+    calls.filter(([name]) => name === "readCandidatePublishJobs"),
+    [
+      ["readCandidatePublishJobs", 700],
+      ["readCandidatePublishJobs", 800],
+    ],
+  )
+})
+
+test("capture refuses a fourth marker-backed candidate Release", async () => {
+  const observation = recoveryObservation()
+  const releases = [
+    releaseSummary(observation.releases.canonical),
+    ...observation.releases.duplicates.map(releaseSummary),
+    {
+      ...releaseSummary(observation.releases.canonical),
+      releaseId: 400000000,
+      tagName: "untagged-fourth-candidate",
+    },
+  ]
+  const { reader } = captureReader({ candidateReleases: releases })
+  await assert.rejects(
+    captureDuplicateDraftRecoveryEvidence({
+      reviewedCommit: MERGE_COMMIT_SHA,
+      reader,
+      now: () => Date.parse(RECOVERY_CAPTURED_AT),
+    }),
+    (error) => error.code === "CANDIDATE_RELEASE_INVENTORY_CONFLICT",
+  )
+})
+
+test("capture and evidence reject exact-tag or arbitrary canonical raw tag names", async () => {
+  for (const tagName of [`v${POLICY.version}`, "untagged-arbitrary-canonical"]) {
+    const observation = recoveryObservation()
+    observation.releases.canonical.tagName = tagName
+    assert.throws(() => canonicalDuplicateDraftEvidence(observation), /canonical Release/iu)
+
+    const { reader } = captureReader({
+      candidateReleases: [
+        { ...releaseSummary(observation.releases.canonical), tagName },
+        ...observation.releases.duplicates.map(releaseSummary),
+      ],
+    })
+    reader.readReleaseSnapshot = async (releaseId) =>
+      releaseId === POLICY.canonicalReleaseId
+        ? observation.releases.canonical
+        : observation.releases.duplicates.find((release) => release.releaseId === releaseId)
+    await assert.rejects(
+      captureDuplicateDraftRecoveryEvidence({
+        reviewedCommit: MERGE_COMMIT_SHA,
+        reader,
+        now: () => Date.parse(RECOVERY_CAPTURED_AT),
+      }),
+      (error) => typeof error.code === "string",
+    )
+  }
+})
 
 function recoverySnapshotForState(releaseId, state) {
   if (state === "untouched") return snapshot({}, releaseId)

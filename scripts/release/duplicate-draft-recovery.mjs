@@ -47,6 +47,19 @@ const DUPLICATE_DERIVED_FIELDS = [
   "remainingTransitions",
 ]
 const MAX_DUPLICATE_EVIDENCE_AGE_MS = 15 * 60 * 1000
+const CANONICAL_OPAQUE_TAG = "untagged-be0ff4bee4ba43b521a9"
+const CAPTURE_READER_METHODS = [
+  "readReviewedMergeAuthority",
+  "readRepositoryState",
+  "readCandidateTag",
+  "readWorkflowState",
+  "readImmutableReleases",
+  "readReleaseRuns",
+  "readCandidatePublishJobs",
+  "readNpmAbsence",
+  "readReleaseSnapshot",
+  "listCandidateReleases",
+]
 
 export const DUPLICATE_DRAFT_RECOVERY_POLICY = deepFreeze({
   repository: "cacheplane/dawnai",
@@ -58,6 +71,142 @@ export const DUPLICATE_DRAFT_RECOVERY_POLICY = deepFreeze({
     { releaseId: 379986168, tagName: "untagged-20706099efa3c38335a8" },
   ],
 })
+
+export class DuplicateDraftRecoveryCaptureError extends Error {
+  constructor(code, message) {
+    super(message)
+    this.name = "DuplicateDraftRecoveryCaptureError"
+    this.code = code
+  }
+}
+
+/** Collect and seal one complete, read-only production recovery observation. */
+export async function captureDuplicateDraftRecoveryEvidence({
+  reviewedCommit,
+  reader,
+  now = Date.now,
+}) {
+  assertGitSha(reviewedCommit, "Reviewed recovery commit")
+  assertCaptureReader(reader)
+  if (typeof now !== "function") throw new TypeError("Duplicate draft capture clock is invalid")
+  const capturedAtMs = now()
+  if (!Number.isSafeInteger(capturedAtMs) || capturedAtMs < 0) {
+    throw new TypeError("Duplicate draft capture time is invalid")
+  }
+  if (capturedAtMs > 8_640_000_000_000_000) {
+    throw new TypeError("Duplicate draft capture time is invalid")
+  }
+  const capturedAt = new Date(capturedAtMs).toISOString()
+
+  const reviewedAuthority = await captureRead(
+    reader,
+    "readReviewedMergeAuthority",
+    [reviewedCommit],
+    "REVIEWED_AUTHORITY_UNAVAILABLE",
+  )
+  if (reviewedAuthority?.mergeCommitSha !== reviewedCommit) {
+    captureFail(
+      "REVIEWED_AUTHORITY_CONFLICT",
+      "Reviewed recovery authority does not match the supplied commit",
+    )
+  }
+  const repository = await captureRead(
+    reader,
+    "readRepositoryState",
+    [],
+    "REPOSITORY_STATE_UNAVAILABLE",
+  )
+  const workflow = await captureRead(reader, "readWorkflowState", [], "WORKFLOW_STATE_UNAVAILABLE")
+  const immutableReleases = await captureRead(
+    reader,
+    "readImmutableReleases",
+    [],
+    "IMMUTABLE_RELEASES_UNAVAILABLE",
+  )
+  const candidate = await captureRead(reader, "readCandidateTag", [], "CANDIDATE_TAG_UNAVAILABLE")
+  const runObservation = await captureRead(
+    reader,
+    "readReleaseRuns",
+    [],
+    "RELEASE_RUNS_UNAVAILABLE",
+  )
+  let normalizedRuns
+  try {
+    normalizedRuns = normalizeCaptureRuns(runObservation)
+  } catch (error) {
+    if (error instanceof DuplicateDraftRecoveryCaptureError) throw error
+    captureFail("RELEASE_RUNS_MALFORMED", "Recovery workflow run observation is malformed")
+  }
+  const { nonterminalRuns, candidateRuns } = normalizedRuns
+  if (nonterminalRuns.length !== 0) {
+    captureFail("RELEASE_RUN_NONTERMINAL", "A Release workflow run is nonterminal")
+  }
+  const candidateJobObservations = []
+  for (const run of candidateRuns) {
+    candidateJobObservations.push(
+      await captureRead(reader, "readCandidatePublishJobs", [run.id], "CANDIDATE_JOBS_UNAVAILABLE"),
+    )
+  }
+  for (const jobs of candidateJobObservations) {
+    assertNoStartedPublishJob(jobs)
+  }
+
+  const npmPackages = []
+  for (const packageName of CANONICAL_RELEASE_PACKAGE_ORDER) {
+    npmPackages.push(
+      await captureRead(reader, "readNpmAbsence", [packageName], "NPM_ABSENCE_UNAVAILABLE"),
+    )
+  }
+
+  const candidateReleases = await captureRead(
+    reader,
+    "listCandidateReleases",
+    [],
+    "CANDIDATE_RELEASES_UNAVAILABLE",
+  )
+  try {
+    normalizeCandidateReleaseInventory(candidateReleases)
+  } catch (error) {
+    if (error instanceof DuplicateDraftRecoveryCaptureError) throw error
+    captureFail("CANDIDATE_RELEASE_INVENTORY_CONFLICT", "Candidate Release inventory is not exact")
+  }
+  const canonical = await captureRead(
+    reader,
+    "readReleaseSnapshot",
+    [DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId],
+    "CANONICAL_RELEASE_UNAVAILABLE",
+  )
+  const duplicates = []
+  for (const duplicate of DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates) {
+    duplicates.push(
+      await captureRead(
+        reader,
+        "readReleaseSnapshot",
+        [duplicate.releaseId, { expectedOriginalBody: canonical?.body }],
+        "DUPLICATE_RELEASE_UNAVAILABLE",
+      ),
+    )
+  }
+
+  try {
+    return parseDuplicateDraftEvidence(
+      canonicalDuplicateDraftEvidence({
+        capturedAt,
+        reviewedAuthority,
+        repository,
+        workflow,
+        immutableReleases,
+        candidate,
+        npm: { packages: npmPackages },
+        releaseRuns: [],
+        releases: { canonical, duplicates },
+      }),
+    )
+  } catch (error) {
+    if (error instanceof DuplicateDraftRecoveryCaptureError) throw error
+    captureFail("CAPTURE_EVIDENCE_CONFLICT", "Captured duplicate draft evidence is not exact")
+  }
+}
 
 /**
  * Serialize the authority-bound recovery observation into its sole canonical
@@ -698,7 +847,7 @@ function normalizeCanonicalRecoveryRelease(value, candidate) {
   assertReleaseId(source.releaseId, "Canonical Release ID")
   if (
     source.releaseId !== DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ||
-    source.tagName !== `v${candidate.version}` ||
+    source.tagName !== CANONICAL_OPAQUE_TAG ||
     typeof source.body !== "string" ||
     !Array.isArray(source.assets) ||
     source.assets.length !== 45
@@ -718,12 +867,184 @@ function normalizeCanonicalRecoveryRelease(value, candidate) {
     marker.phase !== "ESCROWED" ||
     marker.version !== candidate.version ||
     marker.commitSha !== candidate.commitSha ||
-    marker.tag !== source.tagName ||
+    marker.tag !== `v${candidate.version}` ||
     marker.baseAssetSetSha256 !== assetSetSha256(assets)
   ) {
     throw new TypeError("Canonical Release marker is not exact")
   }
   return { releaseId: source.releaseId, tagName: source.tagName, body: source.body, marker, assets }
+}
+
+function assertCaptureReader(value) {
+  if (!isRecord(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    captureFail("CAPTURE_READER_SURFACE_INVALID", "Recovery capture reader is invalid")
+  }
+  const actual = Object.keys(value).sort(compareText)
+  const expected = [...CAPTURE_READER_METHODS].sort(compareText)
+  if (
+    actual.length !== expected.length ||
+    actual.some((name, index) => name !== expected[index]) ||
+    CAPTURE_READER_METHODS.some((name) => typeof value[name] !== "function")
+  ) {
+    captureFail(
+      "CAPTURE_READER_SURFACE_INVALID",
+      "Recovery capture reader must expose only recovery reads",
+    )
+  }
+}
+
+async function captureRead(reader, method, args, code) {
+  try {
+    return snapshotJson(await reader[method](...args))
+  } catch (error) {
+    if (error instanceof DuplicateDraftRecoveryCaptureError) throw error
+    captureFail(code, `Recovery capture read ${method} failed`)
+  }
+}
+
+function normalizeCaptureRuns(value) {
+  const source = exactObject(
+    value,
+    ["nonterminalRuns", "candidateRuns"],
+    "recovery workflow run observation",
+  )
+  if (!Array.isArray(source.nonterminalRuns) || !Array.isArray(source.candidateRuns)) {
+    captureFail("RELEASE_RUNS_MALFORMED", "Recovery workflow run observation is malformed")
+  }
+  const nonterminalRuns = source.nonterminalRuns.map((run) =>
+    normalizeCaptureRun(run, "nonterminal Release workflow run", false),
+  )
+  const candidateRuns = source.candidateRuns.map((run) =>
+    normalizeCaptureRun(run, "candidate Release workflow run", true),
+  )
+  assertUniqueRunIds(nonterminalRuns, "nonterminal")
+  assertUniqueRunIds(candidateRuns, "candidate")
+  return { nonterminalRuns, candidateRuns }
+}
+
+function normalizeCaptureRun(value, label, requireCandidateSha) {
+  const source = exactObject(value, ["id", "runAttempt", "status", "conclusion", "headSha"], label)
+  assertPositiveInteger(source.id, `${label} ID`)
+  assertPositiveInteger(source.runAttempt, `${label} attempt`)
+  assertGitSha(source.headSha, `${label} head SHA`)
+  if (
+    typeof source.status !== "string" ||
+    source.status.length === 0 ||
+    !(source.conclusion === null || typeof source.conclusion === "string") ||
+    (requireCandidateSha && source.headSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha)
+  ) {
+    captureFail("RELEASE_RUNS_MALFORMED", "Recovery workflow run observation is malformed")
+  }
+  return source
+}
+
+function assertUniqueRunIds(runs, label) {
+  if (new Set(runs.map((run) => run.id)).size !== runs.length) {
+    captureFail("RELEASE_RUNS_MALFORMED", `Recovery ${label} workflow runs are duplicated`)
+  }
+}
+
+function assertNoStartedPublishJob(value) {
+  if (!Array.isArray(value)) {
+    captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
+  }
+  for (const raw of value) {
+    let job
+    try {
+      job = snapshotJson(raw)
+    } catch {
+      captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
+    }
+    if (
+      !isRecord(job) ||
+      !Number.isSafeInteger(job.id) ||
+      job.id < 1 ||
+      typeof job.name !== "string" ||
+      job.name.length === 0 ||
+      typeof job.status !== "string" ||
+      job.status.length === 0 ||
+      !(
+        job.startedAt === null ||
+        (typeof job.startedAt === "string" && !Number.isNaN(Date.parse(job.startedAt)))
+      )
+    ) {
+      captureFail("CANDIDATE_JOBS_MALFORMED", "Candidate workflow jobs are malformed")
+    }
+    if (job.name === "publish-npm" && job.startedAt !== null) {
+      captureFail(
+        "CANDIDATE_PUBLISH_JOB_STARTED",
+        "A candidate publish-npm job has already started",
+      )
+    }
+  }
+}
+
+function normalizeCandidateReleaseInventory(value) {
+  if (!Array.isArray(value) || value.length !== 3) {
+    captureFail("CANDIDATE_RELEASE_INVENTORY_CONFLICT", "Candidate Release inventory is not exact")
+  }
+  const expected = [
+    {
+      releaseId: DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId,
+      tagName: CANONICAL_OPAQUE_TAG,
+    },
+    ...DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates,
+  ].sort((left, right) => left.releaseId - right.releaseId)
+  const normalized = value
+    .map((raw) => {
+      const release = exactObject(
+        raw,
+        ["releaseId", "tagName", "draft", "prerelease", "immutable", "targetCommitish", "marker"],
+        "candidate Release summary",
+      )
+      assertReleaseId(release.releaseId, "Candidate Release ID")
+      if (
+        typeof release.tagName !== "string" ||
+        release.draft !== true ||
+        release.prerelease !== false ||
+        release.immutable !== false ||
+        release.targetCommitish !== "main"
+      ) {
+        captureFail(
+          "CANDIDATE_RELEASE_INVENTORY_CONFLICT",
+          "Candidate Release metadata is not exact",
+        )
+      }
+      return release
+    })
+    .sort((left, right) => left.releaseId - right.releaseId)
+  if (
+    normalized.some(
+      (release, index) =>
+        release.releaseId !== expected[index].releaseId ||
+        release.tagName !== expected[index].tagName ||
+        release.tagName === `v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}`,
+    )
+  ) {
+    captureFail(
+      "CANDIDATE_RELEASE_INVENTORY_CONFLICT",
+      "Candidate Release identities are not exact",
+    )
+  }
+  for (const release of normalized) {
+    if (release.marker === null) continue
+    const marker = snapshotJson(release.marker)
+    if (
+      !isRecord(marker) ||
+      marker.version !== DUPLICATE_DRAFT_RECOVERY_POLICY.version ||
+      marker.commitSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha ||
+      marker.tag !== `v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}`
+    ) {
+      captureFail(
+        "CANDIDATE_RELEASE_INVENTORY_CONFLICT",
+        "Candidate Release marker identity is not exact",
+      )
+    }
+  }
+}
+
+function captureFail(code, message) {
+  throw new DuplicateDraftRecoveryCaptureError(code, message)
 }
 
 function normalizeDuplicateEvidenceDuplicates(value) {
