@@ -58,7 +58,35 @@ export function classifyDuplicateDraft(value, expected) {
     requirements.originalBodySha256,
   )
   const receiptAssetName = recoveryReceiptAssetName(requirements.releaseId)
-  const recoveryReceiptBytes = canonicalRecoveryReceipt(requirements.recoveryReceipt)
+  const recoveryReceiptInput = exactObject(
+    requirements.recoveryReceipt,
+    [
+      "repository",
+      "version",
+      "candidateSha",
+      "recoveryCommit",
+      "canonicalReleaseId",
+      "duplicateReleaseId",
+      "originalBodySha256",
+      "baseAssetSetSha256",
+      "archiveAsset",
+    ],
+    "duplicate recovery receipt",
+  )
+  if (
+    recoveryReceiptInput.repository !== DUPLICATE_DRAFT_RECOVERY_POLICY.repository ||
+    recoveryReceiptInput.version !== DUPLICATE_DRAFT_RECOVERY_POLICY.version ||
+    recoveryReceiptInput.candidateSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha ||
+    recoveryReceiptInput.canonicalReleaseId !==
+      DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ||
+    recoveryReceiptInput.duplicateReleaseId !== requirements.releaseId ||
+    recoveryReceiptInput.originalBodySha256 !== requirements.originalBodySha256 ||
+    recoveryReceiptInput.archiveAsset.name !== bodyAssetName ||
+    recoveryReceiptInput.archiveAsset.sha256 !== requirements.originalBodySha256
+  ) {
+    throw new Error("Duplicate recovery receipt identity is not bound to the classified draft")
+  }
+  const recoveryReceiptBytes = canonicalRecoveryReceipt(recoveryReceiptInput)
   const recoveryReceiptSha256 = sha256Bytes(recoveryReceiptBytes)
   const expectedAssetNames = new Set(originalAssets.map((asset) => asset.name))
   for (const asset of assets) {
@@ -80,12 +108,22 @@ export function classifyDuplicateDraft(value, expected) {
   const evidence = assets.slice(originalAssets.length)
   const notice =
     evidenceKinds.length === 2 && snapshot.marker === null
-      ? parseCanonicalNotice(snapshot.body, requirements.releaseId)
+      ? parseCanonicalNotice(
+          snapshot.body,
+          requirements.releaseId,
+          requirements.originalBodySha256,
+          bodyAssetName,
+        )
       : null
   for (const [index, asset] of evidence.entries()) {
     const kind = evidenceKinds[index]
     if (kind === "body") {
-      if (asset.name !== bodyAssetName || asset.sha256 !== requirements.originalBodySha256) {
+      if (
+        asset.name !== bodyAssetName ||
+        asset.sha256 !== requirements.originalBodySha256 ||
+        (notice !== null &&
+          (asset.name !== notice.archiveAssetName || asset.sha256 !== notice.originalBodySha256))
+      ) {
         throw new Error("Duplicate Release original-body archive is not exact")
       }
     } else if (
@@ -362,7 +400,12 @@ function isCanonicalNotice(value) {
   }
 }
 
-function parseCanonicalNotice(value, expectedDuplicateReleaseId) {
+function parseCanonicalNotice(
+  value,
+  expectedDuplicateReleaseId,
+  expectedOriginalBodySha256,
+  expectedArchiveAssetName,
+) {
   if (!isCanonicalNotice(value)) throw new Error("Duplicate Release recovery notice is malformed")
   const notice = snapshotJson(JSON.parse(value))
   if (
@@ -388,6 +431,8 @@ function parseCanonicalNotice(value, expectedDuplicateReleaseId) {
     notice.candidateSha !== DUPLICATE_DRAFT_RECOVERY_POLICY.candidateSha ||
     notice.canonicalReleaseId !== DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ||
     notice.duplicateReleaseId !== expectedDuplicateReleaseId ||
+    notice.originalBodySha256 !== expectedOriginalBodySha256 ||
+    notice.archiveAssetName !== expectedArchiveAssetName ||
     notice.archiveAssetName !==
       originalBodyAssetName(notice.duplicateReleaseId, notice.originalBodySha256) ||
     notice.receiptAssetName !== recoveryReceiptAssetName(notice.duplicateReleaseId) ||

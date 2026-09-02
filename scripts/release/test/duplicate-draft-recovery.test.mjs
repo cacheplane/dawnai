@@ -187,6 +187,46 @@ test("rejects a receipt asset whose bytes do not equal its canonical digest", ()
   )
 })
 
+test("rejects receipt bytes for another duplicate under this duplicate's receipt name", () => {
+  const expected = expectedFor()
+  const otherReceipt = expectedFor(POLICY.duplicates[1].releaseId).recoveryReceipt
+  const otherBytes = canonicalRecoveryReceipt(otherReceipt)
+  assert.throws(() =>
+    classifyDuplicateDraft(
+      snapshot({
+        evidenceAssets: ["body", "receipt"],
+        receiptBytes: otherBytes.toString("utf8"),
+        receiptSha256: createHash("sha256").update(otherBytes).digest("hex"),
+      }),
+      { ...expected, recoveryReceipt: otherReceipt },
+    ),
+  )
+})
+
+test("rejects receipt bytes for a different original body under this duplicate's receipt name", () => {
+  const expected = expectedFor()
+  const wrongBodySha256 = "e".repeat(64)
+  const wrongReceipt = {
+    ...expected.recoveryReceipt,
+    originalBodySha256: wrongBodySha256,
+    archiveAsset: {
+      name: originalBodyAssetName(expected.releaseId, wrongBodySha256),
+      sha256: wrongBodySha256,
+    },
+  }
+  const wrongBytes = canonicalRecoveryReceipt(wrongReceipt)
+  assert.throws(() =>
+    classifyDuplicateDraft(
+      snapshot({
+        evidenceAssets: ["body", "receipt"],
+        receiptBytes: wrongBytes.toString("utf8"),
+        receiptSha256: createHash("sha256").update(wrongBytes).digest("hex"),
+      }),
+      { ...expected, recoveryReceipt: wrongReceipt },
+    ),
+  )
+})
+
 test("rejects canonical-looking notices with an invalid schema, type, or duplicate identity", () => {
   const expected = expectedFor()
   const notice = JSON.parse(expected.recoveryNotice)
@@ -210,6 +250,33 @@ test("rejects canonical-looking notices with an invalid schema, type, or duplica
       ),
     )
   }
+})
+
+test("rejects a quarantine notice that points at a wrong-body archive", () => {
+  const expected = expectedFor()
+  const wrongBodySha256 = "e".repeat(64)
+  const wrongNotice = canonicalRecoveryNotice({
+    repository: POLICY.repository,
+    version: POLICY.version,
+    canonicalReleaseId: POLICY.canonicalReleaseId,
+    duplicateReleaseId: expected.releaseId,
+    originalBodySha256: wrongBodySha256,
+    archiveAssetName: originalBodyAssetName(expected.releaseId, wrongBodySha256),
+    receiptAssetName: recoveryReceiptAssetName(expected.releaseId),
+    receiptSha256: createHash("sha256")
+      .update(canonicalRecoveryReceipt(expected.recoveryReceipt))
+      .digest("hex"),
+  })
+  assert.throws(() =>
+    classifyDuplicateDraft(
+      snapshot({
+        quarantined: true,
+        evidenceAssets: ["body", "receipt"],
+        body: wrongNotice,
+      }),
+      { ...expected, recoveryNotice: wrongNotice },
+    ),
+  )
 })
 
 test("derives bounded candidate-specific evidence asset names", () => {
