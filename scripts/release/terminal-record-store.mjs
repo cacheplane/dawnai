@@ -144,11 +144,18 @@ export async function readTerminalRecord({ git, ref, version }) {
   if (!paths.has(path)) return null
   const text = await git.showFile({ ref, path })
   if (typeof text !== "string") throw new TypeError("Terminal record contents are invalid")
+  let parsed
   try {
-    return parseOperatorRecoveryRecord(Buffer.from(text, "utf8"))
+    parsed = parseOperatorRecoveryRecord(Buffer.from(text, "utf8"))
   } catch (error) {
     throw new TypeError(`Terminal record ${path} is invalid: ${error.message}`, { cause: error })
   }
+  // The path names the version, so a record whose own identity disagrees with it is filed under a
+  // version it does not describe; binding them here keeps callers from trusting the path alone.
+  if (parsed.version !== version) {
+    throw new TypeError(`Terminal record ${path} names another version`)
+  }
+  return parsed
 }
 
 function validatePredecessor(value, record) {

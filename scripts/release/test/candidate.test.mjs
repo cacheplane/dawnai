@@ -2027,23 +2027,12 @@ test("scheduled discovery rejects a record bound to another annotated tag object
   )
 })
 
-test("a visible draft for a recorded version is not inspected", async () => {
+test("the stamped tombstone draft for a recorded version is not inspected", async () => {
   const value = boundTerminalRecord()
   const repository = recordedRepository(recordedCommits(RECORD_SHA), [value])
-  const escrowed = {
-    id: value.predecessor.releaseId,
-    tag_name: `v${RECORD_VERSION}`,
-    name: `Dawn v${RECORD_VERSION}`,
-    target_commitish: "main",
-    draft: true,
-    immutable: false,
-    prerelease: false,
-    body: canonicalReleaseBody({ marker: value.predecessor.marker, manifest: null }),
-    assets: [],
-  }
   const github = githubFixture({
     tags: [tagRef(RECORD_VERSION, RECORD_SHA), tagRef("0.8.23", SHA_23)],
-    releases: [escrowed],
+    releases: [stampedTombstoneRelease(value)],
   })
 
   const result = await discoverScheduledCandidate({
@@ -2055,11 +2044,134 @@ test("a visible draft for a recorded version is not inspected", async () => {
   })
 
   assert.deepEqual(result, selectedCandidate("0.8.23", SHA_23, "CANDIDATE_TAGGED"))
-  assert.ok(
-    github.calls.every(
-      ([operation, releaseId]) => operation !== "listReleaseAssets" || releaseId !== escrowed.id,
-    ),
+  assert.deepEqual(
+    github.calls.filter(([operation]) => operation === "listReleaseAssets"),
+    [],
   )
+})
+
+test("a visible Release for a recorded version must be its exact stamped tombstone", async () => {
+  const value = boundTerminalRecord()
+  const stamped = stampedTombstoneRelease(value)
+  const cases = [
+    [
+      "unstamped escrowed draft",
+      {
+        ...stamped,
+        name: `Dawn v${RECORD_VERSION}`,
+        body: canonicalReleaseBody({ marker: value.predecessor.marker, manifest: null }),
+      },
+    ],
+    ["published immutable Release", { ...stamped, draft: false, immutable: true }],
+    [
+      "another record's digest",
+      stampedTombstoneRelease(
+        boundTerminalRecord({ reason: "A different reason produces a different record digest." }),
+      ),
+    ],
+  ]
+
+  for (const [name, release] of cases) {
+    const repository = recordedRepository(recordedCommits(RECORD_SHA), [value])
+    const github = githubFixture({
+      tags: [tagRef(RECORD_VERSION, RECORD_SHA), tagRef("0.8.23", SHA_23)],
+      releases: [release],
+    })
+
+    await assert.rejects(
+      discoverScheduledCandidate({
+        terminalRecordRef: RECORD_REF,
+        inventory: repository.inventory,
+        git: repository.git,
+        github,
+        marker: ACTIVE_MARKER,
+      }),
+      /not its stamped tombstone/u,
+      name,
+    )
+    assert.deepEqual(
+      github.calls.filter(([operation]) => operation === "listReleaseAssets"),
+      [],
+      name,
+    )
+  }
+})
+
+test("scheduled discovery lists the terminal record tree exactly once for every tag", async () => {
+  const repository = recordedRepository(recordedCommits(RECORD_SHA), [boundTerminalRecord()])
+  const github = githubFixture({
+    tags: [tagRef(RECORD_VERSION, RECORD_SHA), tagRef("0.8.23", SHA_23)],
+  })
+
+  await discoverScheduledCandidate({
+    terminalRecordRef: RECORD_REF,
+    inventory: repository.inventory,
+    git: repository.git,
+    github,
+    marker: ACTIVE_MARKER,
+  })
+
+  assert.deepEqual(
+    repository.calls.filter(([operation, ref]) => operation === "listTree" && ref === RECORD_REF),
+    [["listTree", RECORD_REF]],
+  )
+})
+
+test("a recorded tag whose commit is not an exact candidate fails closed", async () => {
+  const repository = recordedRepository(
+    [
+      commit(BASE_SHA, "0.8.20"),
+      commit(CUTOVER_SHA, "0.8.20", { parent: BASE_SHA, marker: true }),
+      commit(RECORD_SHA, "0.8.20", { parent: CUTOVER_SHA, marker: true }),
+    ],
+    [boundTerminalRecord()],
+  )
+  const foreign = {
+    ...repository,
+    git: {
+      ...repository.git,
+      async resolveTag({ tag }) {
+        return tag === `v${RECORD_VERSION}` ? RECORD_SHA : repository.git.resolveTag({ tag })
+      },
+    },
+  }
+  const github = githubFixture({ tags: [tagRef(RECORD_VERSION, RECORD_SHA)] })
+
+  await assert.rejects(
+    discoverScheduledCandidate({
+      terminalRecordRef: RECORD_REF,
+      inventory: foreign.inventory,
+      git: foreign.git,
+      github,
+      marker: ACTIVE_MARKER,
+    }),
+    /is not an exact release candidate/u,
+  )
+})
+
+test("a recorded tag at a pre-marker commit is skipped like any legacy candidate", async () => {
+  const repository = recordedRepository(
+    [
+      commit(BASE_SHA, "0.8.20"),
+      commit(CUTOVER_SHA, "0.8.20", { parent: BASE_SHA, marker: true }),
+      commit(RECORD_SHA, RECORD_VERSION, { parent: CUTOVER_SHA }),
+      commit(SHA_23, "0.8.23", { parent: RECORD_SHA, marker: true }),
+    ],
+    [boundTerminalRecord()],
+  )
+  const github = githubFixture({
+    tags: [tagRef(RECORD_VERSION, RECORD_SHA), tagRef("0.8.23", SHA_23)],
+  })
+
+  const result = await discoverScheduledCandidate({
+    terminalRecordRef: RECORD_REF,
+    inventory: repository.inventory,
+    git: repository.git,
+    github,
+    marker: ACTIVE_MARKER,
+  })
+
+  assert.deepEqual(result, selectedCandidate("0.8.23", SHA_23, "CANDIDATE_TAGGED"))
 })
 
 test("inspectAbandonmentRelease accepts an operator-recovery tombstone on a visible draft", async () => {
@@ -2127,6 +2239,31 @@ function recordedRepository(commits, records, options) {
         return text
       },
     },
+  }
+}
+
+function stampedTombstoneRelease(value) {
+  const bytes = canonicalTerminalRecordBytes(value)
+  const marker = abandonmentReleaseMarker({
+    candidate: { version: value.version, commitSha: value.commitSha },
+    artifact: value.predecessor.artifact,
+    abandonmentSha256: sha256(bytes),
+    previousMarker: value.predecessor.marker,
+  })
+  return {
+    id: value.predecessor.releaseId,
+    tag_name: `v${value.version}`,
+    name: `Dawn v${value.version} (abandoned before publication)`,
+    target_commitish: "main",
+    draft: true,
+    immutable: false,
+    prerelease: false,
+    body: canonicalAbandonmentReleaseBody({
+      marker,
+      tombstone: value,
+      previousMarker: value.predecessor.marker,
+    }),
+    assets: [],
   }
 }
 

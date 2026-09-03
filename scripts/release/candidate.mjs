@@ -161,9 +161,10 @@ export async function discoverScheduledCandidate({
   // what the GitHub token can see; a record is read at the controller's own
   // checkout, the same ref the observer uses.
   const recorded = new Map()
+  const terminalRecordReader = memoizeListTree(git, terminalRecordRef)
   for (const tag of tags) {
     const terminalRecord = await readTerminalRecord({
-      git,
+      git: terminalRecordReader,
       ref: terminalRecordRef,
       version: tag.version,
     })
@@ -217,6 +218,8 @@ export async function discoverScheduledCandidate({
     )
   }
 
+  // These selections exist only as arbitration input: terminal states are
+  // filtered out of `incomplete`, so a recorded version is never re-selected.
   for (const [tagName, terminalRecord] of recorded) {
     const discovery = await discoverManagedCandidate({
       ref: terminalRecord.commitSha,
@@ -469,8 +472,26 @@ async function inspectManagedReleases({
     }
     // A committed terminal record settles this version, so no Release evidence
     // is read for it: the controller must reach the same classification whether
-    // or not its token can see this draft at all.
-    if (recorded.has(tagIdentity.tag)) continue
+    // or not its token can see this draft at all. A visible Release must still
+    // be the stamped tombstone the record describes, because a recorded version
+    // is never re-selected and so is never observed again: a stray, tampered, or
+    // published Release on that tag would otherwise go unexamined forever. The
+    // marker alone settles it, from data already in hand — no extra reads.
+    const terminalRecord = recorded.get(tagIdentity.tag)
+    if (terminalRecord !== undefined) {
+      const stamped = releaseMarkerIfPresent(release.body)
+      if (
+        release.draft !== true ||
+        release.immutable !== false ||
+        stamped?.phase !== "ABANDONED_PREPUBLICATION" ||
+        stamped.abandonmentSha256 !== terminalRecord.sha256
+      ) {
+        throw new Error(
+          `Visible Release for recorded ${tagIdentity.tag} is not its stamped tombstone`,
+        )
+      }
+      continue
+    }
     const candidate = await discoverManagedCandidateDetails({
       ref: tagIdentity.commitSha,
       inventory,
@@ -893,6 +914,22 @@ function jsonValuesEqual(left, right) {
     arraysEqual(leftKeys, rightKeys) &&
     leftKeys.every((key) => jsonValuesEqual(left[key], right[key]))
   )
+}
+
+/**
+ * One full-repository tree listing serves every terminal-record read at `ref`;
+ * the wrapper forwards every other read to the reader it was given unchanged.
+ */
+function memoizeListTree(git, ref) {
+  let listing = null
+  return {
+    ...git,
+    listTree(input) {
+      if (input?.ref !== ref) return git.listTree(input)
+      listing ??= git.listTree(input)
+      return listing
+    },
+  }
 }
 
 function releaseMarkerIfPresent(body) {

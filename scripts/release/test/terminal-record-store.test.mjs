@@ -391,3 +391,21 @@ test("fixture identity constants line up with the record fixture", () => {
     attestationSet().subjects.length,
   )
 })
+
+test("readTerminalRecord rejects a record filed under another version's path", async () => {
+  const bytes = canonicalTerminalRecordBytes(record())
+  const git = {
+    async listTree() {
+      return "scripts/release/terminal-records/v0.8.23.json\n"
+    },
+    async showFile({ path }) {
+      assert.equal(path, "scripts/release/terminal-records/v0.8.23.json")
+      return bytes.toString("utf8")
+    },
+  }
+
+  await assert.rejects(
+    readTerminalRecord({ git, ref: "HEAD", version: "0.8.23" }),
+    /names another version/u,
+  )
+})
