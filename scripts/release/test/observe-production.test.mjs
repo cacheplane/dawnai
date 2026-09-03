@@ -4827,7 +4827,7 @@ test("a malformed terminal record blocks the observation with TERMINAL_RECORD_IN
   )
 })
 
-test("a terminal record for another candidate is never used and blocks with TERMINAL_RECORD_MISMATCH", async () => {
+test("a terminal record for another candidate is never used and blocks with TERMINAL_RECORD_FOREIGN", async () => {
   // The unmodified fixture record names commit 2a80dee..., not this test's candidate.
   const bytes = canonicalTerminalRecordBytes(terminalRecordFixture())
   const { observation, diagnostics } = await observeProductionCandidate({
@@ -4840,7 +4840,8 @@ test("a terminal record for another candidate is never used and blocks with TERM
     npm: npmReader(),
   })
   assert.notEqual(diagnostics.length, 0)
-  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_FOREIGN"))
+  assert.ok(!diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
   assert.equal(observation.abandonment.recorded, false)
   assert.equal(observation.release.status, "ambiguous")
   assert.equal(

@@ -402,10 +402,11 @@ export async function observeProductionCandidate({
   ) {
     // A record for another version or another commit proves nothing about THIS candidate, and a
     // record whose own tag disagrees with its commit is self-inconsistent. Discard it entirely
-    // (it is never read again below) and fail closed exactly like a draft mismatch.
+    // (it is never read again below) and fail closed exactly like a draft mismatch, under its own
+    // code: a foreign record is a different operator situation from a draft that disagrees.
     committedTerminalRecord = null
     terminalRecordMismatch = true
-    addDiagnostic(diagnostics, "git", "terminal-record", "AMBIGUOUS", "TERMINAL_RECORD_MISMATCH")
+    addDiagnostic(diagnostics, "git", "terminal-record", "AMBIGUOUS", "TERMINAL_RECORD_FOREIGN")
   }
   const [ciResult, ciWorkflowResult, tagRefsResult, releasesResult, artifactResult, publisherRuns] =
     await Promise.all([
@@ -2477,13 +2478,7 @@ async function mapProductionAbandonmentRelease({
   })
 }
 
-/**
- * true  — no draft is visible (absent/ambiguous: the committed record stands alone), or the
- *         visible draft is the stamped abandonment whose marker digest and tombstone asset
- *         digest both equal the record's canonical SHA-256.
- * false — a draft is visible but is not the stamped tombstone for this exact record.
- * The numeric Release ID is not part of the observation; the apply command verifies it.
- */
+/** The ref a terminal record is read from is always explicit: never defaulted, never empty. */
 function assertTerminalRecordRef(value) {
   if (typeof value !== "string" || value.length === 0) {
     throw new TypeError("Terminal record ref is invalid")
@@ -2500,6 +2495,13 @@ function terminalRecordBindsCandidate(record, identity) {
   )
 }
 
+/**
+ * true  — no draft is visible (absent/ambiguous: the committed record stands alone), or the
+ *         visible draft is the stamped abandonment whose marker digest and tombstone asset
+ *         digest both equal the record's canonical SHA-256.
+ * false — a draft is visible but is not the stamped tombstone for this exact record.
+ * The numeric Release ID is not part of the observation; the apply command verifies it.
+ */
 function terminalRecordMatchesRelease(record, release) {
   // An already-ambiguous release means GitHub itself was unreadable, not that the draft
   // contradicts the record; that path carries its own AMBIGUOUS diagnostic, so the committed
