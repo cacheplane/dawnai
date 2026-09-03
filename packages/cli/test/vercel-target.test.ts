@@ -509,6 +509,28 @@ describe("complete Vercel target", () => {
     })
   }, 180_000)
 
+  test("bundles a route's skill bodies into the function", async () => {
+    await ensureLinkedDistsFresh()
+    const appRoot = await createTargetFixture({
+      // The fixture's only default route is `probe`; the skill needs a route of
+      // its own to hang off, so this adds one.
+      "src/app/chat/index.ts": 'export async function workflow() { return { message: "chat" } }\n',
+      "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nDo research.\n",
+    })
+
+    await runTargetBuild(appRoot)
+
+    // esbuild inlines the manifest into the single function file, so the skill
+    // body must be inside it — and keyed by the namespace, not the build path.
+    const bundled = await readFile(
+      join(appRoot, ".vercel", "output", "functions", "index.func", "index.mjs"),
+      "utf8",
+    )
+    expect(bundled).toContain("Do research.")
+    expect(bundled).toContain("/src/app/chat/skills/research/SKILL.md")
+    expect(bundled).not.toContain(appRoot)
+  }, 180_000)
+
   describe("Vercel CommonJS Node compatibility", () => {
     test("bundles a real pg Pool without changing absent pg.native semantics", async () => {
       await ensureLinkedDistsFresh()

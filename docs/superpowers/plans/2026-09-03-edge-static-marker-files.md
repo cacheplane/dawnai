@@ -1064,7 +1064,7 @@ git commit -m "feat(cli): serve bundled marker files through staticMarkerFs on f
 - Test: `packages/cli/test/hono-target.test.ts`
 - Test: `packages/cli/test/vercel-target.test.ts`
 
-- [ ] **Step 1: Rewrite the hono skills gate test into three cases**
+- [x] **Step 1: Rewrite the hono skills gate test into three cases**
 
 In `packages/cli/test/hono-target.test.ts`, inside `describe("hono target — edge capability gating", ...)`, replace `test("fails the build when a route ships skills", ...)` with:
 
@@ -1117,7 +1117,7 @@ In `packages/cli/test/hono-target.test.ts`, inside `describe("hono target — ed
 
 `readBuildFile`, `buildFile`, `runBuild`, and `existsSync` already exist in that file.
 
-- [ ] **Step 2: Add the vercel counterpart**
+- [x] **Step 2: Add the vercel counterpart**
 
 `packages/cli/test/vercel-target.test.ts` uses `createTargetFixture(files)` and `runTargetBuild(appRoot)`, and its full-build cases call `await ensureLinkedDistsFresh()` first. Inside `describe("complete Vercel target", ...)`, after the first `test(...)`, add:
 
@@ -1144,12 +1144,12 @@ In `packages/cli/test/hono-target.test.ts`, inside `describe("hono target — ed
 
 `readFile` and `join` are already imported in that file; if `readFile` is not, add it to the existing `node:fs/promises` import.
 
-- [ ] **Step 3: Run to verify the new cases fail**
+- [x] **Step 3: Run to verify the new cases fail**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/hono-target.test.ts test/vercel-target.test.ts`
 Expected: the "builds a route that ships skills" cases FAIL with the DAWN_E1005 skills message; the over-limit case may already pass through `collectRouteMarkerFiles` or fail on the gate message ordering; the workspace case passes.
 
-- [ ] **Step 4: Remove the skills violation**
+- [x] **Step 4: Remove the skills violation**
 
 In `packages/cli/src/lib/build/targets/edge-capabilities.ts`, inside `collectEdgeCapabilityViolations`, delete this block:
 
@@ -1169,12 +1169,12 @@ In `packages/cli/src/lib/build/targets/edge-capabilities.ts`, inside `collectEdg
 
 Keep `discoverSkillDirs` exported; `modules-emitter.ts` and `marker-files.ts` use it. Update its doc comment's sentence "Exported because the static-module emitter records the same names into the manifest" to add "and the marker-file reader bundles their bodies".
 
-- [ ] **Step 5: Run the target tests to verify they pass**
+- [x] **Step 5: Run the target tests to verify they pass**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/hono-target.test.ts test/vercel-target.test.ts test/static-check.test.ts test/edge-bundle-purity.test.ts`
 Expected: PASS. `edge-bundle-purity` proves the emitted bundle is still `node:`-free with the new `staticMarkerFs` import path reachable from `@dawn-ai/cli/fetch`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/cli/src/lib/build/targets/edge-capabilities.ts packages/cli/test/hono-target.test.ts packages/cli/test/vercel-target.test.ts

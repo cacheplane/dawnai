@@ -225,7 +225,7 @@ export function collectRuntimeCapabilityGaps(
       source: `the skills/ directory of route "${route.routeId}", recorded in the static module manifest at build time`,
       reason:
         "skill bodies are read from disk when the route loads, and this runtime has no filesystem " +
-        "to read them from — the manifest records the skill names but bundles no bodies, so the " +
+        "to read them from — the manifest records these skill names but bundles no body for them, so the " +
         "skills would vanish from the prompt with no error at all",
       remedy:
         "Rebuild with `dawn build` so the manifest bundles the skill bodies, or inline the instructions into the route's `systemPrompt`",

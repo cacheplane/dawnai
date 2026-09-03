@@ -87,10 +87,14 @@ const EDGE_OVERRIDDEN_STORES: readonly {
  * build at a time is four round trips.
  *
  * Every probe here reads the same source of truth the RUNTIME reads — the
- * `workspace/` directory the workspace marker detects, the
- * `skills/<name>/SKILL.md` layout `discoverSkillDirs` walks, the `memory.ts`
- * the manifest emitter probes — so the gate cannot drift into gating a feature
- * the app does not actually have, or missing one it does.
+ * `workspace/` directory the workspace marker detects, the `memory.ts` the
+ * manifest emitter probes — so the gate cannot drift into gating a feature the
+ * app does not actually have, or missing one it does.
+ *
+ * Skills are deliberately NOT here. Their bodies (and `plan.md` / `memory.md`)
+ * are bundled into `modules.edge.mjs` and served through `staticMarkerFs`, so
+ * an edge route ships them intact; a marker file too large to bundle fails the
+ * build in `collectRouteMarkerFiles` instead, during discovery.
  */
 export function collectEdgeCapabilityViolations(
   input: EdgeCapabilityInput,
@@ -169,18 +173,6 @@ export function collectEdgeCapabilityViolations(
   }
 
   for (const route of manifest.routes) {
-    const skillsDir = join(route.routeDir, "skills")
-    if (discoverSkillDirs(skillsDir).length > 0) {
-      violations.push({
-        capability: "skills",
-        source: appRelative(appRoot, skillsDir),
-        reason:
-          "skill bodies are read from disk when the route loads, and an edge runtime has no filesystem to read them from — the skills would vanish from the prompt with no error at all",
-        remedy:
-          "Inline the instructions into the route's `systemPrompt`, or serve them from a tool that fetches them",
-      })
-    }
-
     // Agent-route `memory.ts` is exactly what the manifest emitter probes for,
     // and what makes the runtime demand a memoryStore.
     const memoryFile = join(route.routeDir, "memory.ts")
@@ -324,9 +316,11 @@ export async function collectEdgeDependencyNotice(
  * marker-file reader — sees the same deterministic order.
  *
  * Exported because the static-module emitter records the same names into the
- * manifest (see `RouteStaticDiscovery.skills`), and the request-time guard
- * reads them back. A second copy of this rule is how the build gate and the
- * runtime guard would start disagreeing about what counts as a skill.
+ * manifest (see `RouteStaticDiscovery.skills`), the marker-file reader walks
+ * the same names to bundle each skill's body (see `collectRouteMarkerFiles`),
+ * and the request-time guard reads them back. A second copy of this rule is how
+ * the emitter, the bundler and the runtime guard would start disagreeing about
+ * what counts as a skill.
  */
 const VALID_SKILL_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 
