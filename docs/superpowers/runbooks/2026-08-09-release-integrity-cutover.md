@@ -352,7 +352,9 @@ done
 test ! -e /node_modules
 test ! -L /node_modules
 test -z "$(git status --porcelain=v1 --untracked-files=all)"
-git status --ignored --porcelain=v1 --untracked-files=all | node -e '
+# Collapsed mode on purpose: `--untracked-files=all` expands every ignored
+# tree into its files, so no line could ever end in `node_modules/`.
+git status --ignored --porcelain=v1 | node -e '
   let input = ""
   process.stdin.setEncoding("utf8")
   process.stdin.on("data", (chunk) => { input += chunk })
@@ -686,7 +688,13 @@ module's canonical evidence parser; independently validates canonical final
 authorization and duplicate recovery receipt JSON; checks list/numeric-ID
 correlation, body/tag/draft state, exact 45/47 asset counts and digests; hashes
 the downloaded evidence assets; and rechecks every candidate run attempt's
-`publish-npm` job. Its output is a credential-free mode-`0600` verification
+`publish-npm` job. Each duplicate's stored receipt names the reviewed commit
+that performed its quarantine, which may predate `RECOVERY_SHA` when the
+recovery surface was fixed between attempts; the verifier rebuilds the expected
+receipt and notice around that commit with every other field pinned to the
+evidence, exactly as `classifyDuplicateDraft` does, and the shell then
+requires that commit to be a merge commit that is an ancestor of
+`RECOVERY_SHA`. Its output is a credential-free mode-`0600` verification
 receipt.
 
 ```zsh
@@ -700,6 +708,8 @@ import { createHash } from "node:crypto"
 import { readFileSync, statSync } from "node:fs"
 import {
   canonicalDuplicateDraftEvidence,
+  canonicalRecoveryNotice,
+  canonicalRecoveryReceipt,
   parseDuplicateDraftEvidence,
 } from "./scripts/release/duplicate-draft-recovery.mjs"
 import { parseReleaseMarker } from "./scripts/release/metadata.mjs"
@@ -831,8 +841,47 @@ for (const [index, releaseId] of expectedIds.entries()) {
   if (release.id !== releaseId || release.tag_name !== expected.tagName || release.name !== "Dawn v0.8.22" || release.draft !== true || release.prerelease !== false || release.immutable !== false || release.target_commitish !== "main") throw new Error(`Release ${releaseId} mutable draft metadata is not exact`)
   if (index === 0) {
     if (release.body !== expected.body || assets.length !== 45) throw new Error("Canonical Release body or asset count changed")
-  } else if (release.body !== expected.noticeBytes || release.body.includes("DAWN_RELEASE_CONTROLLER_MARKER") || assets.length !== 47) {
-    throw new Error(`Duplicate Release ${releaseId} is not quarantined`)
+  }
+  let recoveryCommit = null
+  let expectedReceipt = null
+  if (index > 0) {
+    // The stored receipt records the commit that PERFORMED the quarantine,
+    // which may be an earlier reviewed recovery commit than RECOVERY_SHA.
+    // Mirror `classifyDuplicateDraft`: rebuild the expected receipt and notice
+    // around that commit with every other field still pinned to the evidence.
+    const receiptAsset = assets.find((asset) => asset.name === expected.receiptAssetName)
+    if (!receiptAsset || !Number.isSafeInteger(receiptAsset.id)) throw new Error(`Duplicate Release ${releaseId} recovery receipt asset is absent`)
+    const storedPath = `${verifyDir}/release-${releaseId}-asset-${receiptAsset.id}.bin`
+    requirePrivate(storedPath)
+    let stored
+    try {
+      stored = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(storedPath)))
+    } catch {
+      throw new Error(`Duplicate Release ${releaseId} stored receipt is not JSON`)
+    }
+    if (!stored || typeof stored !== "object" || Array.isArray(stored) || typeof stored.recoveryCommit !== "string" || !/^[0-9a-f]{40}$/u.test(stored.recoveryCommit)) {
+      throw new Error(`Duplicate Release ${releaseId} stored receipt names no recovery commit`)
+    }
+    recoveryCommit = stored.recoveryCommit
+    const { schemaVersion, ...pinned } = JSON.parse(expected.receiptBytes)
+    if (schemaVersion !== 1) throw new Error("Evidence recovery receipt schema is not exact")
+    expectedReceipt = canonicalRecoveryReceipt({ ...pinned, recoveryCommit })
+    const expectedNotice = canonicalRecoveryNotice({
+      repository: pinned.repository,
+      version: pinned.version,
+      canonicalReleaseId: pinned.canonicalReleaseId,
+      duplicateReleaseId: releaseId,
+      originalBodySha256: expected.originalBodySha256,
+      archiveAssetName: expected.archiveAssetName,
+      receiptAssetName: expected.receiptAssetName,
+      receiptSha256: sha256(expectedReceipt),
+    }).toString("utf8")
+    if (recoveryCommit === pinned.recoveryCommit && (expectedNotice !== expected.noticeBytes || !expectedReceipt.equals(Buffer.from(expected.receiptBytes, "utf8")))) {
+      throw new Error("Rebuilt recovery expectations diverge from the evidence")
+    }
+    if (release.body !== expectedNotice || release.body.includes("DAWN_RELEASE_CONTROLLER_MARKER") || assets.length !== 47) {
+      throw new Error(`Duplicate Release ${releaseId} is not quarantined`)
+    }
   }
   const ids = new Set()
   const names = new Set()
@@ -850,7 +899,7 @@ for (const [index, releaseId] of expectedIds.entries()) {
   if (index > 0) {
     for (const item of [
       { name: expected.archiveAssetName, sha256: expected.originalBodySha256, bytes: Buffer.from(evidence.releases.canonical.body, "utf8") },
-      { name: expected.receiptAssetName, sha256: expected.receiptSha256, bytes: Buffer.from(expected.receiptBytes, "utf8") },
+      { name: expected.receiptAssetName, sha256: sha256(expectedReceipt), bytes: expectedReceipt },
     ]) {
       const live = assets.find((asset) => asset.name === item.name)
       if (!live || live.digest !== `sha256:${item.sha256}`) throw new Error(`Release ${releaseId} recovery asset metadata changed`)
@@ -865,7 +914,7 @@ for (const [index, releaseId] of expectedIds.entries()) {
       recoveryAssets.push({ id: live.id, name: live.name, size: live.size, sha256: item.sha256 })
     }
   }
-  findings.push({ releaseId, tagName: release.tag_name, name: release.name, targetCommitish: release.target_commitish, draft: release.draft, prerelease: release.prerelease, immutable: release.immutable, bodySha256: sha256(Buffer.from(release.body, "utf8")), assetCount: assets.length, recoveryAssets })
+  findings.push({ releaseId, tagName: release.tag_name, name: release.name, targetCommitish: release.target_commitish, draft: release.draft, prerelease: release.prerelease, immutable: release.immutable, bodySha256: sha256(Buffer.from(release.body, "utf8")), assetCount: assets.length, recoveryCommit, recoveryAssets })
 }
 
 const runs = objectPages(`${verifyDir}/release-run-pages.json`, "workflow_runs")
@@ -897,6 +946,16 @@ const report = {
 process.stdout.write(canonicalBytes(report))
 NODE
 chmod 0600 "$VERIFY_DIR/independent-verification.json"
+env -u NODE_OPTIONS -u NODE_PATH node -e '
+  const report = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
+  const commits = report.releases.filter((release) => release.recoveryAssets.length > 0).map((release) => release.recoveryCommit)
+  if (commits.length !== 2 || commits.some((commit) => !/^[0-9a-f]{40}$/u.test(commit))) throw new Error("Recovery commits are not exact")
+  process.stdout.write(`${commits.join("\n")}\n`)
+' "$VERIFY_DIR/independent-verification.json" | while IFS= read -r recovery_commit; do
+  printf '%s\n' "$recovery_commit" | grep -Eq '^[0-9a-f]{40}$'
+  git merge-base --is-ancestor "$recovery_commit" "$RECOVERY_SHA"
+  test "$(git rev-list --parents --max-count=1 "$recovery_commit" | wc -w | tr -d ' ')" -eq 3
+done
 shasum -a 256 "$CAPTURE_PATH" "$APPLY_PATH" "$VERIFY_DIR/independent-verification.json"
 ```
 
@@ -914,7 +973,8 @@ Require all of the following before releasing the edit freeze:
   exact-tag candidate;
 - each original-body archive downloads byte-for-byte to the canonical original
   body, and each duplicate recovery receipt asset is canonical with the
-  recorded Release ID, asset ID, size, and SHA-256;
+  recorded Release ID, asset ID, size, and SHA-256, and names as its recovery
+  commit a merge commit that is an ancestor of `RECOVERY_SHA`;
 - the local final authorization receipt is canonical, credential-free,
   `atomic: false`, and scope-exact; each duplicate is honestly either
   `performed`, with this invocation's exact `preWriteFence` and
