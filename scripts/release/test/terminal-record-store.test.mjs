@@ -3,152 +3,20 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
 
-import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
 import {
   canonicalTerminalRecordBytes,
   parseOperatorRecoveryRecord,
   readTerminalRecord,
   terminalRecordPath,
 } from "../terminal-record-store.mjs"
-
-// biome-ignore lint/suspicious/noExportsInTest: fixture builders are imported by later terminal-record tasks
-export const VERSION = "0.8.22"
-// biome-ignore lint/suspicious/noExportsInTest: fixture builders are imported by later terminal-record tasks
-export const COMMIT_SHA = "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8"
-// biome-ignore lint/suspicious/noExportsInTest: fixture builders are imported by later terminal-record tasks
-export const TAG_OBJECT_SHA = "3".repeat(40)
-// biome-ignore lint/suspicious/noExportsInTest: fixture builders are imported by later terminal-record tasks
-export const REVIEWED_COMMIT = "4".repeat(40)
-const SHA256_A = "a".repeat(64)
-const SHA256_B = "b".repeat(64)
-const SHA256_C = "c".repeat(64)
-
-// biome-ignore lint/suspicious/noExportsInTest: fixture builders are imported by later terminal-record tasks
-export function attestationSet() {
-  return {
-    repository: "cacheplane/dawnai",
-    workflow: ".github/workflows/release.yml",
-    sourceRef: `refs/tags/v${VERSION}`,
-    commitSha: COMMIT_SHA,
-    workflowRunId: 33418085547,
-    runAttempt: 1,
-    subjects: [
-      {
-        subjectName: "manifest.json",
-        subjectSha256: SHA256_A,
-        bundleName: "manifest.json.intoto.jsonl",
-        bundleSha256: SHA256_B,
-      },
-      ...[...CANONICAL_RELEASE_PACKAGE_ORDER].sort().map((name) => ({
-        subjectName: `${name.replace("@", "").replace("/", "-")}-${VERSION}.tgz`,
-        subjectSha256: SHA256_A,
-        bundleName: `${name.replace("@", "").replace("/", "-")}-${VERSION}.tgz.intoto.jsonl`,
-        bundleSha256: SHA256_B,
-      })),
-    ],
-  }
-}
-
-// biome-ignore lint/suspicious/noExportsInTest: fixture builders are imported by later terminal-record tasks
-export function predecessorMarker() {
-  return {
-    schemaVersion: 1,
-    epoch: "fixed-group-v1",
-    revision: 2,
-    phase: "ESCROWED",
-    version: VERSION,
-    commitSha: COMMIT_SHA,
-    tag: `v${VERSION}`,
-    manifestSha256: SHA256_A,
-    releaseRecordSha256: SHA256_B,
-    baseAssetSetSha256: SHA256_C,
-    attestationSet: attestationSet(),
-    npmEvidenceSha256: null,
-    smoke: null,
-    audit: null,
-    abandonmentSha256: null,
-  }
-}
-
-function npmObservation(observedAt) {
-  return {
-    observedAt,
-    packages: [...CANONICAL_RELEASE_PACKAGE_ORDER].sort().map((name) => ({
-      name,
-      version: VERSION,
-      status: "ABSENT",
-      httpStatus: 404,
-      code: "E404",
-    })),
-  }
-}
-
-// biome-ignore lint/suspicious/noExportsInTest: fixture builders are imported by later terminal-record tasks
-export function record(overrides = {}) {
-  const base = {
-    schemaVersion: 1,
-    kind: "abandoned-prepublication",
-    version: VERSION,
-    commitSha: COMMIT_SHA,
-    tag: { name: `v${VERSION}`, objectSha: TAG_OBJECT_SHA, commitSha: COMMIT_SHA },
-    reason: "The tag-era release workflow cannot observe draft Releases; superseded by 0.8.23.",
-    predecessor: {
-      state: "CANDIDATE_ESCROWED",
-      releaseId: 379991871,
-      releaseStatus: "draft",
-      bodySha256: SHA256_A,
-      marker: predecessorMarker(),
-      artifact: {
-        manifestSha256: SHA256_A,
-        releaseRecordSha256: SHA256_B,
-        baseAssetSetSha256: SHA256_C,
-        attestationSet: attestationSet(),
-      },
-    },
-    evidence: {
-      escrowAssets: Array.from({ length: 45 }, (_, index) => ({
-        id: 1000 + index,
-        name:
-          index === 0
-            ? "manifest.json"
-            : index === 1
-              ? "release-record.json"
-              : index === 2
-                ? "manifest.json.intoto.jsonl"
-                : `pkg-${index}.tgz`,
-        sha256: SHA256_A,
-      })),
-      npm: {
-        observations: [
-          npmObservation("2026-09-03T18:00:00.000Z"),
-          npmObservation("2026-09-03T18:01:05.000Z"),
-        ],
-      },
-      releaseRuns: [
-        {
-          workflowRunId: 33418085547,
-          runAttempt: 1,
-          status: "completed",
-          publishJobStarted: false,
-        },
-      ],
-      duplicateRecovery: {
-        duplicates: [
-          { releaseId: 379982100, receiptAssetId: 542241526, receiptSha256: SHA256_B },
-          { releaseId: 379986168, receiptAssetId: 542244137, receiptSha256: SHA256_C },
-        ],
-        finalAuthorizationReceiptSha256: SHA256_A,
-      },
-    },
-    authority: {
-      mode: "operator-recovery",
-      operator: "blove",
-      capturedAt: "2026-09-03T18:02:00.000Z",
-      reviewedCommit: REVIEWED_COMMIT,
-    },
-  }
-  return { ...base, ...overrides }
-}
+import {
+  attestationSet,
+  COMMIT_SHA,
+  npmObservation,
+  record,
+  TAG_OBJECT_SHA,
+  VERSION,
+} from "./support/terminal-record-fixture.mjs"
 
 test("canonical bytes are sorted-key JSON with one trailing newline", () => {
   const bytes = canonicalTerminalRecordBytes(record())
@@ -219,6 +87,50 @@ test("rejects npm observations that are not two absent sweeps at least sixty sec
   )
 })
 
+test("rejects npm observations that are out of order", () => {
+  const value = record()
+  const outOfOrder = {
+    ...value.evidence,
+    npm: {
+      observations: [
+        npmObservation("2026-09-03T18:05:00.000Z"),
+        npmObservation("2026-09-03T18:00:00.000Z"),
+      ],
+    },
+  }
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(canonicalTerminalRecordBytes(record({ evidence: outOfOrder }))),
+    /out of order/iu,
+  )
+})
+
+test("rejects a record whose authority captured before its second npm observation", () => {
+  const value = record()
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({ authority: { ...value.authority, capturedAt: "2026-09-03T18:00:30.000Z" } }),
+        ),
+      ),
+    /precedes its evidence/iu,
+  )
+})
+
+test("rejects a record whose evidence span exceeds fifteen minutes", () => {
+  const value = record()
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({ authority: { ...value.authority, capturedAt: "2026-09-03T18:20:00.000Z" } }),
+        ),
+      ),
+    /fifteen minutes/iu,
+  )
+})
+
 test("rejects a record whose predecessor is not the escrowed canonical draft", () => {
   const value = record()
   const early = { ...value.predecessor, state: "CANDIDATE_TAGGED" }
@@ -228,9 +140,188 @@ test("rejects a record whose predecessor is not the escrowed canonical draft", (
   )
 })
 
-test("enforces the byte cap", () => {
+test("rejects a predecessor marker that is not ESCROWED", () => {
+  const value = record()
+  const attaching = {
+    ...value.predecessor.marker,
+    phase: "ATTACHING",
+    baseAssetSetSha256: null,
+    attestationSet: null,
+  }
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({ predecessor: { ...value.predecessor, marker: attaching } }),
+        ),
+      ),
+    /marker/iu,
+  )
+})
+
+test("rejects a predecessor artifact whose manifest digest disagrees with the marker", () => {
+  const value = record()
+  const artifact = { ...value.predecessor.artifact, manifestSha256: "9".repeat(64) }
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(record({ predecessor: { ...value.predecessor, artifact } })),
+      ),
+    /does not match its marker/iu,
+  )
+})
+
+test("rejects a tag whose name, objectSha, or commitSha disagree with the record", () => {
+  const value = record()
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(record({ tag: { ...value.tag, name: "v0.8.23" } })),
+      ),
+    /tag/iu,
+  )
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(record({ tag: { ...value.tag, objectSha: "z".repeat(40) } })),
+      ),
+    /tag/iu,
+  )
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(record({ tag: { ...value.tag, commitSha: "9".repeat(40) } })),
+      ),
+    /tag/iu,
+  )
+})
+
+test("rejects release runs that claim a publish job started", () => {
+  const value = record()
+  const started = [{ ...value.evidence.releaseRuns[0], publishJobStarted: true }]
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({ evidence: { ...value.evidence, releaseRuns: started } }),
+        ),
+      ),
+    /release run/iu,
+  )
+})
+
+test("rejects a release run that has not completed", () => {
+  const value = record()
+  const queued = [{ ...value.evidence.releaseRuns[0], status: "queued" }]
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({ evidence: { ...value.evidence, releaseRuns: queued } }),
+        ),
+      ),
+    /release run/iu,
+  )
+})
+
+test("rejects duplicate release runs with the same workflow run and attempt", () => {
+  const value = record()
+  const runs = [value.evidence.releaseRuns[0], { ...value.evidence.releaseRuns[0] }]
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({ evidence: { ...value.evidence, releaseRuns: runs } }),
+        ),
+      ),
+    /release run/iu,
+  )
+})
+
+test("rejects an authority mode other than operator-recovery", () => {
+  const value = record()
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(record({ authority: { ...value.authority, mode: "other" } })),
+      ),
+    /authority mode/iu,
+  )
+})
+
+test("rejects duplicate escrow asset names", () => {
+  const value = record()
+  const assets = value.evidence.escrowAssets.map((asset, index) =>
+    index === 1 ? { ...asset, name: value.evidence.escrowAssets[0].name } : asset,
+  )
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({ evidence: { ...value.evidence, escrowAssets: assets } }),
+        ),
+      ),
+    /escrow asset/iu,
+  )
+})
+
+test("rejects an empty escrow asset name", () => {
+  const value = record()
+  const assets = value.evidence.escrowAssets.map((asset, index) =>
+    index === 0 ? { ...asset, name: "" } : asset,
+  )
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({ evidence: { ...value.evidence, escrowAssets: assets } }),
+        ),
+      ),
+    /escrow asset/iu,
+  )
+})
+
+test("rejects a reason containing control characters", () => {
+  const reasonWithControlCharacter = `bad${String.fromCharCode(7)}reason`
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(record({ reason: reasonWithControlCharacter })),
+      ),
+    /reason/iu,
+  )
+})
+
+test("rejects identical duplicate-recovery entries", () => {
+  const value = record()
+  const duplicates = [
+    value.evidence.duplicateRecovery.duplicates[0],
+    { ...value.evidence.duplicateRecovery.duplicates[0] },
+  ]
+  assert.throws(
+    () =>
+      parseOperatorRecoveryRecord(
+        canonicalTerminalRecordBytes(
+          record({
+            evidence: {
+              ...value.evidence,
+              duplicateRecovery: { ...value.evidence.duplicateRecovery, duplicates },
+            },
+          }),
+        ),
+      ),
+    /duplicate/iu,
+  )
+})
+
+test("rejects a reason exceeding its bounded length", () => {
+  const value = record({ reason: "x".repeat(5 * 1024) })
+  assert.throws(() => parseOperatorRecoveryRecord(canonicalTerminalRecordBytes(value)), /reason/iu)
+})
+
+test("canonicalTerminalRecordBytes enforces the byte cap", () => {
   const value = record({ reason: "x".repeat(600 * 1024) })
-  assert.throws(() => parseOperatorRecoveryRecord(canonicalTerminalRecordBytes(value)), /byte/iu)
+  assert.throws(() => canonicalTerminalRecordBytes(value), /byte/iu)
 })
 
 test("terminalRecordPath is exact", () => {
@@ -242,7 +333,7 @@ test("readTerminalRecord returns null when the path is absent and parses it when
   const bytes = canonicalTerminalRecordBytes(record())
   const absentGit = {
     async listTree() {
-      return ["package.json"]
+      return "package.json\n"
     },
     async showFile() {
       throw new Error("must not be called")
@@ -251,7 +342,7 @@ test("readTerminalRecord returns null when the path is absent and parses it when
   assert.equal(await readTerminalRecord({ git: absentGit, ref: "HEAD", version: VERSION }), null)
   const presentGit = {
     async listTree() {
-      return ["package.json", "scripts/release/terminal-records/v0.8.22.json"]
+      return "package.json\nscripts/release/terminal-records/v0.8.22.json\n"
     },
     async showFile({ ref, path }) {
       assert.equal(ref, "HEAD")
@@ -264,10 +355,22 @@ test("readTerminalRecord returns null when the path is absent and parses it when
   assert.equal(createHash("sha256").update(bytes).digest("hex"), parsed.sha256)
 })
 
+test("readTerminalRecord rejects a tree listing that is not newline-delimited text", async () => {
+  const git = {
+    async listTree() {
+      return ["package.json", "scripts/release/terminal-records/v0.8.22.json"]
+    },
+    async showFile() {
+      throw new Error("must not be called")
+    },
+  }
+  await assert.rejects(readTerminalRecord({ git, ref: "HEAD", version: VERSION }), /tree listing/iu)
+})
+
 test("readTerminalRecord rejects a present but malformed record", async () => {
   const git = {
     async listTree() {
-      return ["scripts/release/terminal-records/v0.8.22.json"]
+      return "scripts/release/terminal-records/v0.8.22.json\n"
     },
     async showFile() {
       return "{}\n"
@@ -276,5 +379,15 @@ test("readTerminalRecord rejects a present but malformed record", async () => {
   await assert.rejects(
     readTerminalRecord({ git, ref: "HEAD", version: VERSION }),
     /Terminal record/u,
+  )
+})
+
+test("fixture identity constants line up with the record fixture", () => {
+  const value = record()
+  assert.equal(value.commitSha, COMMIT_SHA)
+  assert.equal(value.tag.objectSha, TAG_OBJECT_SHA)
+  assert.equal(
+    value.predecessor.marker.attestationSet.subjects.length,
+    attestationSet().subjects.length,
   )
 })
