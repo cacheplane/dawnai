@@ -168,7 +168,11 @@ export async function discoverScheduledCandidate({
       version: tag.version,
     })
     if (terminalRecord === null) continue
-    if (terminalRecord.commitSha !== tag.commitSha || terminalRecord.tag.name !== tag.tag) {
+    if (
+      terminalRecord.commitSha !== tag.commitSha ||
+      terminalRecord.tag.name !== tag.tag ||
+      terminalRecord.tag.objectSha !== tag.tagObjectSha
+    ) {
       throw new Error(`Terminal record for ${tag.tag} does not match the tag peel`)
     }
     recorded.set(tag.tag, terminalRecord)

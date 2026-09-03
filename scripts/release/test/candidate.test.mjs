@@ -1953,7 +1953,7 @@ function ciFixture(attempts) {
 }
 
 test("scheduled discovery classifies a recorded version as terminal and lets a newer candidate win", async () => {
-  const repository = recordedRepository(recordedCommits(RECORD_SHA), [terminalRecordFixture()])
+  const repository = recordedRepository(recordedCommits(RECORD_SHA), [boundTerminalRecord()])
   const github = githubFixture({
     tags: [tagRef(RECORD_VERSION, RECORD_SHA), tagRef("0.8.23", SHA_23)],
   })
@@ -1990,7 +1990,7 @@ test("scheduled discovery still blocks a newer candidate behind an unrecorded ol
 })
 
 test("scheduled discovery rejects a record whose commit differs from the tag peel", async () => {
-  const repository = recordedRepository(recordedCommits(SHA_22), [terminalRecordFixture()])
+  const repository = recordedRepository(recordedCommits(SHA_22), [boundTerminalRecord()])
   const github = githubFixture({
     tags: [tagRef(RECORD_VERSION, SHA_22), tagRef("0.8.23", SHA_23)],
   })
@@ -2007,8 +2007,28 @@ test("scheduled discovery rejects a record whose commit differs from the tag pee
   )
 })
 
+test("scheduled discovery rejects a record bound to another annotated tag object", async () => {
+  const repository = recordedRepository(recordedCommits(RECORD_SHA), [
+    boundTerminalRecord({ tag: { objectSha: "9".repeat(40) } }),
+  ])
+  const github = githubFixture({
+    tags: [tagRef(RECORD_VERSION, RECORD_SHA), tagRef("0.8.23", SHA_23)],
+  })
+
+  await assert.rejects(
+    discoverScheduledCandidate({
+      terminalRecordRef: RECORD_REF,
+      inventory: repository.inventory,
+      git: repository.git,
+      github,
+      marker: ACTIVE_MARKER,
+    }),
+    /tag peel/u,
+  )
+})
+
 test("a visible draft for a recorded version is not inspected", async () => {
-  const value = terminalRecordFixture()
+  const value = boundTerminalRecord()
   const repository = recordedRepository(recordedCommits(RECORD_SHA), [value])
   const escrowed = {
     id: value.predecessor.releaseId,
@@ -2064,6 +2084,14 @@ test("inspectAbandonmentRelease accepts an operator-recovery tombstone on a visi
 
   assert.deepEqual(result, selectedCandidate("0.8.23", SHA_23, "CANDIDATE_VALIDATED"))
 })
+
+function boundTerminalRecord({ tag = {}, ...overrides } = {}) {
+  const value = terminalRecordFixture(overrides)
+  return {
+    ...value,
+    tag: { ...value.tag, objectSha: tagObjectSha(RECORD_VERSION), ...tag },
+  }
+}
 
 function recordedCommits(candidateSha) {
   return [
