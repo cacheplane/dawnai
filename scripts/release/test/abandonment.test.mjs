@@ -6,6 +6,8 @@ import {
   canonicalAbandonmentBytes,
   canonicalAbandonmentReleaseBody,
   evaluateAbandonment,
+  parseAbandonmentReleaseBody,
+  parseAnyAbandonmentRecord,
   recordAbandonment,
 } from "../abandonment.mjs"
 import { createAbandonmentArtifactContext } from "../abandonment-handoff.mjs"
@@ -16,6 +18,12 @@ import {
   parseReleaseMarker,
   releaseBodySha256,
 } from "../metadata.mjs"
+import { canonicalTerminalRecordBytes } from "../terminal-record-store.mjs"
+import {
+  COMMIT_SHA as TERMINAL_COMMIT_SHA,
+  VERSION as TERMINAL_VERSION,
+  record as terminalRecord,
+} from "./support/terminal-record-fixture.mjs"
 
 const VERSION = "0.8.22"
 const SHA = "a".repeat(40)
@@ -1052,3 +1060,61 @@ function sha256(bytes) {
 function compareText(left, right) {
   return left === right ? 0 : left < right ? -1 : 1
 }
+
+test("operator-recovery records round-trip through the abandonment body", () => {
+  const tombstone = terminalRecord()
+  const bytes = canonicalTerminalRecordBytes(tombstone)
+  assert.ok(canonicalAbandonmentBytes(tombstone).equals(bytes))
+  const parsed = parseAnyAbandonmentRecord(tombstone)
+  assert.equal(parsed.authority.mode, "operator-recovery")
+  assert.equal(Object.hasOwn(parsed, "sha256"), false)
+  const marker = abandonmentReleaseMarker({
+    candidate: { version: TERMINAL_VERSION, commitSha: TERMINAL_COMMIT_SHA },
+    artifact: tombstone.predecessor.artifact,
+    abandonmentSha256: sha256(bytes),
+    previousMarker: tombstone.predecessor.marker,
+  })
+  const body = canonicalAbandonmentReleaseBody({
+    marker,
+    tombstone,
+    previousMarker: tombstone.predecessor.marker,
+  })
+  const reparsed = parseAbandonmentReleaseBody(body)
+  assert.deepEqual(reparsed.authority, tombstone.authority)
+  assert.deepEqual(reparsed.predecessor, tombstone.predecessor)
+})
+
+test("a tampered operator-recovery tombstone is rejected by the body parser", () => {
+  const tombstone = terminalRecord()
+  const bytes = canonicalTerminalRecordBytes(tombstone)
+  const marker = abandonmentReleaseMarker({
+    candidate: { version: TERMINAL_VERSION, commitSha: TERMINAL_COMMIT_SHA },
+    artifact: tombstone.predecessor.artifact,
+    abandonmentSha256: sha256(bytes),
+    previousMarker: tombstone.predecessor.marker,
+  })
+  const body = canonicalAbandonmentReleaseBody({
+    marker,
+    tombstone,
+    previousMarker: tombstone.predecessor.marker,
+  })
+  let tampered = body.replace(tombstone.authority.operator, "mallory")
+  if (tampered === body) {
+    const markerIndex = body.indexOf("END_DAWN_ABANDONMENT_RECORD_BASE64")
+    tampered = `${body.slice(0, markerIndex - 4)}AAAA${body.slice(markerIndex)}`
+  }
+  assert.notEqual(tampered, body)
+  assert.throws(() => parseAbandonmentReleaseBody(tampered))
+})
+
+test("a record without operator authority still requires the environment approval schema", () => {
+  const { authority: _authority, ...legacyShaped } = terminalRecord()
+  assert.throws(
+    () => parseAnyAbandonmentRecord({ ...legacyShaped, approval: {} }),
+    /Invalid abandonment/u,
+  )
+  assert.throws(
+    () => parseAnyAbandonmentRecord({ ...terminalRecord(), authority: { mode: "other" } }),
+    /Invalid abandonment/u,
+  )
+})

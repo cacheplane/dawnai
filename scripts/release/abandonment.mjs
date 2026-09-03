@@ -11,6 +11,11 @@ import {
   releaseBodySha256,
 } from "./metadata.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
+import {
+  canonicalTerminalRecordBytes,
+  OPERATOR_RECOVERY_MODE,
+  parseOperatorRecoveryRecord,
+} from "./terminal-record-store.mjs"
 import { parseAbandonmentRecord } from "./terminal-records.mjs"
 
 const EXPECTED_ENVIRONMENT = "release-abandonment"
@@ -99,6 +104,15 @@ export async function evaluateAbandonment(input) {
 
 export function canonicalAbandonmentBytes(value) {
   const source = snapshotJson(value)
+  if (
+    isRecord(source) &&
+    isRecord(source.authority) &&
+    source.authority.mode === OPERATOR_RECOVERY_MODE
+  ) {
+    const bytes = canonicalTerminalRecordBytes(source)
+    parseOperatorRecoveryRecord(bytes)
+    return bytes
+  }
   const record = parseAbandonmentRecord(source, {
     candidate: { version: source.version, commitSha: source.commitSha },
     environment: EXPECTED_ENVIRONMENT,
@@ -152,11 +166,12 @@ export function canonicalAbandonmentReleaseBody(input) {
     ...(predecessorMarker === null ? {} : { previousMarker: predecessorMarker }),
   })
   const releaseMarker = parseReleaseMarker(body)
+  const recordTag = isRecord(record.tag) ? record.tag.name : record.tag
   if (
     releaseMarker.phase !== "ABANDONED_PREPUBLICATION" ||
     record.version !== releaseMarker.version ||
     record.commitSha !== releaseMarker.commitSha ||
-    record.tag !== releaseMarker.tag ||
+    recordTag !== releaseMarker.tag ||
     sha256(tombstoneBytes) !== releaseMarker.abandonmentSha256
   ) {
     throw new TypeError("Abandonment Release body evidence does not match its marker")
@@ -1028,8 +1043,28 @@ function parseCanonicalAbandonmentBytes(bytes) {
   if (!canonical.equals(bytes)) {
     throw new TypeError("Abandonment record bytes are not canonical")
   }
-  return parseAbandonmentRecord(value, {
-    candidate: { version: value.version, commitSha: value.commitSha },
+  return parseAnyAbandonmentRecord(value)
+}
+
+/**
+ * Parse either tombstone variant. An operator-recovery record (see
+ * terminal-record-store.mjs) is authorized by a reviewed commit and carries
+ * `authority.mode`; every other record must satisfy the environment-approval
+ * schema in terminal-records.mjs. The two schemas share `predecessor`.
+ */
+export function parseAnyAbandonmentRecord(value) {
+  const source = snapshotJson(value)
+  if (
+    isRecord(source) &&
+    isRecord(source.authority) &&
+    source.authority.mode === OPERATOR_RECOVERY_MODE
+  ) {
+    const parsed = parseOperatorRecoveryRecord(canonicalAbandonmentBytes(source))
+    const { sha256: _digest, ...record } = parsed
+    return deepFreeze(record)
+  }
+  return parseAbandonmentRecord(source, {
+    candidate: { version: source?.version, commitSha: source?.commitSha },
     environment: EXPECTED_ENVIRONMENT,
     packageNames: CANONICAL_PACKAGE_NAMES,
   })
