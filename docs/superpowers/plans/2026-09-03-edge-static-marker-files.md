@@ -1190,7 +1190,7 @@ git commit -m "feat(cli): stop gating skills off the hono and vercel targets"
 
 This is the end-to-end proof: the same fixture, built as a node manifest and as an edge manifest, produces the same skills prompt fragment, the same `readSkill` result, the same route memory block, and the same seeded todos.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `packages/cli/test/static-edge-marker-files.test.ts`:
 
@@ -1414,7 +1414,7 @@ describe("bundled marker files — node vs edge", () => {
 })
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/static-edge-marker-files.test.ts`
 Expected: PASS. Two likely adjustments if it fails, and what each means:
@@ -1422,7 +1422,7 @@ Expected: PASS. Two likely adjustments if it fails, and what each means:
 - `todos` is `undefined` on both runs: the final state key may not be `todos` at the top level of the `runs/wait` body; read it from `GET /threads/:id/state` `.values.todos` instead, the way `static-edge-equivalence.test.ts` does.
 - Any difference between `edgeRun` and `nodeRun` is a real bug in Tasks 5 or 6; fix the source, not the assertion.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add packages/cli/test/static-edge-marker-files.test.ts
