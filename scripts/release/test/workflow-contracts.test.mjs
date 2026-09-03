@@ -45,9 +45,12 @@ const EXECUTABLE_ALLOWLIST = JSON.parse(
 )
 const SCRIPT_PIN_FIXTURE = "scripts/release/test/fixtures/release-script-hashes.json"
 const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
-// Exact fixture bytes at Task 11's starting HEAD e5cf1986c0f2cb2f55b891a7c92fa7291289dfdb.
+// Exact fixture bytes after the reviewed artifact-download Accept fix
+// (scripts/release/adapters/github.mjs; GitHub began answering HTTP 415 to
+// application/octet-stream on the artifact zip endpoint on 2026-09-03).
+// Previously pinned at Task 11's starting HEAD e5cf1986c0f2cb2f55b891a7c92fa7291289dfdb.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "b6d939f6ad17ffa011f600fda31792716c73baf5a7cd4e3540dfbe30c75d727c"
+  "1d0c67a4da9dd7fc33b8a8938dd672ae215a5db9cd8ace27756a72a0d5531f1f"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
