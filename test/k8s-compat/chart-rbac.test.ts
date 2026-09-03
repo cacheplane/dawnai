@@ -84,5 +84,8 @@ describe("dawn-orchestrator Role parity", () => {
         [...REQUIRED_KUBE_PERMISSIONS].sort((a, b) => key(a).localeCompare(key(b))),
       )
     },
+    // `helm template` takes ~2s on a loaded CI runner and has exceeded the 5s
+    // default twice in a row; give the external render a real budget.
+    30_000,
   )
 })
