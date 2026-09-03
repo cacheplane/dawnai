@@ -168,6 +168,42 @@ test("capture constructs production dependencies only after validation and durab
   assert.deepEqual(await temporaryFiles(root), [])
 })
 
+test("failures surface a recovery code but never a foreign error code", async (t) => {
+  // An operator holding an edit freeze must be able to tell "recapture" from
+  // "the PATCH may have landed" without instrumenting the module.
+  const root = await createPrivateRepository(t)
+  const recoveryError = Object.assign(new Error("internal detail"), {
+    name: "DuplicateDraftRecoveryCaptureError",
+    code: "RELEASE_RUNS_UNAVAILABLE",
+  })
+  const foreignError = Object.assign(new Error("internal detail"), { code: "EIO" })
+
+  for (const [failure, expected] of [
+    [recoveryError, "Duplicate draft recovery failed. (code: RELEASE_RUNS_UNAVAILABLE)\n"],
+    [foreignError, "Duplicate draft recovery failed.\n"],
+  ]) {
+    const stdout = sink()
+    const stderr = sink()
+    const result = await runDuplicateDraftRecoveryCli({
+      argv: ["capture", "--reviewed-commit", reviewedCommit(root), "--output", CAPTURE_PATH],
+      cwd: root,
+      environment: { GITHUB_TOKEN: "capture-token" },
+      stdout,
+      stderr,
+      dependencies: {
+        randomUUID: () => UUID,
+        createDuplicateDraftRecoveryReader: () => Object.freeze({ kind: "reader" }),
+        captureDuplicateDraftRecoveryEvidence: async () => {
+          throw failure
+        },
+      },
+    })
+    assert.equal(result, 1)
+    assert.equal(stderr.text, expected)
+    assert.equal(stderr.text.includes("internal detail"), false)
+  }
+})
+
 test("capture refuses to write evidence containing the GitHub credential", async (t) => {
   // Capture evidence carries the canonical Release body verbatim, so the
   // credential-free guarantee is enforced on the exact bytes about to be
