@@ -61,6 +61,18 @@ describe("staticMarkerFs", () => {
       expect(() => fs.readFileSync(path)).not.toThrow()
       expect(() => fs.readdirSync(path)).not.toThrow()
     }
+    expect(fs.existsSync("")).toBe(false)
+    expect(fs.isDirectorySync("")).toBe(false)
+    expect(fs.readdirSync("")).toEqual([])
+    expect(fs.readFileSync("")).toBeUndefined()
+  })
+
+  it("lets an exact key win over an implied directory", () => {
+    const clash = staticMarkerFs({ "/a/b": "file", "/a/b/c": "nested" })
+    expect(clash.existsSync("/a/b")).toBe(true)
+    expect(clash.isDirectorySync("/a/b")).toBe(false)
+    expect(clash.readdirSync("/a/b")).toEqual([])
+    expect(clash.readFileSync("/a/b/c")).toBe("nested")
   })
 
   it("serves an empty map as an empty filesystem", () => {
