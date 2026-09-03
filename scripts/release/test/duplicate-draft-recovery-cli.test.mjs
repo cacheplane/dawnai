@@ -1364,35 +1364,24 @@ function stubStream() {
 }
 
 test("exports the recovery CLI path, policy, output, runtime, and error helpers for reuse", () => {
-  // Read named exports through a plain local object (not the namespace import
-  // itself) so the lookup stays a static-friendly indirection.
-  const exported = {
-    normalizePrivatePath: recoveryCliModule.normalizePrivatePath,
-    resolveInvocationPaths: recoveryCliModule.resolveInvocationPaths,
-    resolvePrivatePath: recoveryCliModule.resolvePrivatePath,
-    resolveRepositoryRoot: recoveryCliModule.resolveRepositoryRoot,
-    assertReviewedIgnorePolicy: recoveryCliModule.assertReviewedIgnorePolicy,
-    assertPrivatePathBoundary: recoveryCliModule.assertPrivatePathBoundary,
-    assertUnusedOutput: recoveryCliModule.assertUnusedOutput,
-    readBoundedPrivateFile: recoveryCliModule.readBoundedPrivateFile,
-    reserveExclusiveOutput: recoveryCliModule.reserveExclusiveOutput,
-    environmentToken: recoveryCliModule.environmentToken,
-    writeSuccessBestEffort: recoveryCliModule.writeSuccessBestEffort,
-    normalizeRuntime: recoveryCliModule.normalizeRuntime,
-    diagnosticCodeSuffix: recoveryCliModule.diagnosticCodeSuffix,
-    RecoveryOutputCleanupUncertainError: recoveryCliModule.RecoveryOutputCleanupUncertainError,
-    RecoveryInputError: recoveryCliModule.RecoveryInputError,
-  }
+  assert.equal(typeof recoveryCliModule.normalizePrivatePath, "function")
+  assert.equal(typeof recoveryCliModule.resolveInvocationPaths, "function")
+  assert.equal(typeof recoveryCliModule.resolvePrivatePath, "function")
+  assert.equal(typeof recoveryCliModule.resolveRepositoryRoot, "function")
+  assert.equal(typeof recoveryCliModule.assertReviewedIgnorePolicy, "function")
+  assert.equal(typeof recoveryCliModule.assertPrivatePathBoundary, "function")
+  assert.equal(typeof recoveryCliModule.assertUnusedOutput, "function")
+  assert.equal(typeof recoveryCliModule.readBoundedPrivateFile, "function")
+  assert.equal(typeof recoveryCliModule.reserveExclusiveOutput, "function")
+  assert.equal(typeof recoveryCliModule.environmentToken, "function")
+  assert.equal(typeof recoveryCliModule.writeSuccessBestEffort, "function")
+  assert.equal(typeof recoveryCliModule.normalizeRuntime, "function")
+  assert.equal(typeof recoveryCliModule.diagnosticCodeSuffix, "function")
 
-  for (const name of Object.keys(exported)) {
-    if (name === "RecoveryOutputCleanupUncertainError" || name === "RecoveryInputError") continue
-    assert.equal(typeof exported[name], "function", `${name} should be an exported function`)
-  }
-
-  for (const name of ["RecoveryOutputCleanupUncertainError", "RecoveryInputError"]) {
-    assert.equal(typeof exported[name], "function", `${name} should be an exported class`)
-    assert.ok(exported[name].prototype instanceof Error, `${name} should extend Error`)
-  }
+  assert.equal(typeof recoveryCliModule.RecoveryOutputCleanupUncertainError, "function")
+  assert.ok(recoveryCliModule.RecoveryOutputCleanupUncertainError.prototype instanceof Error)
+  assert.equal(typeof recoveryCliModule.RecoveryInputError, "function")
+  assert.ok(recoveryCliModule.RecoveryInputError.prototype instanceof Error)
 
   assert.equal(recoveryCliModule.RECOVERY_DIRECTORY, ".dawn/release-recovery")
   assert.equal(
@@ -1429,6 +1418,37 @@ test("normalizeRuntime with a custom allowedDependencies list exposes the caller
   assert.equal("applyDuplicateDraftRecovery" in runtime, false)
 })
 
+test("normalizeRuntime with a copy of DEPENDENCY_FIELDS yields the same defaults as passing no allowedDependencies at all", () => {
+  const withDefaultList = recoveryCliModule.normalizeRuntime({
+    cwd: process.cwd(),
+    environment: {},
+    stdout: stubStream(),
+    stderr: stubStream(),
+    dependencies: {},
+  })
+  const withCopiedList = recoveryCliModule.normalizeRuntime({
+    cwd: process.cwd(),
+    environment: {},
+    stdout: stubStream(),
+    stderr: stubStream(),
+    dependencies: {},
+    allowedDependencies: [...recoveryCliModule.DEPENDENCY_FIELDS],
+  })
+
+  for (const name of recoveryCliModule.DEPENDENCY_FIELDS) {
+    if (name === "runGit") {
+      assert.equal(typeof withDefaultList.runGit, "function")
+      assert.equal(typeof withCopiedList.runGit, "function")
+      continue
+    }
+    assert.equal(
+      withCopiedList[name],
+      withDefaultList[name],
+      `${name} should default identically under a copied allow-list`,
+    )
+  }
+})
+
 test("normalizeRuntime rejects an unknown dependency name under both the default and a custom allow-list", () => {
   assert.throws(
     () =>
@@ -1454,4 +1474,27 @@ test("normalizeRuntime rejects an unknown dependency name under both the default
       }),
     (error) => error instanceof recoveryCliModule.RecoveryInputError,
   )
+})
+
+test("normalizeRuntime rejects a malformed allowedDependencies list", () => {
+  const cases = [
+    ["a non-array string", "fileSystem"],
+    ["an empty array", []],
+    ["duplicate names", ["fileSystem", "fileSystem", "runGit", "resolveRepositoryRoot"]],
+  ]
+  for (const [label, allowedDependencies] of cases) {
+    assert.throws(
+      () =>
+        recoveryCliModule.normalizeRuntime({
+          cwd: process.cwd(),
+          environment: {},
+          stdout: stubStream(),
+          stderr: stubStream(),
+          dependencies: {},
+          allowedDependencies,
+        }),
+      (error) => error instanceof recoveryCliModule.RecoveryInputError,
+      `${label} should be rejected`,
+    )
+  }
 })

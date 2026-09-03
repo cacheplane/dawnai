@@ -261,6 +261,33 @@ export function diagnosticCodeSuffix(error) {
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/u.test(code) ? ` (code: ${code})` : ""
 }
 
+// Every duplicate-draft-specific dependency's production implementation,
+// keyed by its DEPENDENCY_FIELDS name. `runGit` is intentionally excluded:
+// it is always wrapped through `createScrubbedGitRunner` before the loop
+// below runs, so it never falls through to a table lookup.
+const DEPENDENCY_DEFAULTS = Object.freeze({
+  fileSystem: defaultFileSystem,
+  randomUUID: defaultRandomUUID,
+  resolveRepositoryRoot,
+  applyDuplicateDraftRecovery: defaultApplyDuplicateDraftRecovery,
+  canonicalDuplicateDraftEvidence: defaultCanonicalDuplicateDraftEvidence,
+  captureDuplicateDraftRecoveryEvidence: defaultCaptureDuplicateDraftRecoveryEvidence,
+  createDuplicateDraftRecoveryReader: defaultCreateDuplicateDraftRecoveryReader,
+  createDuplicateDraftRecoveryWriter: defaultCreateDuplicateDraftRecoveryWriter,
+  createNormalProductionRecoveryObserver,
+  createProductionRecoveryObserver,
+  parseDuplicateDraftEvidence: defaultParseDuplicateDraftEvidence,
+})
+
+/**
+ * Build the frozen runtime the recovery CLI and its sibling one-time
+ * commands execute against. `allowedDependencies` names which dependency
+ * overrides `dependencies` may supply (defaults to the full duplicate-draft
+ * DEPENDENCY_FIELDS list); an allowed name with neither a supplied value nor
+ * an entry in DEPENDENCY_DEFAULTS (i.e. a caller-specific name the table
+ * does not know) is simply absent from the returned runtime rather than set
+ * to `undefined`.
+ */
 export function normalizeRuntime({
   cwd,
   environment,
@@ -285,71 +312,24 @@ export function normalizeRuntime({
   validateDependencies(dependencies, allowedDependencies)
   const dependency = (name, fallback) => dataProperty(dependencies, name) ?? fallback
   const runGit = createScrubbedGitRunner(dependency("runGit", defaultGitExecutor))
-  if (allowedDependencies !== DEPENDENCY_FIELDS) {
-    // A caller-supplied allow-list only guarantees the three shared
-    // dependencies below; every other allowed name is exposed verbatim
-    // (with no duplicate-draft-specific default) when the caller provided it.
-    const runtime = {
-      cwd,
-      environment,
-      stdout,
-      stderr,
-      fileSystem: dependency("fileSystem", defaultFileSystem),
-      runGit,
-      resolveRepositoryRoot: dependency("resolveRepositoryRoot", resolveRepositoryRoot),
-    }
-    for (const name of allowedDependencies) {
-      if (name === "fileSystem" || name === "runGit" || name === "resolveRepositoryRoot") continue
-      const value = dataProperty(dependencies, name)
-      if (value !== undefined) runtime[name] = value
-    }
-    return Object.freeze(runtime)
+  const runtime = { cwd, environment, stdout, stderr, runGit }
+  for (const name of allowedDependencies) {
+    if (name === "runGit") continue
+    const value = dependency(name, DEPENDENCY_DEFAULTS[name])
+    if (value !== undefined) runtime[name] = value
   }
-  return Object.freeze({
-    cwd,
-    environment,
-    stdout,
-    stderr,
-    fileSystem: dependency("fileSystem", defaultFileSystem),
-    randomUUID: dependency("randomUUID", defaultRandomUUID),
-    runGit,
-    resolveRepositoryRoot: dependency("resolveRepositoryRoot", resolveRepositoryRoot),
-    applyDuplicateDraftRecovery: dependency(
-      "applyDuplicateDraftRecovery",
-      defaultApplyDuplicateDraftRecovery,
-    ),
-    canonicalDuplicateDraftEvidence: dependency(
-      "canonicalDuplicateDraftEvidence",
-      defaultCanonicalDuplicateDraftEvidence,
-    ),
-    captureDuplicateDraftRecoveryEvidence: dependency(
-      "captureDuplicateDraftRecoveryEvidence",
-      defaultCaptureDuplicateDraftRecoveryEvidence,
-    ),
-    createDuplicateDraftRecoveryReader: dependency(
-      "createDuplicateDraftRecoveryReader",
-      defaultCreateDuplicateDraftRecoveryReader,
-    ),
-    createDuplicateDraftRecoveryWriter: dependency(
-      "createDuplicateDraftRecoveryWriter",
-      defaultCreateDuplicateDraftRecoveryWriter,
-    ),
-    createNormalProductionRecoveryObserver: dependency(
-      "createNormalProductionRecoveryObserver",
-      createNormalProductionRecoveryObserver,
-    ),
-    createProductionRecoveryObserver: dependency(
-      "createProductionRecoveryObserver",
-      createProductionRecoveryObserver,
-    ),
-    parseDuplicateDraftEvidence: dependency(
-      "parseDuplicateDraftEvidence",
-      defaultParseDuplicateDraftEvidence,
-    ),
-  })
+  return Object.freeze(runtime)
 }
 
 function validateDependencies(value, allowed = DEPENDENCY_FIELDS) {
+  if (
+    !Array.isArray(allowed) ||
+    allowed.length === 0 ||
+    allowed.some((name) => typeof name !== "string" || name.length === 0) ||
+    new Set(allowed).size !== allowed.length
+  ) {
+    throw new RecoveryInputError()
+  }
   if (
     value === null ||
     typeof value !== "object" ||
@@ -366,6 +346,9 @@ function validateDependencies(value, allowed = DEPENDENCY_FIELDS) {
       descriptor === null ||
       !descriptor.enumerable ||
       !("value" in descriptor) ||
+      // Only `fileSystem` may hold a non-function dependency (it carries the
+      // node:fs/promises-shaped module object); every other allowed
+      // dependency name must be a function.
       (key !== "fileSystem" && typeof descriptor.value !== "function")
     ) {
       throw new RecoveryInputError()
@@ -424,6 +407,14 @@ export function resolveInvocationPaths(root, options) {
   return { evidence: resolvePrivatePath(root, options.evidence), output }
 }
 
+/**
+ * Resolve `relative` to an absolute path confined under the recovery
+ * boundary. Callers must have already validated `relative` through
+ * `normalizePrivatePath` (or an equally strict check) before calling this;
+ * it re-checks the boundary but not the shape of `relative` itself. The
+ * returned `relative` field is the input value passed straight through,
+ * not renormalized.
+ */
 export function resolvePrivatePath(root, relative) {
   const absolute = path.resolve(root, relative)
   const boundary = path.resolve(root, RECOVERY_DIRECTORY)
@@ -578,6 +569,14 @@ function defaultGitExecutor(command, args, options) {
   return execFile(command, args, options).then(({ stdout }) => stdout)
 }
 
+/**
+ * TOCTOU guard: confirms `target` still resolves inside the recovery
+ * boundary and is not a symlink escaping it. Every await between resolving
+ * a path and committing output to it is a window for that path to be
+ * replaced out from under the process, so callers must re-run this check
+ * immediately before each write/rename that follows an await, not just
+ * once up front.
+ */
 export async function assertPrivatePathBoundary(fileSystem, root, target) {
   const operations = fileSystemOperations(fileSystem, ["lstat"])
   const boundary = path.resolve(root, RECOVERY_DIRECTORY)
