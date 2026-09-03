@@ -4671,10 +4671,13 @@ test("a terminal record with a visible unstamped escrow draft blocks with TERMIN
     npm: npmReader(),
     attestations: attestationVerifier([]),
   })
-  assert.equal(observation.release.status, "draft")
-  assert.equal(observation.release.marker.phase, "ESCROWED")
   assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
   assert.equal(observation.abandonment.recorded, false)
+  assert.equal(observation.release.status, "ambiguous")
+  assert.equal(
+    planRelease({ candidate: candidate(), observation, mode: "controller" }).disposition,
+    "blocked",
+  )
 })
 
 test("a terminal record with a visible stamped draft that matches is terminal with no diagnostics", async () => {
@@ -4723,7 +4726,12 @@ test("a visible stamped draft whose tombstone digest differs from the committed 
     attestations: attestationVerifier([]),
   })
   assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
-  assert.equal(observation.release.marker.phase, "ABANDONED_PREPUBLICATION")
+  assert.equal(observation.abandonment.recorded, false)
+  assert.equal(observation.release.status, "ambiguous")
+  assert.equal(
+    planRelease({ candidate: candidate(), observation, mode: "controller" }).disposition,
+    "blocked",
+  )
 })
 
 test("a malformed terminal record blocks the observation with TERMINAL_RECORD_INVALID", async () => {

@@ -458,6 +458,7 @@ export async function observeProductionCandidate({
     diagnostics,
   })
   let abandonment = releaseState.abandonment
+  let terminalRecordMismatch = false
   if (committedTerminalRecord !== null) {
     if (terminalRecordMatchesRelease(committedTerminalRecord, releaseState.release)) {
       abandonment = {
@@ -466,6 +467,10 @@ export async function observeProductionCandidate({
         predecessor: committedTerminalRecord.predecessor.state,
       }
     } else {
+      // The committed record and the visible draft disagree, so neither one may be reported as
+      // the abandonment of record: drop the draft-derived recording along with the release.
+      terminalRecordMismatch = true
+      abandonment = { requested: true, recorded: false, predecessor: null }
       addDiagnostic(diagnostics, "github", "release", "AMBIGUOUS", "TERMINAL_RECORD_MISMATCH")
     }
   }
@@ -568,6 +573,8 @@ export async function observeProductionCandidate({
     )
   }
 
+  // Without an npmAuditFactory an observed-PRESENT package is downgraded to "ambiguous", so the
+  // raw observePackageVersion presence is the only signal that always survives to here.
   if (
     (committedTerminalRecord !== null || terminalRecordInvalid) &&
     (registryPresenceObserved || registryPackages.some((pkg) => pkg.status === "present"))
@@ -620,7 +627,9 @@ export async function observeProductionCandidate({
       release = nonPresentRelease("ambiguous")
     }
   }
-  if (terminalRecordInvalid) release = nonPresentRelease("ambiguous")
+  // A record we cannot parse, or one the visible draft contradicts, leaves the terminal state
+  // unknown: fail closed so planRelease blocks on github-release-ambiguous, not only the CLI.
+  if (terminalRecordInvalid || terminalRecordMismatch) release = nonPresentRelease("ambiguous")
   const publicationHistory = await observeProductionPublicationHistory({
     result: publisherRuns,
     candidate: identity,
@@ -2452,6 +2461,9 @@ async function mapProductionAbandonmentRelease({
  * The numeric Release ID is not part of the observation; the apply command verifies it.
  */
 function terminalRecordMatchesRelease(record, release) {
+  // An already-ambiguous release means GitHub itself was unreadable, not that the draft
+  // contradicts the record; that path carries its own AMBIGUOUS diagnostic, so the committed
+  // record still stands alone here rather than being reported as a mismatch.
   if (release.status === "absent" || release.status === "ambiguous") return true
   if (release.status !== "draft") return false
   const marker = release.marker
