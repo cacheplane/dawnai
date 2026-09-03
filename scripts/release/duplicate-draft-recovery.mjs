@@ -724,6 +724,22 @@ export function classifyDuplicateDraft(value, expected) {
   }
   const recoveryReceiptBytes = canonicalRecoveryReceipt(recoveryReceiptInput)
   const recoveryReceiptSha256 = sha256Bytes(recoveryReceiptBytes)
+  // A stored receipt records the commit that PERFORMED the quarantine. That is
+  // history, not a function of the current run: re-capturing from a later
+  // reviewed commit (say after fixing the recovery surface) must still
+  // recognize it. Rebuild the expected receipt around the stored commit, with
+  // every other field still pinned to the current expectations.
+  const expectedReceiptFor = (storedBytes) => {
+    const storedCommit = storedRecoveryCommit(storedBytes)
+    if (storedCommit === null || storedCommit === recoveryReceiptInput.recoveryCommit) {
+      return { bytes: recoveryReceiptBytes, sha256: recoveryReceiptSha256 }
+    }
+    const bytes = canonicalRecoveryReceipt({
+      ...recoveryReceiptInput,
+      recoveryCommit: storedCommit,
+    })
+    return { bytes, sha256: sha256Bytes(bytes) }
+  }
   const expectedAssetNames = new Set(originalAssets.map((asset) => asset.name))
   for (const asset of assets) {
     if (
@@ -742,6 +758,7 @@ export function classifyDuplicateDraft(value, expected) {
     throw new Error("Duplicate Release original asset namespace changed")
   }
   const evidence = assets.slice(originalAssets.length)
+  let observedReceiptSha256 = null
   const notice =
     evidenceKinds.length === 2 && snapshot.marker === null
       ? parseCanonicalNotice(
@@ -763,15 +780,19 @@ export function classifyDuplicateDraft(value, expected) {
       ) {
         throw new Error("Duplicate Release original-body archive is not exact")
       }
-    } else if (
-      asset.name !== receiptAssetName ||
-      asset.sha256 !== recoveryReceiptSha256 ||
-      asset.size !== recoveryReceiptBytes.byteLength ||
-      typeof asset.bytes !== "string" ||
-      asset.bytes !== recoveryReceiptBytes.toString("utf8") ||
-      (notice !== null && asset.sha256 !== notice.receiptSha256)
-    ) {
-      throw new Error("Duplicate Release recovery receipt asset is not exact")
+    } else {
+      const expectedReceipt = expectedReceiptFor(asset.bytes)
+      observedReceiptSha256 = expectedReceipt.sha256
+      if (
+        asset.name !== receiptAssetName ||
+        asset.sha256 !== expectedReceipt.sha256 ||
+        asset.size !== expectedReceipt.bytes.byteLength ||
+        typeof asset.bytes !== "string" ||
+        asset.bytes !== expectedReceipt.bytes.toString("utf8") ||
+        (notice !== null && asset.sha256 !== notice.receiptSha256)
+      ) {
+        throw new Error("Duplicate Release recovery receipt asset is not exact")
+      }
     }
   }
 
@@ -783,7 +804,24 @@ export function classifyDuplicateDraft(value, expected) {
     }
   }
   if (evidenceKinds.length === 2 && snapshot.marker === null) {
-    if (snapshot.body !== requirements.recoveryNotice || !isCanonicalNotice(snapshot.body)) {
+    // The notice binds the receipt digest, which is itself derived from the
+    // commit that performed the quarantine. Rebuild the expected notice around
+    // the receipt actually stored so a later reviewed commit still recognizes
+    // an existing quarantine; every other notice field stays pinned.
+    const expectedNotice =
+      observedReceiptSha256 === null
+        ? requirements.recoveryNotice
+        : canonicalRecoveryNotice({
+            repository: DUPLICATE_DRAFT_RECOVERY_POLICY.repository,
+            version: DUPLICATE_DRAFT_RECOVERY_POLICY.version,
+            canonicalReleaseId: DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId,
+            duplicateReleaseId: requirements.releaseId,
+            originalBodySha256: requirements.originalBodySha256,
+            archiveAssetName: bodyAssetName,
+            receiptAssetName,
+            receiptSha256: observedReceiptSha256,
+          }).toString("utf8")
+    if (snapshot.body !== expectedNotice || !isCanonicalNotice(snapshot.body)) {
       throw new Error("Duplicate Release recovery notice is malformed")
     }
     return "quarantined"
@@ -2293,6 +2331,26 @@ export function sameAssetSet(left, right) {
         .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     )
   return key(left) === key(right)
+}
+
+/**
+ * Read the `recoveryCommit` recorded in a stored receipt, or null when the
+ * bytes are absent or not a well-formed receipt. Only a syntactically valid
+ * commit SHA is accepted; every other receipt field remains pinned by the
+ * caller, so a tampered receipt still fails the byte comparison.
+ */
+function storedRecoveryCommit(bytes) {
+  if (typeof bytes !== "string") return null
+  let parsed
+  try {
+    parsed = JSON.parse(bytes)
+  } catch {
+    return null
+  }
+  if (!isRecord(parsed)) return null
+  const descriptor = Object.getOwnPropertyDescriptor(parsed, "recoveryCommit")
+  const value = descriptor?.value
+  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value) ? value : null
 }
 
 function assetSetSha256(assets) {

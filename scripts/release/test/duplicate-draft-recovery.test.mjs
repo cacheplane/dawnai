@@ -291,6 +291,69 @@ test("classifies each exact resumable duplicate state", () => {
   }
 })
 
+test("recognizes a quarantine performed by an earlier recovery commit", () => {
+  // Regression: the receipt records the commit that PERFORMED the quarantine,
+  // and the notice binds that receipt's digest. Rebuilding both from the
+  // CURRENT reviewed commit made an existing quarantine unclassifiable the
+  // moment the recovery surface itself was fixed and re-merged — the state was
+  // correct in production but permanently unreadable.
+  const releaseId = POLICY.duplicates[0].releaseId
+  const expected = expectedFor(releaseId)
+  const historicalCommit = "a".repeat(40)
+  assert.notEqual(historicalCommit, expected.recoveryReceipt.recoveryCommit)
+
+  const historicalReceiptBytes = canonicalRecoveryReceipt({
+    ...expected.recoveryReceipt,
+    recoveryCommit: historicalCommit,
+  })
+  const historicalReceiptSha256 = createHash("sha256").update(historicalReceiptBytes).digest("hex")
+  const historicalNotice = canonicalRecoveryNotice({
+    repository: POLICY.repository,
+    version: POLICY.version,
+    canonicalReleaseId: POLICY.canonicalReleaseId,
+    duplicateReleaseId: releaseId,
+    originalBodySha256: expected.originalBodySha256,
+    archiveAssetName: originalBodyAssetName(releaseId, expected.originalBodySha256),
+    receiptAssetName: recoveryReceiptAssetName(releaseId),
+    receiptSha256: historicalReceiptSha256,
+  }).toString("utf8")
+
+  const observed = snapshot(
+    {
+      quarantined: true,
+      evidenceAssets: ["body", "receipt"],
+      receiptBytes: historicalReceiptBytes.toString("utf8"),
+      receiptSha256: historicalReceiptSha256,
+      body: historicalNotice,
+    },
+    releaseId,
+  )
+  assert.equal(classifyDuplicateDraft(observed, expected), "quarantined")
+
+  // A receipt that differs in anything but the recovery commit is still exact.
+  const tampered = canonicalRecoveryReceipt({
+    ...expected.recoveryReceipt,
+    recoveryCommit: historicalCommit,
+    canonicalReleaseId: POLICY.canonicalReleaseId,
+  })
+  assert.equal(tampered.toString("utf8"), historicalReceiptBytes.toString("utf8"))
+  assert.throws(() =>
+    classifyDuplicateDraft(
+      snapshot(
+        {
+          quarantined: true,
+          evidenceAssets: ["body", "receipt"],
+          receiptBytes: historicalReceiptBytes.toString("utf8"),
+          receiptSha256: "b".repeat(64),
+          body: historicalNotice,
+        },
+        releaseId,
+      ),
+      expected,
+    ),
+  )
+})
+
 test("compares original asset namespaces without conflating cross-Release asset IDs", () => {
   const expected = expectedFor()
   const duplicate = snapshot()
