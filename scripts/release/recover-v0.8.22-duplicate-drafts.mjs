@@ -31,16 +31,16 @@ import { createProductionInventoryReader, observeProductionCandidate } from "./o
 import { planRelease } from "./planner.mjs"
 
 const execFile = promisify(execFileCallback)
-const RECOVERY_DIRECTORY = ".dawn/release-recovery"
-const ACKNOWLEDGEMENT_FLAG = "--acknowledge-non-atomic-release-edit-freeze"
+export const RECOVERY_DIRECTORY = ".dawn/release-recovery"
+export const ACKNOWLEDGEMENT_FLAG = "--acknowledge-non-atomic-release-edit-freeze"
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const MAX_PATH_BYTES = 4_096
-const MAX_EVIDENCE_BYTES = 512 * 1024
-const MAX_RECEIPT_BYTES = 512 * 1024
+export const MAX_EVIDENCE_BYTES = 512 * 1024
+export const MAX_RECEIPT_BYTES = 512 * 1024
 const MAX_GIT_OUTPUT_BYTES = 8 * 1024
-const DEPENDENCY_FIELDS = Object.freeze([
+export const DEPENDENCY_FIELDS = Object.freeze([
   "applyDuplicateDraftRecovery",
   "canonicalDuplicateDraftEvidence",
   "captureDuplicateDraftRecoveryEvidence",
@@ -251,7 +251,7 @@ const RECOVERY_ERROR_NAMES = new Set([
   "DuplicateDraftRecoveryWriteError",
 ])
 
-function diagnosticCodeSuffix(error) {
+export function diagnosticCodeSuffix(error) {
   // Only Dawn's own recovery errors qualify. A Node errno such as EIO carries a
   // `code` too, and echoing arbitrary error codes would widen this surface
   // beyond the curated recovery constants.
@@ -261,7 +261,14 @@ function diagnosticCodeSuffix(error) {
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/u.test(code) ? ` (code: ${code})` : ""
 }
 
-function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {
+export function normalizeRuntime({
+  cwd,
+  environment,
+  stdout,
+  stderr,
+  dependencies,
+  allowedDependencies = DEPENDENCY_FIELDS,
+}) {
   if (
     typeof cwd !== "string" ||
     !path.isAbsolute(cwd) ||
@@ -275,9 +282,29 @@ function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {
   ) {
     throw new RecoveryInputError()
   }
-  validateDependencies(dependencies)
+  validateDependencies(dependencies, allowedDependencies)
   const dependency = (name, fallback) => dataProperty(dependencies, name) ?? fallback
   const runGit = createScrubbedGitRunner(dependency("runGit", defaultGitExecutor))
+  if (allowedDependencies !== DEPENDENCY_FIELDS) {
+    // A caller-supplied allow-list only guarantees the three shared
+    // dependencies below; every other allowed name is exposed verbatim
+    // (with no duplicate-draft-specific default) when the caller provided it.
+    const runtime = {
+      cwd,
+      environment,
+      stdout,
+      stderr,
+      fileSystem: dependency("fileSystem", defaultFileSystem),
+      runGit,
+      resolveRepositoryRoot: dependency("resolveRepositoryRoot", resolveRepositoryRoot),
+    }
+    for (const name of allowedDependencies) {
+      if (name === "fileSystem" || name === "runGit" || name === "resolveRepositoryRoot") continue
+      const value = dataProperty(dependencies, name)
+      if (value !== undefined) runtime[name] = value
+    }
+    return Object.freeze(runtime)
+  }
   return Object.freeze({
     cwd,
     environment,
@@ -322,7 +349,7 @@ function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {
   })
 }
 
-function validateDependencies(value) {
+function validateDependencies(value, allowed = DEPENDENCY_FIELDS) {
   if (
     value === null ||
     typeof value !== "object" ||
@@ -335,7 +362,7 @@ function validateDependencies(value) {
     const descriptor = typeof key === "string" ? Object.getOwnPropertyDescriptor(value, key) : null
     if (
       typeof key !== "string" ||
-      !DEPENDENCY_FIELDS.includes(key) ||
+      !allowed.includes(key) ||
       descriptor === null ||
       !descriptor.enumerable ||
       !("value" in descriptor) ||
@@ -367,7 +394,7 @@ function snapshotArgumentArray(value) {
   return output
 }
 
-function normalizePrivatePath(value) {
+export function normalizePrivatePath(value) {
   if (
     typeof value !== "string" ||
     value.length === 0 ||
@@ -391,13 +418,13 @@ function normalizePrivatePath(value) {
   return value
 }
 
-function resolveInvocationPaths(root, options) {
+export function resolveInvocationPaths(root, options) {
   const output = resolvePrivatePath(root, options.output)
   if (options.command === "capture") return { output }
   return { evidence: resolvePrivatePath(root, options.evidence), output }
 }
 
-function resolvePrivatePath(root, relative) {
+export function resolvePrivatePath(root, relative) {
   const absolute = path.resolve(root, relative)
   const boundary = path.resolve(root, RECOVERY_DIRECTORY)
   const fromBoundary = path.relative(boundary, absolute)
@@ -407,7 +434,7 @@ function resolvePrivatePath(root, relative) {
   return Object.freeze({ absolute, relative })
 }
 
-async function resolveRepositoryRoot(cwd, runGit) {
+export async function resolveRepositoryRoot(cwd, runGit) {
   let output
   try {
     output = await runGit("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
@@ -432,7 +459,7 @@ async function resolveRepositoryRoot(cwd, runGit) {
   return root
 }
 
-async function assertReviewedIgnorePolicy({
+export async function assertReviewedIgnorePolicy({
   fileSystem,
   root,
   reviewedCommit,
@@ -551,7 +578,7 @@ function defaultGitExecutor(command, args, options) {
   return execFile(command, args, options).then(({ stdout }) => stdout)
 }
 
-async function assertPrivatePathBoundary(fileSystem, root, target) {
+export async function assertPrivatePathBoundary(fileSystem, root, target) {
   const operations = fileSystemOperations(fileSystem, ["lstat"])
   const boundary = path.resolve(root, RECOVERY_DIRECTORY)
   const fromBoundary = path.relative(boundary, target.absolute)
@@ -583,7 +610,7 @@ async function assertPrivatePathBoundary(fileSystem, root, target) {
   }
 }
 
-async function assertUnusedOutput(fileSystem, target) {
+export async function assertUnusedOutput(fileSystem, target) {
   const operations = fileSystemOperations(fileSystem, ["lstat"])
   try {
     await operations.lstat(target)
@@ -594,7 +621,7 @@ async function assertUnusedOutput(fileSystem, target) {
   throw new Error("Recovery output already exists")
 }
 
-async function readBoundedPrivateFile(
+export async function readBoundedPrivateFile(
   fileSystem,
   target,
   maximumBytes,
@@ -645,7 +672,7 @@ async function readBoundedPrivateFile(
   }
 }
 
-async function reserveExclusiveOutput(runtime, target) {
+export async function reserveExclusiveOutput(runtime, target) {
   const operations = fileSystemOperations(runtime.fileSystem, ["link", "lstat", "open", "unlink"])
   if (!Number.isInteger(fsConstants.O_DIRECTORY) || !Number.isInteger(fsConstants.O_NOFOLLOW)) {
     throw new Error("Recovery durable output primitives are unavailable")
@@ -1478,7 +1505,7 @@ export async function readCandidateControllerMarker({ git, candidate }) {
   }
 }
 
-function environmentToken(environment) {
+export function environmentToken(environment) {
   const token = environmentDataProperty(environment, "GITHUB_TOKEN")
   if (
     typeof token !== "string" ||
@@ -1570,7 +1597,7 @@ function hasControlCharacters(value) {
   })
 }
 
-function writeSuccessBestEffort(stream, message) {
+export function writeSuccessBestEffort(stream, message) {
   let cleanupScheduled = false
   const removeErrorListener = () => {
     if (typeof stream.removeListener === "function") stream.removeListener("error", onError)
@@ -1597,7 +1624,7 @@ function writeSuccessBestEffort(stream, message) {
   }
 }
 
-class RecoveryOutputCleanupUncertainError extends Error {
+export class RecoveryOutputCleanupUncertainError extends Error {
   constructor(errors = []) {
     super("Recovery output cleanup is uncertain")
     this.name = "RecoveryOutputCleanupUncertainError"
@@ -1605,7 +1632,7 @@ class RecoveryOutputCleanupUncertainError extends Error {
   }
 }
 
-class RecoveryInputError extends Error {
+export class RecoveryInputError extends Error {
   constructor() {
     super("Invalid duplicate draft recovery input")
   }
