@@ -1,7 +1,7 @@
 import { pureJoin } from "@dawn-ai/sdk/pure"
 import type { CapabilityMarker, MarkerFs } from "../types.js"
 
-const MAX_MEMORY_BYTES = 32 * 1024
+export const MAX_MEMORY_BYTES = 32 * 1024
 const MEMORY_HEADER = `# Route Memory
 
 The block below is the live contents of this route's \`memory.md\`, re-read every turn. It is stable, human-editable context for this route only.
