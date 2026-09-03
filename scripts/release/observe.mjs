@@ -183,6 +183,7 @@ export async function resolveProductionCandidate({
       git,
       github,
       marker,
+      terminalRecordRef,
       ...(verifyTerminalAbandonment === undefined ? {} : { verifyTerminalAbandonment }),
     })
   let normalized
