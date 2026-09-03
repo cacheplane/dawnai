@@ -91,8 +91,9 @@ The `hono` and `vercel` targets used to fail the build when a route shipped
 skills, and `plan.md` and `memory.md` silently did nothing there. `dawn build`
 now bundles all three into `modules.edge.mjs` and serves them from the
 manifest at request time. An app that removed its skills to pass the gate can
-restore them; nothing else changes. Files over the marker's limit — 32 KiB for
-`SKILL.md` and `memory.md`, 64 KiB for `plan.md` — fail the build with
+restore them; nothing else changes. Files over the build's per-marker cap — 32
+KiB for `SKILL.md` (a build-only cap) and `memory.md`, 64 KiB for `plan.md`, the
+last two matching the runtime limits — fail the build with
 `DAWN_E1005` by name (`dawn check` applies the same limits). See [Skills, `plan.md`, and route `memory.md` are
 bundled](/docs/deployment/edge#skills-planmd-and-route-memorymd-are-bundled).
 

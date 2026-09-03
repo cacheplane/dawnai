@@ -1435,6 +1435,7 @@ git commit -m "test(cli): node and edge serve bundled skills, plan.md and memory
 - The `readSkill` tool result is found by a LangChain-serialized `ToolMessage` predicate (`Array.isArray(m.id) && m.id.includes("ToolMessage") && m.kwargs?.name === "readSkill"`), and its body is read from `kwargs.content`.
 - Todos are observed from BOTH the `/runs/wait` body (`todosFromBody`) and `GET /threads/:id/state` (`todosFromState`), with no `??` fallback, so a divergence between the two shapes fails instead of being masked.
 - A second case was added — "keeps the bundled marker facade across runs on one edge handler" — driving two threads through ONE edge handler, because a facade built once and dropped would serve run 1 and leave run 2 with no skills.
+- The spec's `hono-node-roundtrip` `readSkill` case was NOT added to that Docker-gated suite. It is subsumed by `static-edge-marker-files.test.ts`, which drives the real edge fetch handler over the built manifest — the same assertion without the Docker gate that would otherwise let it skip silently.
 - Teardown/prompt-capture hardening: `startAimock` pushes its idempotent `stop` onto the `cleanup` stack immediately (a throw during handler construction can no longer leak the mock server or a patched `OPENAI_BASE_URL` into a later test), exposes `requestCount()` so `drive` snapshots the request index instead of using magic indices, and a `beforeEach` resets the route-load, config and materialized-agent caches so every case starts clean.
 
 ---
@@ -1585,6 +1586,12 @@ EOF
 - [x] **Step 5: Record the PR URL**
 
 Paste the PR URL into the "Status" section of the spec (`Approved for planning.` → `Implemented in <PR URL>.`), commit as `docs: link spec to PR`, and push.
+
+**Final review** — fixes applied to PR #543 before merge:
+1. `dawn build` now names every oversized marker file across ALL routes in one failure. `web-runtime.ts` calls `assertRouteMarkerFileLimits({ appRoot, manifest })` right after `assertEdgeCapabilities` and before the discovery loop (still before any `mkdir`/`writeFile`); `collectRouteMarkerFiles`'s per-route throw aggregates only within one route, so it is now an unreachable backstop. Previously a three-route app needed three builds to see three offenders, contradicting the docs' "naming every oversized file". Covered by a new two-route `hono-target.test.ts` case asserting one DAWN_E1005 naming both `src/app/chat/skills/big/SKILL.md` and `src/app/support/skills/big/SKILL.md` with no artifacts on disk.
+2. `edge.mdx` now says what the parity claim does not cover: on these targets `memory.md`, `plan.md` seeds, and skill bodies are read at build time, so edits take effect on the next `dawn build` rather than live.
+3. `upgrading.mdx` no longer calls 32 KiB "the marker's limit" — it is the build's per-marker cap, build-only for `SKILL.md`, with `memory.md` and `plan.md` matching the runtime limits.
+5. Corrected an inverted comment in `modules-emitter.ts` near `markerFilesDir`: `discoverRoutes` sets `entryFile = <routeDir>/index.ts` and the runtime derives `routeDir = pureDirname(routeFile)`, so the two agree by construction; if discovery ever changes, the emitted key must follow `dirname(entryFile)`.
 
 ---
 

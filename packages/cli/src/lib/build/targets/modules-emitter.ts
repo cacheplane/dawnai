@@ -138,10 +138,13 @@ export async function collectRouteStaticDiscovery(options: {
   const markerFiles = options.markerFiles
     ? await collectRouteMarkerFiles({ appRoot, routeDir: route.routeDir })
     : undefined
-  // Pinned to the SAME directory `collectRouteMarkerFiles` just read from —
-  // never re-derived from `entryFile` at emit time, which is how the emitter
-  // and the collector could drift onto different directories for a route
-  // whose entry file does not live directly in `routeDir`.
+  // Pinned to the SAME directory `collectRouteMarkerFiles` just read from.
+  // Today the two agree by construction: `discoverRoutes` sets
+  // `entryFile = <routeDir>/index.ts`, and the runtime looks these markers up
+  // under `pureDirname(routeFile)`. If route discovery ever stops putting the
+  // entry file directly in `routeDir`, this emitted key must follow
+  // `dirname(entryFile)` — not `routeDir` — to keep matching that runtime
+  // derivation.
   const markerFilesFields: Pick<RouteStaticDiscovery, "markerFiles" | "markerFilesDir"> =
     markerFiles ? { markerFiles, markerFilesDir: appRootRelative(appRoot, route.routeDir) } : {}
 

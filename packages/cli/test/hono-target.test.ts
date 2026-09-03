@@ -536,6 +536,34 @@ describe("hono target — edge capability gating", () => {
     expect(existsSync(join(appRoot, "wrangler.toml"))).toBe(false)
   })
 
+  test("names every oversized marker file across all routes in one failed build", async () => {
+    const oversized = `---\ndescription: Big.\n---\n${"x".repeat(32 * 1024 + 1)}`
+    const appRoot = await createFixtureApp({
+      "src/app/chat/skills/big/SKILL.md": oversized,
+      "src/app/support/index.ts": `import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-5-mini",
+  systemPrompt: "Answer questions.",
+})
+`,
+      "src/app/support/skills/big/SKILL.md": oversized,
+    })
+
+    const error = await runBuild(appRoot).catch((e: unknown) => e)
+
+    // One rejection, both offenders — a user fixing this app sees every file at
+    // once instead of one route per build.
+    expect(String(error)).toContain("src/app/chat/skills/big/SKILL.md")
+    expect(String(error)).toContain("src/app/support/skills/big/SKILL.md")
+    expect((error as { code?: string }).code).toBe("DAWN_E1005")
+
+    for (const name of ["modules.edge.mjs", "stores.mjs", "app.mjs", "wrangler.toml"]) {
+      expect(existsSync(buildFile(appRoot, name))).toBe(false)
+    }
+    expect(existsSync(join(appRoot, "wrangler.toml"))).toBe(false)
+  })
+
   test("still fails the build for the workspace directory even when skills are present", async () => {
     const appRoot = await createFixtureApp({
       "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nDo research.\n",
