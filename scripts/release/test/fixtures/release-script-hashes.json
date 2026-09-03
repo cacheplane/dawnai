@@ -8,7 +8,7 @@
       "sha256": "465beffc12678ec5bd6d6e5ef6dc4f4c9cc1d76e622b4ed27c35dd231f2e0dda"
     },
     "scripts/release/adapters/github.mjs": {
-      "sha256": "c91a81df9a2ca263f66855f398d6c0a4660396a54c4bc4ff080238c15e0fca5c"
+      "sha256": "00d507ac49a810092b78fbd65445aca3bde7b96cb50fda7202791593a22cfe53"
     },
     "scripts/release/adapters/http.mjs": {
       "sha256": "86e03a6cd1536bd57983c27256694bb281d83dfc7efd09181a299b7f351f9510"

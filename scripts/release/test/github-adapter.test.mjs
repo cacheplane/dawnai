@@ -410,7 +410,7 @@ test("GitHub download methods return JSON-safe base64 without exposing response 
     calls.map(({ url, init }) => [url, init.method, init.headers.Accept]),
     [
       [`${BASE}/releases/assets/7`, "GET", "application/octet-stream"],
-      [`${BASE}/actions/artifacts/8/zip`, "GET", "application/octet-stream"],
+      [`${BASE}/actions/artifacts/8/zip`, "GET", "application/vnd.github+json"],
     ],
   )
 })
@@ -446,7 +446,7 @@ test("GitHub downloads follow one approved signed redirect without forwarding AP
       {
         url: `${BASE}/actions/artifacts/8/zip`,
         headers: {
-          Accept: "application/octet-stream",
+          Accept: "application/vnd.github+json",
           Authorization: `Bearer ${TOKEN}`,
           "X-GitHub-Api-Version": "2022-11-28",
         },

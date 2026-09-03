@@ -151,6 +151,8 @@ export function createGitHubReader({
       return readBinary(context, {
         url: `${base}/releases/assets/${id}`,
         operation: "release-asset-download",
+        // Release assets return their bytes (via one signed redirect) only for this media type.
+        accept: "application/octet-stream",
         ...(limit === null ? {} : { maximumBytes: limit }),
       })
     },
@@ -236,6 +238,9 @@ export function createGitHubReader({
       return readBinary(context, {
         url: `${base}/actions/artifacts/${id}/zip`,
         operation: "actions-artifact-download",
+        // The artifact archive endpoint answers 302 to the documented JSON media type and,
+        // since 2026-09-03, HTTP 415 to application/octet-stream (observed in production).
+        accept: JSON_ACCEPT,
         ...(limit === null ? {} : { maximumBytes: limit }),
       })
     },
@@ -418,7 +423,7 @@ async function readJson(context, { url, operation, requestBudget = {} }) {
   }
 }
 
-async function readBinary(context, { url, operation, maximumBytes }) {
+async function readBinary(context, { url, operation, maximumBytes, accept }) {
   const budget = createOperationBudget(context, maximumBytes)
   const firstRequest = remainingRequestBudget(budget)
   if (firstRequest === null) {
@@ -426,7 +431,7 @@ async function readBinary(context, { url, operation, maximumBytes }) {
   }
   const result = await context.http.getBinary({
     url,
-    headers: requestHeaders(context.token, "application/octet-stream"),
+    headers: requestHeaders(context.token, accept),
     ...firstRequest,
   })
   if (result.code === "RESPONSE_TOO_LARGE") {
