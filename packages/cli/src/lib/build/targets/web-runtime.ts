@@ -66,10 +66,14 @@ export async function emitWebRuntimeArtifacts(
 
   // The runtime's own discovery functions, run once here at build time —
   // identical to what the node target does, so the two manifests can only
-  // ever disagree about the three lines the edge flavor changes.
+  // ever disagree about the three lines the edge flavor changes, plus the
+  // marker bodies an edge runtime has no filesystem to read.
+  //
+  // Runs BEFORE the mkdir/writes below on purpose: an over-limit marker file
+  // must fail the build with nothing written.
   const discoveries: RouteStaticDiscovery[] = []
   for (const route of manifest.routes) {
-    discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
+    discoveries.push(await collectRouteStaticDiscovery({ appRoot, markerFiles: true, route }))
   }
   // The same resolution the dynamic probe performs — shared, not re-derived,
   // so a present-but-unreadable middleware file cannot drop out of the edge

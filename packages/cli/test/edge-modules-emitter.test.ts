@@ -1,15 +1,22 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { discoverRoutes } from "@dawn-ai/core/node"
 import { transform } from "esbuild"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { emitEdgeModulesFile } from "../src/lib/build/targets/edge-modules-emitter.js"
+import {
+  edgeAppNamespace,
+  emitEdgeModulesFile,
+} from "../src/lib/build/targets/edge-modules-emitter.js"
 import {
   collectRouteStaticDiscovery,
   type RouteStaticDiscovery,
 } from "../src/lib/build/targets/modules-emitter.js"
+import { loadStaticModules } from "../src/lib/runtime/static-modules.js"
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 
 const cleanup: Array<() => Promise<void> | void> = []
 
@@ -401,4 +408,97 @@ describe("emitEdgeModulesFile — hostile inputs", () => {
     })
     expect(text).toContain("stateDefaults: JSON.parse(")
   })
+})
+
+// ---------------------------------------------------------------------------
+// Marker files: the bodies an edge runtime cannot read from disk at request
+// time. Its own fixture (a superset of `fixtureApp`'s files) so the golden
+// snapshot above keeps emitting exactly the bytes it pins.
+// ---------------------------------------------------------------------------
+
+async function markerFixtureApp(): Promise<string> {
+  const appRoot = await fixtureApp()
+  const extra: Record<string, string> = {
+    "src/app/chat/memory.md": "Prefer short answers.\n",
+    "src/app/chat/plan.md": "- [ ] Restate the question\n",
+    "src/app/chat/skills/cite-sources/SKILL.md": "---\ndescription: Cite.\n---\n\nCite [path].\n",
+  }
+  for (const [rel, body] of Object.entries(extra)) {
+    const filePath = join(appRoot, rel)
+    await mkdir(join(filePath, ".."), { recursive: true })
+    await writeFile(filePath, body, "utf8")
+  }
+  return appRoot
+}
+
+async function collectMarkerDiscoveries(appRoot: string): Promise<RouteStaticDiscovery[]> {
+  const manifest = await discoverRoutes({ appRoot })
+  const discoveries: RouteStaticDiscovery[] = []
+  for (const route of manifest.routes) {
+    discoveries.push(await collectRouteStaticDiscovery({ appRoot, markerFiles: true, route }))
+  }
+  return discoveries
+}
+
+describe("emitEdgeModulesFile — marker files", () => {
+  it("omits markerFiles entirely when discovery was not asked to collect them", async () => {
+    const appRoot = await markerFixtureApp()
+    const discoveries = await collectFixtureDiscoveries(appRoot)
+    const text = emitEdgeModulesFile({
+      appRoot,
+      buildDir: join(appRoot, ".dawn", "build"),
+      discoveries,
+    })
+    expect(text).not.toContain("markerFiles")
+    // The names are still recorded, which is what the request-time guard reads.
+    expect(text).toContain('skills: ["cite-sources"]')
+  })
+
+  it("inlines skills, plan.md and memory.md keyed by namespace path, on the routes that have them", async () => {
+    const appRoot = await markerFixtureApp()
+    const discoveries = await collectMarkerDiscoveries(appRoot)
+    const buildDir = join(appRoot, ".dawn", "build")
+
+    const text = emitEdgeModulesFile({ appRoot, buildDir, discoveries })
+
+    expect(text).toContain("markerFiles: Object.fromEntries([")
+    expect(text).toContain(`[appRoot + "/src/app/chat/memory.md", "Prefer short answers.\\n"]`)
+    expect(text).toContain(`[appRoot + "/src/app/chat/plan.md", "- [ ] Restate the question\\n"]`)
+    expect(text).toContain(
+      `[appRoot + "/src/app/chat/skills/cite-sources/SKILL.md", "---\\ndescription: Cite.\\n---\\n\\nCite [path].\\n"]`,
+    )
+    // Only the one route that has marker files carries the key.
+    expect(text.match(/markerFiles:/g)).toHaveLength(1)
+    // Still a build-machine-path-free, node-free manifest.
+    expect(text).not.toContain(appRoot)
+    expect(text).not.toContain("node:")
+  })
+
+  it("survives the round trip through loadStaticModules with the runtime's routeDir keys", async () => {
+    const appRoot = await markerFixtureApp()
+    const discoveries = await collectMarkerDiscoveries(appRoot)
+    const buildDir = join(appRoot, ".dawn", "build")
+    await mkdir(buildDir, { recursive: true })
+    await mkdir(join(appRoot, "node_modules", "@dawn-ai"), { recursive: true })
+    await symlink(
+      join(repoRoot, "packages", "cli"),
+      join(appRoot, "node_modules", "@dawn-ai", "cli"),
+      "dir",
+    )
+    const modulesPath = join(buildDir, "modules.edge.mjs")
+    await writeFile(modulesPath, emitEdgeModulesFile({ appRoot, buildDir, discoveries }), "utf8")
+
+    const modules = await loadStaticModules(pathToFileURL(modulesPath))
+    const chat = modules.routes.find((route) => route.routeId === "/chat")
+    const zeta = modules.routes.find((route) => route.routeId === "/zeta")
+    const ns = edgeAppNamespace(appRoot)
+    expect(chat?.markerFiles).toEqual({
+      [`${ns}/src/app/chat/memory.md`]: "Prefer short answers.\n",
+      [`${ns}/src/app/chat/plan.md`]: "- [ ] Restate the question\n",
+      [`${ns}/src/app/chat/skills/cite-sources/SKILL.md`]:
+        "---\ndescription: Cite.\n---\n\nCite [path].\n",
+    })
+    expect(chat?.skills).toEqual(["cite-sources"])
+    expect(zeta?.markerFiles).toBeUndefined()
+  }, 30_000)
 })

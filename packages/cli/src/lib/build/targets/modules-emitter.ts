@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
-import { join, relative, sep } from "node:path"
+import { dirname, join, relative, sep } from "node:path"
 
 import type { RouteDefinition, RouteKind } from "@dawn-ai/core"
 
@@ -8,6 +8,7 @@ import { createRouteAssistantId } from "../../runtime/route-identity.js"
 import { discoverStateDefinition } from "../../runtime/state-discovery.js"
 import { discoverToolDefinitions, type ToolScope } from "../../runtime/tool-discovery.js"
 import { discoverSkillDirs } from "./edge-capabilities.js"
+import { collectRouteMarkerFiles, type RouteMarkerFile } from "./marker-files.js"
 
 /**
  * Build-time discovery results for one route — everything the emitter needs
@@ -42,6 +43,13 @@ export interface RouteStaticDiscovery {
    */
   readonly skills?: readonly string[]
   /**
+   * Marker file contents (`plan.md`, `memory.md`, `skills/<name>/SKILL.md`),
+   * route-relative. Collected only when `collectRouteStaticDiscovery` is asked
+   * for them — the edge flavors, which have no filesystem at request time. The
+   * node manifest never carries bodies; it reads them from disk.
+   */
+  readonly markerFiles?: readonly RouteMarkerFile[]
+  /**
    * `state.ts` defaults as entries; `undefined` when the route has no state
    * definition, `[]` when it has a defined-but-empty one (mirrors the
    * dynamic path's `discoverStateDefinition` null-vs-empty distinction).
@@ -64,6 +72,8 @@ export interface RouteStaticDiscovery {
  */
 export async function collectRouteStaticDiscovery(options: {
   readonly appRoot: string
+  /** Read marker file bodies too (edge flavors only). */
+  readonly markerFiles?: boolean
   readonly route: RouteDefinition
 }): Promise<RouteStaticDiscovery> {
   const { appRoot, route } = options
@@ -117,6 +127,13 @@ export async function collectRouteStaticDiscovery(options: {
   // is byte-for-byte what it was before this fact existed.
   const skillDirs = discoverSkillDirs(join(route.routeDir, "skills"))
 
+  // Bodies only for the flavors that cannot read them at request time. This is
+  // also where an over-limit marker fails the build — before any artifact is
+  // written.
+  const markerFiles = options.markerFiles
+    ? await collectRouteMarkerFiles({ appRoot, routeDir: route.routeDir })
+    : undefined
+
   return {
     entryFile: route.entryFile,
     kind: route.kind,
@@ -124,6 +141,7 @@ export async function collectRouteStaticDiscovery(options: {
     reducers,
     routeId: route.id,
     ...(skillDirs.length > 0 ? { skills: skillDirs } : {}),
+    ...(markerFiles ? { markerFiles } : {}),
     stateDefaults,
     toolSchemas,
     tools,
@@ -315,6 +333,22 @@ export function emitModulesFileWithFlavor(
     // the runtime guard reports them, it never opens them.
     if (discovery.skills && discovery.skills.length > 0) {
       lines.push(`      skills: ${JSON.stringify(discovery.skills)},`)
+    }
+    // Marker bodies, keyed by the SAME namespace path the runtime computes
+    // (`pureJoin(pureDirname(routeFile), …)`), so a key the markers ask for
+    // and a key the build wrote are the same string. `Object.fromEntries`
+    // over an array, not an object literal: a "__proto__" key can never
+    // perform a prototype assignment this way, and every key/value goes
+    // through JSON.stringify so no content can break out of its literal.
+    if (discovery.markerFiles && discovery.markerFiles.length > 0) {
+      const routeDirRelative = appRootRelative(appRoot, dirname(discovery.entryFile))
+      const entries = discovery.markerFiles.map(
+        (file) =>
+          `        [${flavor.appRootPathExpression(`${routeDirRelative}/${file.relativePath}`)}, ${JSON.stringify(file.content)}],`,
+      )
+      lines.push(`      markerFiles: Object.fromEntries([`)
+      lines.push(...entries)
+      lines.push(`      ]),`)
     }
     if (discovery.stateDefaults) {
       // Defaults come from arbitrary user schema code; the dynamic path hands

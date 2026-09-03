@@ -510,6 +510,16 @@ describe("emitModulesFile — route skills", () => {
     expect(loadedResearch?.skills).toEqual(["cite-sources", "synthesize"])
     expect(loadedZeta?.skills).toBeUndefined()
   }, 30_000)
+
+  it("never inlines marker file contents into the node manifest", async () => {
+    const appRoot = await skillsFixtureApp()
+    const discoveries = await collectFixtureDiscoveries(appRoot)
+    expect(discoveries.every((entry) => entry.markerFiles === undefined)).toBe(true)
+    const buildDir = join(appRoot, ".dawn", "build")
+    const text = emitModulesFile({ appRoot, buildDir, discoveries })
+    expect(text).not.toContain("markerFiles")
+    expect(text).not.toContain("Cite.")
+  })
 })
 
 // ---------------------------------------------------------------------------
