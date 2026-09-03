@@ -3,19 +3,22 @@ import test from "node:test"
 
 import {
   createDuplicateRecoveryWriterContext,
+  readCurrentWriterObservation,
   requestRecoveryJson,
 } from "../duplicate-draft-recovery-adapters.mjs"
 import {
+  assertTerminalRecoveryWriter,
   CANONICAL_ABANDONED_TITLE,
   CANONICAL_ESCROW_TITLE,
   CANONICAL_RELEASE_ID,
   CANONICAL_TAG_NAME,
   createTerminalRecoveryWriter,
   createTerminalRecoveryWriterContext,
+  normalizeTerminalReleaseProjection,
+  normalizeTerminalReleaseSnapshot,
   TOMBSTONE_ASSET_NAME,
 } from "../terminal-recovery-adapters.mjs"
 import {
-  binaryResponse,
   canonicalizeForTest,
   jsonResponse,
   requestBody,
@@ -42,6 +45,12 @@ test("terminal recovery writer exposes only the exact frozen canonical surface",
     "uploadTombstoneIfAbsentAndEqual",
   ])
   assert.equal(Object.isFrozen(writer), true)
+  assert.equal(assertTerminalRecoveryWriter(writer), writer)
+  assert.throws(
+    () => assertTerminalRecoveryWriter({ ...writer }),
+    /surface is not exact/iu,
+    "an unfrozen look-alike is not the writer surface",
+  )
   assert.throws(
     () =>
       createTerminalRecoveryWriter({
@@ -185,9 +194,6 @@ test("terminal recovery writer uploads the tombstone then stamps the abandonment
           201,
         )
       }
-      if (url === `${BASE}/releases/assets/${fixture.tombstoneRawAsset.id}`) {
-        return binaryResponse(fixture.tombstoneBytes)
-      }
       assert.fail(`unexpected URL ${url}`)
     }),
   })
@@ -210,6 +216,7 @@ test("terminal recovery writer uploads the tombstone then stamps the abandonment
     expectedSnapshot: fixture.tombstonedSnapshot,
     expectedTagObjectSha: TAG_OBJECT,
     expectedBodySha256: sha256(Buffer.from(fixture.escrowBody, "utf8")),
+    expectedTombstoneSha256: fixture.tombstoneSha256,
     expectedName: CANONICAL_ABANDONED_TITLE,
     expectedBody: fixture.abandonmentBody,
   })
@@ -261,10 +268,11 @@ test("terminal recovery writer refuses to stamp when the pre-write body digest d
         expectedSnapshot: fixture.tombstonedSnapshot,
         expectedTagObjectSha: TAG_OBJECT,
         expectedBodySha256: "b".repeat(64),
+        expectedTombstoneSha256: fixture.tombstoneSha256,
         expectedName: CANONICAL_ABANDONED_TITLE,
         expectedBody: fixture.abandonmentBody,
       }),
-    /digest is stale/iu,
+    { code: "CANONICAL_BODY_DIGEST_STALE" },
   )
   assert.equal(
     calls.filter(({ init }) => init.method === "PATCH").length,
@@ -287,10 +295,11 @@ test("terminal recovery writer refuses to stamp a canonical draft without its to
         expectedSnapshot: fixture.escrowSnapshot,
         expectedTagObjectSha: TAG_OBJECT,
         expectedBodySha256: sha256(Buffer.from(fixture.escrowBody, "utf8")),
+        expectedTombstoneSha256: fixture.tombstoneSha256,
         expectedName: CANONICAL_ABANDONED_TITLE,
         expectedBody: fixture.abandonmentBody,
       }),
-    /tombstone/iu,
+    { code: "TOMBSTONE_ASSET_MISSING" },
   )
   assert.equal(calls.filter(({ init }) => init.method === "PATCH").length, 0)
 })
@@ -363,6 +372,7 @@ test("terminal recovery writer reports ambiguity on post-write name or body drif
             expectedSnapshot: fixture.tombstonedSnapshot,
             expectedTagObjectSha: TAG_OBJECT,
             expectedBodySha256: sha256(Buffer.from(fixture.escrowBody, "utf8")),
+            expectedTombstoneSha256: fixture.tombstoneSha256,
             expectedName: CANONICAL_ABANDONED_TITLE,
             expectedBody: fixture.abandonmentBody,
           }),
@@ -383,6 +393,7 @@ test("terminal recovery writer rejects non-canonical abandonment inputs before a
     expectedSnapshot: fixture.tombstonedSnapshot,
     expectedTagObjectSha: TAG_OBJECT,
     expectedBodySha256: sha256(Buffer.from(fixture.escrowBody, "utf8")),
+    expectedTombstoneSha256: fixture.tombstoneSha256,
     expectedName: CANONICAL_ABANDONED_TITLE,
     expectedBody: fixture.abandonmentBody,
   }
@@ -456,12 +467,208 @@ test("each recovery writer's innermost URL guard refuses the other writer's Rele
   )
 })
 
+test("terminal recovery writer refuses to stamp an already-abandoned draft", async () => {
+  const fixture = terminalFixture()
+  const calls = []
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch(
+      calls,
+      canonicalRoute(fixture, {
+        title: CANONICAL_ABANDONED_TITLE,
+        body: fixture.abandonmentBody,
+        withTombstone: true,
+      }),
+    ),
+  })
+
+  // Every other pre-write fence is satisfied on purpose — the body digest is
+  // the abandoned body's own digest and the tombstone is present and exact —
+  // so the escrow-title check is the only thing standing between this call and
+  // a second, redundant PATCH.
+  await assert.rejects(
+    () =>
+      writer.abandonCandidateIfCurrent({
+        expectedSnapshot: fixture.abandonedSnapshot,
+        expectedTagObjectSha: TAG_OBJECT,
+        expectedBodySha256: sha256(Buffer.from(fixture.abandonmentBody, "utf8")),
+        expectedTombstoneSha256: fixture.tombstoneSha256,
+        expectedName: CANONICAL_ABANDONED_TITLE,
+        expectedBody: fixture.abandonmentBody,
+      }),
+    { code: "CANONICAL_DRAFT_NOT_ESCROWED" },
+  )
+  assert.equal(
+    calls.filter(({ init }) => init.method === "PATCH").length,
+    0,
+    "an abandoned draft must never be stamped a second time",
+  )
+})
+
+test("terminal recovery writer refuses to stamp against a foreign tombstone digest", async () => {
+  const fixture = terminalFixture()
+  const calls = []
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch(calls, canonicalRoute(fixture, { withTombstone: true })),
+  })
+
+  await assert.rejects(
+    () =>
+      writer.abandonCandidateIfCurrent({
+        expectedSnapshot: fixture.tombstonedSnapshot,
+        expectedTagObjectSha: TAG_OBJECT,
+        expectedBodySha256: sha256(Buffer.from(fixture.escrowBody, "utf8")),
+        expectedTombstoneSha256: fixture.otherTombstoneSha256,
+        expectedName: CANONICAL_ABANDONED_TITLE,
+        expectedBody: fixture.abandonmentBody,
+      }),
+    { code: "TOMBSTONE_ASSET_CONFLICT" },
+  )
+  assert.equal(calls.filter(({ init }) => init.method === "PATCH").length, 0)
+})
+
+test("terminal recovery writer refuses to upload a tombstone onto an abandoned draft", async () => {
+  const fixture = terminalFixture()
+  const calls = []
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch(
+      calls,
+      canonicalRoute(fixture, {
+        title: CANONICAL_ABANDONED_TITLE,
+        body: fixture.abandonmentBody,
+      }),
+    ),
+  })
+
+  await assert.rejects(
+    () =>
+      writer.uploadTombstoneIfAbsentAndEqual({
+        expectedSnapshot: fixture.abandonedEscrowAssetSnapshot,
+        expectedTagObjectSha: TAG_OBJECT,
+        bytes: fixture.tombstoneBytes,
+        sha256: fixture.tombstoneSha256,
+      }),
+    { code: "CANONICAL_DRAFT_NOT_ESCROWED" },
+  )
+  assert.equal(calls.filter(({ init }) => init.method === "POST").length, 0)
+})
+
+test("terminal recovery writer rejects an oversize PATCH envelope before any request", async () => {
+  const fixture = terminalFixture()
+  const calls = []
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch(calls, async () => assert.fail("no request may be issued")),
+  })
+  // 600 KiB of quotes is under the 1 MiB body bound, but JSON escaping doubles
+  // it well past the transport bound the PATCH would use.
+  const body = '"'.repeat(600 * 1024)
+  assert.ok(Buffer.byteLength(body, "utf8") < 1024 * 1024)
+
+  await assert.rejects(
+    () =>
+      writer.abandonCandidateIfCurrent({
+        expectedSnapshot: fixture.tombstonedSnapshot,
+        expectedTagObjectSha: TAG_OBJECT,
+        expectedBodySha256: sha256(Buffer.from(fixture.escrowBody, "utf8")),
+        expectedTombstoneSha256: fixture.tombstoneSha256,
+        expectedName: CANONICAL_ABANDONED_TITLE,
+        expectedBody: body,
+      }),
+    { code: "ABANDONMENT_REQUEST_TOO_LARGE" },
+  )
+  assert.deepEqual(calls, [], "an oversize envelope is an input rejection, not a write")
+})
+
+test("each writer context's observation reader refuses the other writer's Releases", async () => {
+  // The rejection code alone cannot distinguish the allowlist guard from a
+  // failed read, so the proof is that the guard runs before the transport: a
+  // refused Release ID produces no request at all.
+  const calls = []
+  const context = (build) =>
+    build({ token: TOKEN, fetchImpl: routingFetch(calls, async () => jsonResponse({}, 500)) })
+  const terminal = context(createTerminalRecoveryWriterContext)
+  const duplicate = context(createDuplicateRecoveryWriterContext)
+
+  await assert.rejects(() => readCurrentWriterObservation(terminal, DUPLICATE_ID, undefined), {
+    code: "RELEASE_SNAPSHOT_UNAVAILABLE",
+  })
+  await assert.rejects(
+    () => readCurrentWriterObservation(duplicate, CANONICAL_RELEASE_ID, undefined),
+    { code: "RELEASE_SNAPSHOT_UNAVAILABLE" },
+  )
+  assert.deepEqual(calls, [], "a Release outside the allowlist is never requested")
+})
+
+test("the canonical normalizers reject a foreign Release identity", () => {
+  const fixture = terminalFixture()
+  const release = {
+    id: DUPLICATE_ID,
+    tag_name: CANONICAL_TAG_NAME,
+    name: CANONICAL_ESCROW_TITLE,
+    body: fixture.escrowBody,
+    draft: true,
+    prerelease: false,
+    immutable: false,
+    target_commitish: "main",
+  }
+
+  assert.throws(
+    () =>
+      normalizeTerminalReleaseSnapshot({
+        release,
+        rawAssets: fixture.rawAssets,
+        releaseId: DUPLICATE_ID,
+      }),
+    { code: "RELEASE_MALFORMED" },
+    "a foreign release ID is never normalized",
+  )
+  assert.throws(
+    () =>
+      normalizeTerminalReleaseSnapshot({
+        release,
+        rawAssets: fixture.rawAssets,
+        releaseId: CANONICAL_RELEASE_ID,
+      }),
+    { code: "RELEASE_MALFORMED" },
+    "a payload whose own ID is foreign is never normalized",
+  )
+  assert.throws(
+    () =>
+      normalizeTerminalReleaseProjection({ ...fixture.escrowSnapshot, releaseId: DUPLICATE_ID }),
+    /projection metadata is not exact/iu,
+  )
+  assert.throws(
+    () =>
+      normalizeTerminalReleaseProjection({ ...fixture.escrowSnapshot, name: "Dawn v0.8.22 RC" }),
+    /projection metadata is not exact/iu,
+  )
+  assert.throws(
+    () => normalizeTerminalReleaseProjection({ ...fixture.escrowSnapshot, prerelease: true }),
+    /projection metadata is not exact/iu,
+  )
+})
+
 function terminalFixture() {
+  // GitHub sends far more than the four fields this boundary projects, so the
+  // fixture carries a realistic payload: the normalizer must ignore the rest
+  // rather than depend on a trimmed shape.
   const rawAssets = Array.from({ length: 45 }, (_value, index) => ({
     id: index + 1,
     name: `dawn-asset-${String(index + 1).padStart(2, "0")}.tgz`,
     digest: `sha256:${index.toString(16).padStart(2, "0").repeat(32)}`,
     size: index + 1,
+    label: null,
+    state: "uploaded",
+    content_type: "application/gzip",
+    download_count: 0,
+    url: `https://api.github.com/repos/cacheplane/dawnai/releases/assets/${index + 1}`,
+    browser_download_url: `https://github.com/cacheplane/dawnai/releases/download/v0.8.22/dawn-asset-${String(index + 1).padStart(2, "0")}.tgz`,
+    uploader: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
+    created_at: "2026-09-01T12:00:00Z",
+    updated_at: "2026-09-01T12:00:01Z",
   }))
   const escrowBody = `<!-- dawn-release-marker\n{"phase":"ESCROWED"}\n-->\n`
   const abandonmentBody = `# Dawn v0.8.22 was abandoned before publication\n${"detail line\n".repeat(2_000)}`
@@ -473,6 +680,14 @@ function terminalFixture() {
     name: TOMBSTONE_ASSET_NAME,
     digest: `sha256:${tombstoneSha256}`,
     size: tombstoneBytes.byteLength,
+    label: null,
+    state: "uploaded",
+    content_type: "application/json",
+    download_count: 0,
+    url: "https://api.github.com/repos/cacheplane/dawnai/releases/assets/5001",
+    uploader: { login: "operator", id: 7, type: "User" },
+    created_at: "2026-09-03T09:00:00Z",
+    updated_at: "2026-09-03T09:00:00Z",
   }
   const normalized = rawAssets.map(({ id, name, digest, size }) => ({
     id,
@@ -492,6 +707,7 @@ function terminalFixture() {
     name: CANONICAL_ESCROW_TITLE,
     targetCommitish: "main",
     draft: true,
+    prerelease: false,
     immutable: false,
     body: escrowBody,
   }
@@ -509,6 +725,18 @@ function terminalFixture() {
     abandonmentBody,
     escrowSnapshot: { ...snapshotBase, assets: normalized },
     tombstonedSnapshot: { ...snapshotBase, assets: [...normalized, tombstoneAsset] },
+    abandonedSnapshot: {
+      ...snapshotBase,
+      name: CANONICAL_ABANDONED_TITLE,
+      body: abandonmentBody,
+      assets: [...normalized, tombstoneAsset],
+    },
+    abandonedEscrowAssetSnapshot: {
+      ...snapshotBase,
+      name: CANONICAL_ABANDONED_TITLE,
+      body: abandonmentBody,
+      assets: normalized,
+    },
   }
 }
 
@@ -562,9 +790,6 @@ function canonicalRoute(
     if (url === `${BASE}/releases/${CANONICAL_RELEASE_ID}/assets?per_page=100`) {
       return jsonResponse(assets)
     }
-    if (url === `${BASE}/releases/assets/${fixture.tombstoneRawAsset.id}`) {
-      return binaryResponse(fixture.tombstoneBytes)
-    }
     assert.fail(`unexpected URL ${url}`)
   }
 }
@@ -608,6 +833,7 @@ function terminalProjectionSha256(fixture, { name, body }) {
           name,
           targetCommitish: "main",
           draft: true,
+          prerelease: false,
           immutable: false,
           body,
           assets: [...fixture.normalized, fixture.tombstoneAsset],

@@ -485,9 +485,10 @@ export function createRecoveryWriterContext(options, pins) {
 function assertWriterPins(pins) {
   if (!isObject(pins)) throw new TypeError("Recovery writer pins are invalid")
   if (
-    !(pins.allowedReleaseIds instanceof Set) ||
-    pins.allowedReleaseIds.size === 0 ||
-    [...pins.allowedReleaseIds].some((id) => !Number.isSafeInteger(id) || id < 1) ||
+    !Array.isArray(pins.allowedReleaseIds) ||
+    !Object.isFrozen(pins.allowedReleaseIds) ||
+    pins.allowedReleaseIds.length === 0 ||
+    pins.allowedReleaseIds.some((id) => !Number.isSafeInteger(id) || id < 1) ||
     !(pins.patchUrlPattern instanceof RegExp) ||
     !(pins.uploadUrlPattern instanceof RegExp) ||
     typeof pins.normalizeSnapshot !== "function" ||
@@ -502,7 +503,7 @@ function assertWriterPins(pins) {
 
 const DUPLICATE_WRITER_PINS = Object.freeze({
   allowedReleaseIds: Object.freeze(
-    new Set(DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.map(({ releaseId }) => releaseId)),
+    DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates.map(({ releaseId }) => releaseId),
   ),
   patchUrlPattern: WRITER_PATCH_URL_PATTERN,
   uploadUrlPattern: WRITER_UPLOAD_URL_PATTERN,
@@ -1187,7 +1188,7 @@ export async function readExpectedWriterObservation(context, expected, originalB
 export async function readCurrentWriterObservation(context, releaseId, originalBody) {
   // Innermost read guard: a writer can only ever observe a Release its own pins
   // name, so a regressed call site cannot widen its reach through this reader.
-  if (!context.allowedReleaseIds.has(releaseId)) {
+  if (!context.allowedReleaseIds.includes(releaseId)) {
     writeFail(
       "RELEASE_SNAPSHOT_UNAVAILABLE",
       `${context.snapshotLabel} snapshot could not be verified`,
@@ -1849,13 +1850,18 @@ export function canonicalize(value) {
   )
 }
 
-export class DuplicateDraftRecoveryWriteError extends Error {
+export class RecoveryWriteError extends Error {
   constructor(code, message) {
     super(message)
+    // The runtime `name` stays pinned: the duplicate-draft recovery command
+    // classifies write failures by this exact string.
     this.name = "DuplicateDraftRecoveryWriteError"
     this.code = code
   }
 }
+
+/** Historical alias for {@link RecoveryWriteError}. */
+export const DuplicateDraftRecoveryWriteError = RecoveryWriteError
 
 export function writeFail(code, message) {
   throw new DuplicateDraftRecoveryWriteError(code, message)

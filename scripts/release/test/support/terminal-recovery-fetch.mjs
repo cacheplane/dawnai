@@ -19,13 +19,6 @@ export function jsonResponse(value, status = 200, headers = {}) {
   })
 }
 
-export function binaryResponse(value, status = 200, headers = {}) {
-  return new Response(value, {
-    status,
-    headers: { "content-type": "application/octet-stream", ...headers },
-  })
-}
-
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex")
 }

@@ -34,7 +34,33 @@ import {
   writeFail,
 } from "./duplicate-draft-recovery-adapters.mjs"
 
-export { DuplicateDraftRecoveryWriteError } from "./duplicate-draft-recovery-adapters.mjs"
+export {
+  DuplicateDraftRecoveryWriteError,
+  RecoveryWriteError,
+} from "./duplicate-draft-recovery-adapters.mjs"
+
+/**
+ * Operational contract for the v0.8.22 terminal recovery command.
+ *
+ * The abandonment stamp replaces the canonical draft's title, and the
+ * duplicate-draft recovery reader pins the escrow title in three places
+ * (`readReleaseSnapshot`, `listCandidateReleases`, and the shared Release
+ * projection). Once stamped, that reader can no longer see the canonical
+ * Release at all.
+ *
+ * So the terminal command NEVER reads the canonical Release through the
+ * duplicate reader. Every canonical read — before and after stamping, on a
+ * first run and on a rerun — goes through this writer's title-tolerant
+ * {@link createTerminalRecoveryWriter}`.readCanonicalSnapshot()`, which accepts
+ * either pinned title. The duplicate reader is still used, unchanged, for the
+ * two duplicate Releases' snapshots (their titles stay `Dawn v0.8.22`), the
+ * annotated tag, the Release runs, npm absence, and the reviewed-merge
+ * authority.
+ *
+ * That is what makes the three-state ladder rerunnable: a rerun after a
+ * successful stamp still classifies as `abandoned` rather than failing to read
+ * its own target.
+ */
 
 /** The single Release this boundary may ever name: the v0.8.22 canonical draft. */
 export const CANONICAL_RELEASE_ID = DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId
@@ -45,8 +71,11 @@ export const TOMBSTONE_ASSET_NAME = "abandonment.json"
 
 const CANONICAL_BASE_ASSET_COUNT = 45
 const MAX_ABANDONMENT_BODY_BYTES = 1024 * 1024
-// The PATCH carries a canonicalized {name, body} envelope, so the request bound
-// is the body bound plus enough headroom for the title and JSON escaping.
+// The PATCH carries a canonicalized {name, body} envelope, so the transport
+// bound is the body bound plus headroom for the title and JSON escaping. The
+// same constant bounds the envelope BEFORE the request is issued: a body whose
+// JSON escaping overruns the transport bound must be a deterministic input
+// rejection, never a post-write `MUTATION_OUTCOME_AMBIGUOUS`.
 const MAX_ABANDONMENT_REQUEST_BYTES = MAX_ABANDONMENT_BODY_BYTES + 4096
 const CANONICAL_TITLES = Object.freeze([CANONICAL_ESCROW_TITLE, CANONICAL_ABANDONED_TITLE])
 
@@ -64,7 +93,7 @@ const TERMINAL_UPLOAD_URL_PATTERN = new RegExp(
 )
 
 const TERMINAL_WRITER_PINS = Object.freeze({
-  allowedReleaseIds: Object.freeze(new Set([CANONICAL_RELEASE_ID])),
+  allowedReleaseIds: Object.freeze([CANONICAL_RELEASE_ID]),
   patchUrlPattern: TERMINAL_PATCH_URL_PATTERN,
   uploadUrlPattern: TERMINAL_UPLOAD_URL_PATTERN,
   normalizeSnapshot: (input) => normalizeTerminalReleaseSnapshot(input),
@@ -83,6 +112,14 @@ export function createTerminalRecoveryWriterContext(options = {}) {
  * boundary fences. Either pinned title is accepted — the draft is read both
  * before and after the abandonment stamp — but every other projected field is
  * pinned, so drift fails closed rather than being observed.
+ *
+ * Precondition: `release` and `rawAssets` have already passed the writer
+ * transport boundary — `readCurrentWriterObservation` runs the release payload
+ * through `safeWriterRemoteSnapshot` and the asset pages through
+ * `readStrictPages`, so both are credential-checked, prototype-safe, bounded
+ * plain JSON by the time they arrive here. This function adds the canonical
+ * identity and shape pins on top of that, and must not be called with raw
+ * transport output.
  */
 export function normalizeTerminalReleaseSnapshot({ release, rawAssets, releaseId }) {
   if (
@@ -147,6 +184,7 @@ export function normalizeTerminalReleaseSnapshot({ release, rawAssets, releaseId
     name: release.name,
     targetCommitish: release.target_commitish,
     draft: release.draft,
+    prerelease: release.prerelease,
     immutable: release.immutable,
     body: release.body,
     assets: tombstone === null ? baseAssets : [...baseAssets, tombstone],
@@ -158,7 +196,9 @@ export function normalizeTerminalReleaseSnapshot({ release, rawAssets, releaseId
  * hash. The title is deliberately part of the projection: the abandonment
  * stamp changes it, so the pre-write (escrow) and post-write (abandoned)
  * fence digests differ by design and a fence pair that hashes equal is proof
- * the stamp did not land.
+ * the stamp did not land. `prerelease` is projected too: the stamp must never
+ * flip the draft's publication class, and a fence that omitted it could not
+ * prove that.
  */
 export function normalizeTerminalReleaseProjection(value) {
   const source = snapshotJson(value)
@@ -169,6 +209,7 @@ export function normalizeTerminalReleaseProjection(value) {
     !CANONICAL_TITLES.includes(source.name) ||
     source.targetCommitish !== "main" ||
     source.draft !== true ||
+    source.prerelease !== false ||
     source.immutable !== false ||
     typeof source.body !== "string" ||
     !Array.isArray(source.assets)
@@ -203,6 +244,7 @@ export function normalizeTerminalReleaseProjection(value) {
     name: source.name,
     targetCommitish: source.targetCommitish,
     draft: source.draft,
+    prerelease: source.prerelease,
     immutable: source.immutable,
     body: source.body,
     assets,
@@ -240,6 +282,11 @@ export function createTerminalRecoveryWriter(options = {}) {
         throw new TypeError("Recovery tombstone digest is not exact")
       }
       const current = (await readExpectedWriterObservation(context, expected, undefined)).snapshot
+      // The ladder only ever uploads the tombstone while the draft is still
+      // escrowed: an already-abandoned draft's evidence is settled.
+      if (current.name !== CANONICAL_ESCROW_TITLE) {
+        writeFail("CANONICAL_DRAFT_NOT_ESCROWED", "Canonical draft is not in its escrowed state")
+      }
       const existing = current.assets.find(({ name }) => name === TOMBSTONE_ASSET_NAME) ?? null
       if (existing !== null) {
         if (existing.sha256 !== args.sha256 || existing.size !== args.bytes.byteLength) {
@@ -312,6 +359,7 @@ export function createTerminalRecoveryWriter(options = {}) {
           "expectedSnapshot",
           "expectedTagObjectSha",
           "expectedBodySha256",
+          "expectedTombstoneSha256",
           "expectedName",
           "expectedBody",
         ],
@@ -439,23 +487,34 @@ function assertAbandonmentStamp(args, token) {
   ) {
     throw new TypeError("Expected abandonment body is invalid")
   }
+  // JSON escaping can more than double a body's bytes, so bound the envelope
+  // this method will actually send rather than letting the transport bound
+  // reject it mid-write and surface as an ambiguous outcome.
+  const envelopeBytes = Buffer.byteLength(
+    JSON.stringify({ name: args.expectedName, body: args.expectedBody }),
+    "utf8",
+  )
+  if (envelopeBytes > MAX_ABANDONMENT_REQUEST_BYTES) {
+    writeFail("ABANDONMENT_REQUEST_TOO_LARGE", "Abandonment request exceeds its byte limit")
+  }
 }
 
 /**
  * The canonical draft is abandonable only while it still carries the escrow
- * title, the exact escrowed body, and its abandonment tombstone: the evidence
- * must be durable before the body that points at it is replaced.
+ * title, the exact escrowed body, and the exact abandonment tombstone the
+ * record names: the evidence must be durable, and provably the right bytes,
+ * before the body that points at it is replaced.
  */
 function assertAbandonableSnapshot(snapshot, args) {
   if (snapshot.name !== CANONICAL_ESCROW_TITLE) {
-    throw new TypeError("Canonical draft is not in its escrowed state")
+    writeFail("CANONICAL_DRAFT_NOT_ESCROWED", "Canonical draft is not in its escrowed state")
   }
   if (
     typeof args.expectedBodySha256 !== "string" ||
     !RECOVERY_SHA256_PATTERN.test(args.expectedBodySha256) ||
     sha256(snapshot.body) !== args.expectedBodySha256
   ) {
-    throw new TypeError("Expected canonical draft body digest is stale")
+    writeFail("CANONICAL_BODY_DIGEST_STALE", "Expected canonical draft body digest is stale")
   }
   const tombstone = snapshot.assets.at(-1)
   if (
@@ -463,7 +522,14 @@ function assertAbandonableSnapshot(snapshot, args) {
     tombstone === undefined ||
     tombstone.name !== TOMBSTONE_ASSET_NAME
   ) {
-    throw new TypeError("Canonical draft is missing its abandonment tombstone")
+    writeFail("TOMBSTONE_ASSET_MISSING", "Canonical draft is missing its abandonment tombstone")
+  }
+  if (
+    typeof args.expectedTombstoneSha256 !== "string" ||
+    !RECOVERY_SHA256_PATTERN.test(args.expectedTombstoneSha256) ||
+    tombstone.sha256 !== args.expectedTombstoneSha256
+  ) {
+    writeFail("TOMBSTONE_ASSET_CONFLICT", "Canonical draft tombstone digest is not the exact one")
   }
 }
 
@@ -481,6 +547,7 @@ function normalizeExpectedTerminalSnapshot(value) {
       "name",
       "targetCommitish",
       "draft",
+      "prerelease",
       "immutable",
       "body",
       "assets",
