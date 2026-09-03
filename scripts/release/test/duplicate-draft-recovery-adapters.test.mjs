@@ -2015,6 +2015,58 @@ test("release snapshots read complete assets and required recovery bytes through
   assert.equal(Object.hasOwn(snapshot.assets[1], "bytes"), false)
 })
 
+test("release snapshot partitions evidence assets that sort among the base assets", async () => {
+  // Regression: GitHub lists assets by name, and the archive asset's name sorts
+  // BETWEEN base assets (in production it precedes `release-record.json`). The
+  // snapshot previously assumed the first 45 entries were base assets, so the
+  // first upload pushed a base asset out of the base window and made the very
+  // next read unclassifiable.
+  const releaseId = DUPLICATE_ID
+  const originalBody = "canonical body\n"
+  const archiveBytes = Buffer.from(originalBody, "utf8")
+  const archiveSha = createHash("sha256").update(archiveBytes).digest("hex")
+  const archiveName = `dawn-v0.8.22-duplicate-${releaseId}-original-body-${archiveSha}.txt`
+  const trailingBase = "release-record.json"
+  assert.ok(archiveName < trailingBase, "fixture must interleave the archive before a base asset")
+
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) => {
+      if (url === `${BASE}/releases/${releaseId}`) {
+        return jsonResponse(releaseFixture({ releaseId, body: originalBody }))
+      }
+      if (url === `${BASE}/releases/${releaseId}/assets?per_page=100`) {
+        // Name-sorted, exactly as GitHub returns it.
+        return jsonResponse([
+          asset(1, "aaa-base.tgz", Buffer.from("base-one")),
+          asset(2, archiveName, archiveBytes),
+          asset(3, trailingBase, Buffer.from("base-two")),
+        ])
+      }
+      if (url === `${BASE}/releases/assets/2`) {
+        return binaryResponse(new Uint8Array(), 302, {
+          location: "https://objects.githubusercontent.com/recovery-archive",
+        })
+      }
+      if (url === "https://objects.githubusercontent.com/recovery-archive") {
+        return binaryResponse(archiveBytes)
+      }
+      assert.fail(`unexpected URL ${url}`)
+    },
+  })
+
+  const snapshot = await reader.readReleaseSnapshot(releaseId, {
+    expectedOriginalBody: originalBody,
+  })
+  assert.deepEqual(snapshot.evidenceAssets, ["body"])
+  assert.deepEqual(
+    snapshot.assets.map(({ name }) => name),
+    ["aaa-base.tgz", trailingBase, archiveName],
+    "base assets keep listing order and evidence assets follow them",
+  )
+})
+
 test("release capture rejects canonical and duplicate title drift", async () => {
   for (const releaseId of [379991871, DUPLICATE_ID, SECOND_DUPLICATE_ID]) {
     const reader = createDuplicateDraftRecoveryReader({

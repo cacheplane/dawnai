@@ -2101,8 +2101,13 @@ async function normalizeReleaseSnapshot({
     fail("RELEASE_MALFORMED", "Release snapshot is malformed")
   }
   const marker = releaseMarker(raw.body)
+  // GitHub lists assets sorted by name, and a recovery evidence asset's name
+  // interleaves with the base assets rather than following them. Partition by
+  // name so the downstream "first 45 are base, the rest are evidence" contract
+  // is true by construction, whatever order the listing arrives in.
+  const baseAssets = []
+  const evidenceEntries = []
   const assets = []
-  const evidenceAssets = []
   const assetIds = new Set()
   const assetNames = new Set()
   for (const rawAsset of rawAssets) {
@@ -2168,10 +2173,17 @@ async function normalizeReleaseSnapshot({
       } else {
         normalized.bytes = bytes.toString("utf8")
       }
-      evidenceAssets.push(kind)
+      evidenceEntries.push({ kind, asset: normalized })
+      continue
     }
-    assets.push(normalized)
+    baseAssets.push(normalized)
   }
+  evidenceEntries.sort(
+    (left, right) =>
+      EVIDENCE_KIND_ORDER.indexOf(left.kind) - EVIDENCE_KIND_ORDER.indexOf(right.kind),
+  )
+  assets.push(...baseAssets, ...evidenceEntries.map((entry) => entry.asset))
+  const evidenceAssets = evidenceEntries.map((entry) => entry.kind)
   return deepFreeze({
     releaseId,
     tagName: raw.tag_name,
@@ -2186,6 +2198,8 @@ async function normalizeReleaseSnapshot({
     ...(releaseId === DUPLICATE_DRAFT_RECOVERY_POLICY.canonicalReleaseId ? {} : { evidenceAssets }),
   })
 }
+
+const EVIDENCE_KIND_ORDER = Object.freeze(["body", "receipt"])
 
 function recoveryEvidenceKind(name, releaseId) {
   const prefix = `dawn-v${DUPLICATE_DRAFT_RECOVERY_POLICY.version}-duplicate-${releaseId}-`
