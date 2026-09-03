@@ -87,7 +87,7 @@ const EDGE_OVERRIDDEN_STORES: readonly {
  * build at a time is four round trips.
  *
  * Every probe here reads the same source of truth the RUNTIME reads — the
- * `workspace/` directory the workspace marker detects, the `memory.ts` the
+ * `workspace/` directory the workspace marker detects and the `memory.ts` the
  * manifest emitter probes — so the gate cannot drift into gating a feature the
  * app does not actually have, or missing one it does.
  *

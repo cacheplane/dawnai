@@ -514,6 +514,9 @@ describe("complete Vercel target", () => {
     const appRoot = await createTargetFixture({
       // The fixture's only default route is `probe`; the skill needs a route of
       // its own to hang off, so this adds one.
+      // A plain workflow, not an agent, because this fixture links no
+      // `@dawn-ai/sdk`: this case proves esbuild inlining and namespace keying,
+      // not that an agent consumes the skill (hono equivalence covers that).
       "src/app/chat/index.ts": 'export async function workflow() { return { message: "chat" } }\n',
       "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nDo research.\n",
     })

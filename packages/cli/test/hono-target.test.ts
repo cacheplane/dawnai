@@ -506,6 +506,9 @@ describe("hono target — edge capability gating", () => {
     expect(modules).toContain('"/src/app/chat/skills/research/SKILL.md"')
     expect(modules).toContain("Do research.")
     expect(modules).toContain('skills: ["research"]')
+    expect(modules).toContain('"/src/app/chat/plan.md"')
+    expect(modules).toContain('"/src/app/chat/memory.md"')
+    expect(modules).toContain("Prefer short answers.")
   })
 
   test("fails the build, before writing artifacts, when a SKILL.md exceeds 32 KiB", async () => {
@@ -518,8 +521,12 @@ describe("hono target — edge capability gating", () => {
     expect(String(error)).toContain("src/app/chat/skills/big/SKILL.md")
     expect(String(error)).toContain("32768-byte limit for SKILL.md")
     expect((error as { code?: string }).code).toBe("DAWN_E1005")
-    expect(existsSync(buildFile(appRoot, "app.mjs"))).toBe(false)
-    expect(existsSync(buildFile(appRoot, "modules.edge.mjs"))).toBe(false)
+
+    // A half-built .dawn/build looks deployable. Nothing may reach disk.
+    for (const name of ["modules.edge.mjs", "stores.mjs", "app.mjs", "wrangler.toml"]) {
+      expect(existsSync(buildFile(appRoot, name))).toBe(false)
+    }
+    expect(existsSync(join(appRoot, "wrangler.toml"))).toBe(false)
   })
 
   test("still fails the build for the workspace directory even when skills are present", async () => {
