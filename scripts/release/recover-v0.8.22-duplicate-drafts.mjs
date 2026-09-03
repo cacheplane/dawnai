@@ -286,7 +286,9 @@ const DEPENDENCY_DEFAULTS = Object.freeze({
  * DEPENDENCY_FIELDS list); an allowed name with neither a supplied value nor
  * an entry in DEPENDENCY_DEFAULTS (i.e. a caller-specific name the table
  * does not know) is simply absent from the returned runtime rather than set
- * to `undefined`.
+ * to `undefined`. Only `runGit` is always present; a caller-specific
+ * allow-list must name `fileSystem` and `resolveRepositoryRoot` explicitly
+ * to receive their defaults.
  */
 export function normalizeRuntime({
   cwd,
