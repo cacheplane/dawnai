@@ -1538,22 +1538,22 @@ git commit -m "docs: skills, plan.md and memory.md are bundled for edge targets"
 
 **Files:** none new.
 
-- [ ] **Step 1: Lint and fix**
+- [x] **Step 1: Lint and fix**
 
 Run: `pnpm lint`
 Expected: exit 0. If it reports fixable formatting in files this branch touched, run `pnpm lint:fix` and re-run `pnpm lint`. Commit any formatting change as `style: biome fixes`.
 
-- [ ] **Step 2: Build, typecheck, and the two package test suites**
+- [x] **Step 2: Build, typecheck, and the two package test suites**
 
 Run: `pnpm build && pnpm typecheck && pnpm --filter @dawn-ai/core test && pnpm --filter @dawn-ai/cli test`
 Expected: all exit 0. Docker-gated suites (`hono-node-roundtrip`, sandbox, pgvector) skip themselves when Docker is absent; that is expected.
 
-- [ ] **Step 3: The full CI lane**
+- [x] **Step 3: The full CI lane**
 
 Run: `pnpm ci:validate`
 Expected: exit 0. This is the Definition of Done from `AGENTS.md`. Budget 20 to 40 minutes. If a harness step fails on something unrelated to this branch, record the failing step and its first error lines in the PR description rather than retrying blindly.
 
-- [ ] **Step 4: Push and open the PR**
+- [x] **Step 4: Push and open the PR**
 
 ```bash
 git push -u origin blove/edge-static-marker-files
@@ -1582,7 +1582,7 @@ A Dawn app deployed as the Hono artifact inside a Vercel Node function needs ski
 EOF
 ```
 
-- [ ] **Step 5: Record the PR URL**
+- [x] **Step 5: Record the PR URL**
 
 Paste the PR URL into the "Status" section of the spec (`Approved for planning.` → `Implemented in <PR URL>.`), commit as `docs: link spec to PR`, and push.
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved for planning.
+Implemented in https://github.com/cacheplane/dawnai/pull/543.
 
 ## Problem
 
