@@ -40,9 +40,10 @@ export function staticMarkerFs(files: StaticMarkerFiles): MarkerFs {
   }
   const keys = [...entries.keys()]
 
-  // Scale assumption: a few dozen marker keys per app, so a linear scan per
-  // call is microseconds against a model round-trip. Revisit (e.g. index by
-  // prefix in the constructor) only if that stops holding.
+  // Scale assumption for the linear scans here and in `readdirSync`: a few
+  // dozen marker keys per app, so a linear scan per call is microseconds
+  // against a model round-trip. Revisit (e.g. index by prefix in the
+  // constructor) only if that stops holding.
   const isDirectory = (path: string): boolean => {
     if (path === "/") return keys.length > 0
     const prefix = `${path}/`
@@ -61,10 +62,16 @@ export function staticMarkerFs(files: StaticMarkerFiles): MarkerFs {
       return !entries.has(p) && isDirectory(p)
     },
     statSizeSync: (path) => {
-      const content = entries.get(normalize(path))
+      const p = normalize(path)
+      if (p.length === 0) return undefined
+      const content = entries.get(p)
       return content === undefined ? undefined : encoder.encode(content).byteLength
     },
-    readFileSync: (path) => entries.get(normalize(path)),
+    readFileSync: (path) => {
+      const p = normalize(path)
+      if (p.length === 0) return undefined
+      return entries.get(p)
+    },
     readdirSync: (path) => {
       const p = normalize(path)
       if (p.length === 0) return []
