@@ -1091,9 +1091,10 @@ async function prepareRouteExecutionForInvocation(
     }
 
     const capabilityBackends = sandboxBackends ?? configBackends
-    // Node reads markers (AGENTS.md, skills/) from disk through the fallback
-    // bag. A runtime with no fallbacks serves them from the manifest instead,
-    // which the build bundled precisely because there is no disk to read.
+    // Node reads every marker from disk through the fallback bag. A runtime
+    // with no fallbacks serves the three the build bundles — plan.md,
+    // memory.md, and skills/*/SKILL.md — from the manifest instead;
+    // workspace/AGENTS.md stays absent there.
     const markerFs = fallbacks ? fallbacks.markerFs : getStaticMarkerFs(options.staticModules)
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
@@ -1751,6 +1752,9 @@ export function getCachedStaticDescriptorMaps(modules: DawnStaticModules): Stati
  * and process-wide, so the cache is a WeakMap keyed on it — never rebuilt per
  * request, never leaked past the manifest's lifetime. `null` records "this
  * manifest bundles no marker files" so the union is not recomputed per route.
+ * Markers that normally re-read per turn (memory.md) get the same build-time
+ * content on every read through this facade — correct for an immutable
+ * bundle that nothing on the edge can write to.
  */
 const staticMarkerFsCache = new WeakMap<DawnStaticModules, MarkerFs | null>()
 

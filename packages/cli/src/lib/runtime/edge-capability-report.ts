@@ -203,21 +203,25 @@ export function collectRuntimeCapabilityGaps(
   // route loads, and without a MarkerFs the skills capability's `detect` simply
   // returns false. Nothing at request time can tell "this route had skills"
   // from "this route had none", which is why the BUILD records the names into
-  // the static manifest and this reads them back. A build that also BUNDLED the
-  // bodies (`markerFiles`) serves them through `staticMarkerFs`, so such a route
-  // has no gap left to report.
+  // the static manifest and this reads them back. A build that also BUNDLED a
+  // given skill's body (`markerFiles` containing its `SKILL.md`) serves it
+  // through `staticMarkerFs`, so only skills whose body is missing are gaps.
   for (const route of input.routes) {
     const skills = route.skills
     if (!skills || skills.length === 0) continue
-    if (route.markerFiles && Object.keys(route.markerFiles).length > 0) continue
+    // Trust the manifest for bodies exactly as little as for names: a skill is
+    // served only when its own SKILL.md body is bundled. A hand-composed
+    // manifest that records names beside a lone plan.md still reports.
+    const bundled = route.markerFiles ? Object.keys(route.markerFiles) : []
+    const unserved = skills.filter(
+      (name) => !bundled.some((key) => key.endsWith(`/skills/${name}/SKILL.md`)),
+    )
+    if (unserved.length === 0) continue
     violations.push({
       // Re-sorted even though `discoverSkillDirs` already sorts: `route.skills`
       // here can come from a hand-composed manifest fed straight to this
-      // function, which carries no guarantee of that order. This does not
-      // contradict discoverSkillDirs's "every consumer sees the same order"
-      // comment — it is a defensive re-sort for inputs that never went through
-      // that function at all.
-      capability: `skills (${[...skills].sort().join(", ")})`,
+      // function, which carries no guarantee of that order.
+      capability: `skills (${[...unserved].sort().join(", ")})`,
       source: `the skills/ directory of route "${route.routeId}", recorded in the static module manifest at build time`,
       reason:
         "skill bodies are read from disk when the route loads, and this runtime has no filesystem " +

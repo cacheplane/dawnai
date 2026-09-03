@@ -88,6 +88,24 @@ describe("collectRuntimeCapabilityGaps — fires when a feature is configured bu
     expect(found).toEqual([])
   })
 
+  it("still reports a skill whose body is missing even when other marker files are bundled", () => {
+    const found = gaps({
+      routes: [
+        {
+          markerFiles: {
+            "/ns/src/app/research/plan.md": "- [ ] a\n",
+            "/ns/src/app/research/skills/cite-sources/SKILL.md": "…",
+          },
+          routeId: "/research",
+          skills: ["cite-sources", "synthesize-findings"],
+        },
+      ],
+    })
+
+    expect(found).toHaveLength(1)
+    expect(found[0]?.capability).toBe("skills (synthesize-findings)")
+  })
+
   it("reports every gap at once, so one deploy teaches the operator all of it", () => {
     const found = gaps({
       config: { sandbox: { provider: stubProvider }, toolOutput: { previewLines: 3 } },
