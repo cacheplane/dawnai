@@ -26,7 +26,9 @@ import {
   canonicalSmokeResultBytes,
   REQUIRED_RELEASE_SMOKE_LANES,
 } from "../smoke-result.mjs"
+import { canonicalTerminalRecordBytes } from "../terminal-record-store.mjs"
 import { canonicalAuditResultBytes } from "../terminal-records.mjs"
+import { record as terminalRecordFixture } from "./support/terminal-record-fixture.mjs"
 
 const VERSION = "0.8.22"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -3230,6 +3232,12 @@ function gitReader(overrides = {}) {
     async resolveTag() {
       return COMMIT_SHA
     },
+    async listTree() {
+      return ""
+    },
+    async showFile() {
+      throw new Error("showFile must not be called when no terminal record exists")
+    },
     ...overrides,
   }
 }
@@ -4469,3 +4477,275 @@ function storedZip(files) {
   end.writeUInt32LE(centralOffset, 16)
   return Buffer.concat([...locals, ...centrals, end])
 }
+
+function recordFor(overrides = {}) {
+  const value = terminalRecordFixture()
+  const retag = (set) => ({ ...set, commitSha: COMMIT_SHA })
+  return {
+    ...value,
+    commitSha: COMMIT_SHA,
+    tag: { ...value.tag, commitSha: COMMIT_SHA },
+    predecessor: {
+      ...value.predecessor,
+      marker: {
+        ...value.predecessor.marker,
+        commitSha: COMMIT_SHA,
+        attestationSet: retag(value.predecessor.marker.attestationSet),
+      },
+      artifact: {
+        ...value.predecessor.artifact,
+        attestationSet: retag(value.predecessor.artifact.attestationSet),
+      },
+    },
+    ...overrides,
+  }
+}
+
+function escrowTerminalRecord(escrow, overrides = {}) {
+  const base = recordFor()
+  const marker = escrow.marker
+  return {
+    ...base,
+    predecessor: {
+      state: "CANDIDATE_ESCROWED",
+      releaseId: escrow.release.id,
+      releaseStatus: "draft",
+      bodySha256: digest(Buffer.from(escrow.release.body, "utf8")),
+      marker,
+      artifact: {
+        manifestSha256: marker.manifestSha256,
+        releaseRecordSha256: marker.releaseRecordSha256,
+        baseAssetSetSha256: marker.baseAssetSetSha256,
+        attestationSet: marker.attestationSet,
+      },
+    },
+    evidence: {
+      ...base.evidence,
+      escrowAssets: escrow.assets.map((asset) => ({
+        id: asset.id,
+        name: asset.name,
+        sha256: asset.digest.slice("sha256:".length),
+      })),
+    },
+    ...overrides,
+  }
+}
+
+function recordedGit(bytes) {
+  return gitReader({
+    async listTree({ ref }) {
+      assert.equal(ref, "HEAD")
+      return "package.json\nscripts/release/terminal-records/v0.8.22.json\n"
+    },
+    async showFile({ ref, path: filePath }) {
+      assert.equal(ref, "HEAD")
+      assert.equal(filePath, "scripts/release/terminal-records/v0.8.22.json")
+      return bytes.toString("utf8")
+    },
+  })
+}
+
+function stampedTerminalDraft(escrow, value) {
+  const bytes = canonicalTerminalRecordBytes(value)
+  const sha256 = digest(bytes)
+  const marker = abandonmentReleaseMarker({
+    candidate: candidate(),
+    artifact: value.predecessor.artifact,
+    abandonmentSha256: sha256,
+    previousMarker: value.predecessor.marker,
+  })
+  const tombstoneAsset = {
+    id: 3_100,
+    name: "abandonment.json",
+    digest: `sha256:${sha256}`,
+    size: bytes.length,
+  }
+  return {
+    bytes,
+    sha256,
+    marker,
+    assets: [...escrow.assets, tombstoneAsset],
+    bytesById: new Map([...escrow.bytesById, [tombstoneAsset.id, bytes]]),
+    release: {
+      ...escrow.release,
+      name: `Dawn v${VERSION} (abandoned before publication)`,
+      body: canonicalAbandonmentReleaseBody({
+        marker,
+        tombstone: value,
+        previousMarker: value.predecessor.marker,
+      }),
+    },
+  }
+}
+
+function releaseReader(fixture) {
+  return {
+    async listReleases() {
+      return present("releases", [fixture.release])
+    },
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, fixture.release.id)
+      return present("release", fixture.release)
+    },
+    async listReleaseAssets({ releaseId }) {
+      assert.equal(releaseId, fixture.release.id)
+      return present("release-assets", fixture.assets)
+    },
+    async downloadReleaseAsset({ assetId }) {
+      const bytes = fixture.bytesById.get(Number(assetId))
+      assert.ok(bytes)
+      return binary("release-asset-download", bytes)
+    },
+  }
+}
+
+test("a committed terminal record makes the candidate terminal even when no draft is visible", async () => {
+  const bytes = canonicalTerminalRecordBytes(recordFor())
+  const { observation, diagnostics } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(bytes),
+    github: githubReader(),
+    npm: npmReader(),
+  })
+  assert.deepEqual(diagnostics, [])
+  assert.equal(observation.release.status, "absent")
+  assert.deepEqual(observation.abandonment, {
+    requested: true,
+    recorded: true,
+    predecessor: "CANDIDATE_ESCROWED",
+  })
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(plan.state, "ABANDONED_PREPUBLICATION")
+  assert.equal(plan.disposition, "noop")
+  assert.deepEqual(plan.conflicts, [])
+})
+
+test("a terminal record with a published package blocks with TERMINAL_RECORD_PUBLISHED_VERSION", async () => {
+  const bytes = canonicalTerminalRecordBytes(recordFor())
+  const npm = npmReader({
+    async observePackageVersion({ name, version }) {
+      if (name !== "@dawn-ai/core") return envelope("ABSENT", "package-version", 404, "E404")
+      return {
+        status: "PRESENT",
+        operation: "package-version",
+        httpStatus: 200,
+        code: null,
+        package: {
+          name,
+          version,
+          tarballUrl: npmTarballUrl(name, version),
+          shasum: "1".repeat(40),
+          integrity: packageEntry(name).npmIntegrity,
+          distTags: { latest: version },
+          latest: version,
+        },
+      }
+    },
+  })
+  const { observation, diagnostics } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(bytes),
+    github: githubReader(),
+    npm,
+  })
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_PUBLISHED_VERSION"))
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(plan.disposition, "blocked")
+})
+
+test("a terminal record with a visible unstamped escrow draft blocks with TERMINAL_RECORD_MISMATCH", async () => {
+  const escrow = attestedReleaseFixture()
+  const value = escrowTerminalRecord(escrow)
+  const bytes = canonicalTerminalRecordBytes(value)
+  const github = githubReader(releaseReader(escrow))
+  const { diagnostics, observation } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(bytes),
+    github,
+    npm: npmReader(),
+    attestations: attestationVerifier([]),
+  })
+  assert.equal(observation.release.status, "draft")
+  assert.equal(observation.release.marker.phase, "ESCROWED")
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
+  assert.equal(observation.abandonment.recorded, false)
+})
+
+test("a terminal record with a visible stamped draft that matches is terminal with no diagnostics", async () => {
+  const escrow = attestedReleaseFixture()
+  const value = escrowTerminalRecord(escrow)
+  const stamped = stampedTerminalDraft(escrow, value)
+  const github = githubReader(releaseReader(stamped))
+  const { diagnostics, observation } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(stamped.bytes),
+    github,
+    npm: npmReader(),
+    attestations: attestationVerifier([]),
+  })
+  assert.deepEqual(diagnostics, [])
+  assert.equal(observation.release.status, "draft")
+  assert.equal(observation.release.marker.phase, "ABANDONED_PREPUBLICATION")
+  assert.deepEqual(observation.abandonment, {
+    requested: true,
+    recorded: true,
+    predecessor: "CANDIDATE_ESCROWED",
+  })
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(plan.state, "ABANDONED_PREPUBLICATION")
+  assert.deepEqual(plan.conflicts, [])
+})
+
+test("a visible stamped draft whose tombstone digest differs from the committed record blocks with TERMINAL_RECORD_MISMATCH", async () => {
+  const escrow = attestedReleaseFixture()
+  const committed = escrowTerminalRecord(escrow)
+  const other = escrowTerminalRecord(escrow, {
+    reason: "a different reason for the very same abandoned candidate",
+  })
+  const stamped = stampedTerminalDraft(escrow, other)
+  assert.notEqual(digest(canonicalTerminalRecordBytes(committed)), stamped.sha256)
+  const github = githubReader(releaseReader(stamped))
+  const { diagnostics, observation } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(canonicalTerminalRecordBytes(committed)),
+    github,
+    npm: npmReader(),
+    attestations: attestationVerifier([]),
+  })
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
+  assert.equal(observation.release.marker.phase, "ABANDONED_PREPUBLICATION")
+})
+
+test("a malformed terminal record blocks the observation with TERMINAL_RECORD_INVALID", async () => {
+  const git = gitReader({
+    async listTree() {
+      return "scripts/release/terminal-records/v0.8.22.json\n"
+    },
+    async showFile() {
+      return "{}\n"
+    },
+  })
+  const { diagnostics, observation } = await observeProductionCandidate({
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git,
+    github: githubReader(),
+    npm: npmReader(),
+  })
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_INVALID"))
+  assert.equal(
+    planRelease({ candidate: candidate(), observation, mode: "controller" }).disposition,
+    "blocked",
+  )
+})

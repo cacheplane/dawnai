@@ -38,6 +38,7 @@ import {
   REQUIRED_RELEASE_SMOKE_LANES,
 } from "./smoke-result.mjs"
 import { ReleaseState } from "./state.mjs"
+import { readTerminalRecord } from "./terminal-record-store.mjs"
 import { canonicalAuditResultBytes, parseAuditResult } from "./terminal-records.mjs"
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
@@ -340,7 +341,7 @@ export async function observeProductionCandidate({
   const currentRun = normalizeCurrentPublisherRun(currentPublisherRun, identity)
   const managedInventory = normalizeProductionInventory(inventory, identity)
   normalizeControllerMarker(marker)
-  assertMethods(git, ["resolveTag"], "Git reader")
+  assertMethods(git, ["resolveTag", "listTree", "showFile"], "Git reader")
   assertMethods(
     github,
     [
@@ -368,6 +369,18 @@ export async function observeProductionCandidate({
   }
 
   const diagnostics = []
+  let committedTerminalRecord = null
+  let terminalRecordInvalid = false
+  try {
+    committedTerminalRecord = await readTerminalRecord({
+      git,
+      ref: "HEAD",
+      version: identity.version,
+    })
+  } catch {
+    terminalRecordInvalid = true
+    addDiagnostic(diagnostics, "git", "terminal-record", "AMBIGUOUS", "TERMINAL_RECORD_INVALID")
+  }
   const [ciResult, ciWorkflowResult, tagRefsResult, releasesResult, artifactResult, publisherRuns] =
     await Promise.all([
       observeAdapter(() => github.getCommitCheckRuns({ commitSha: identity.commitSha }), {
@@ -444,6 +457,18 @@ export async function observeProductionCandidate({
     attestations,
     diagnostics,
   })
+  let abandonment = releaseState.abandonment
+  if (committedTerminalRecord !== null) {
+    if (terminalRecordMatchesRelease(committedTerminalRecord, releaseState.release)) {
+      abandonment = {
+        requested: true,
+        recorded: true,
+        predecessor: committedTerminalRecord.predecessor.state,
+      }
+    } else {
+      addDiagnostic(diagnostics, "github", "release", "AMBIGUOUS", "TERMINAL_RECORD_MISMATCH")
+    }
+  }
   const retentionResolvedByDurableRelease =
     releaseState.release.status !== "absent" &&
     releaseState.release.status !== "ambiguous" &&
@@ -451,8 +476,8 @@ export async function observeProductionCandidate({
     ((releaseState.artifactState.artifacts.status === "attested" &&
       releaseState.release.marker.attestationSet !== null) ||
       (releaseState.release.marker.phase === "ABANDONED_PREPUBLICATION" &&
-        releaseState.abandonment.requested === true &&
-        releaseState.abandonment.recorded === true))
+        abandonment.requested === true &&
+        abandonment.recorded === true))
   if (!retentionResolvedByDurableRelease) {
     diagnostics.push(...(preparedArtifactState.deferredDiagnostics ?? []))
   }
@@ -543,6 +568,19 @@ export async function observeProductionCandidate({
     )
   }
 
+  if (
+    (committedTerminalRecord !== null || terminalRecordInvalid) &&
+    (registryPresenceObserved || registryPackages.some((pkg) => pkg.status === "present"))
+  ) {
+    addDiagnostic(
+      diagnostics,
+      "npm",
+      "package-version",
+      "AMBIGUOUS",
+      "TERMINAL_RECORD_PUBLISHED_VERSION",
+    )
+  }
+
   const tag = await mapProductionTag({
     result: tagRefsResult,
     candidate: identity,
@@ -582,6 +620,7 @@ export async function observeProductionCandidate({
       release = nonPresentRelease("ambiguous")
     }
   }
+  if (terminalRecordInvalid) release = nonPresentRelease("ambiguous")
   const publicationHistory = await observeProductionPublicationHistory({
     result: publisherRuns,
     candidate: identity,
@@ -611,7 +650,7 @@ export async function observeProductionCandidate({
         ? releaseState.smokes
         : pendingProductionSmokeObservations(identity, artifacts.manifestSha256),
     audit: releaseState.audit,
-    abandonment: releaseState.abandonment,
+    abandonment,
   }
   diagnostics.sort(compareDiagnostics)
   const result = { observation, diagnostics }
@@ -2403,6 +2442,28 @@ async function mapProductionAbandonmentRelease({
       predecessor: tombstone.predecessor.state,
     },
   })
+}
+
+/**
+ * true  — no draft is visible (absent/ambiguous: the committed record stands alone), or the
+ *         visible draft is the stamped abandonment whose marker digest and tombstone asset
+ *         digest both equal the record's canonical SHA-256.
+ * false — a draft is visible but is not the stamped tombstone for this exact record.
+ * The numeric Release ID is not part of the observation; the apply command verifies it.
+ */
+function terminalRecordMatchesRelease(record, release) {
+  if (release.status === "absent" || release.status === "ambiguous") return true
+  if (release.status !== "draft") return false
+  const marker = release.marker
+  if (
+    marker === null ||
+    marker.phase !== "ABANDONED_PREPUBLICATION" ||
+    marker.abandonmentSha256 !== record.sha256
+  ) {
+    return false
+  }
+  const tombstones = release.assets.filter((asset) => asset.name === "abandonment.json")
+  return tombstones.length === 1 && tombstones[0].sha256 === record.sha256
 }
 
 function normalizeReleaseIdentity(value, candidate) {
