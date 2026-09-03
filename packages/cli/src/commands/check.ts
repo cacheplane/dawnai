@@ -118,8 +118,11 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
           { appRoot: manifest.appRoot, config: loadedConfig, manifest },
           targetName,
         )
-        // The same limit the edge emitters apply to every bundled marker file,
-        // surfaced by `dawn check` rather than by a failed build.
+      }
+
+      // The same limit the edge emitters apply to every bundled marker file,
+      // surfaced by `dawn check` rather than by a failed build.
+      if (buildTargets.some((name) => name === "hono" || name === "vercel")) {
         await assertRouteMarkerFileLimits({ appRoot: manifest.appRoot, manifest })
       }
     }
