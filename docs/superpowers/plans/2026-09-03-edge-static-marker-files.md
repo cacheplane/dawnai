@@ -1448,7 +1448,7 @@ git commit -m "test(cli): node and edge serve bundled skills, plan.md and memory
 - Modify: `apps/web/content/docs/upgrading.mdx`
 - Create: `.changeset/edge-static-marker-files.md`
 
-- [ ] **Step 1: edge.mdx**
+- [x] **Step 1: edge.mdx**
 
 In the "What the edge cannot serve" table, delete the row:
 
@@ -1468,15 +1468,15 @@ Route [skills](/docs/skills), a route [`plan.md`](/docs/planning), and a route `
 The build enforces the size each marker enforces at runtime — 32 KiB for a `SKILL.md` or `memory.md`, 64 KiB for `plan.md` — and fails with `DAWN_E1005`, naming the file, before it writes any artifact. A manifest that records skill names but carries no bodies (one built before this behavior existed, or composed by hand) still fails at boot with `DAWN_E1005` rather than dropping the skills silently; rebuild with `dawn build`.
 ```
 
-- [ ] **Step 2: cli.mdx**
+- [x] **Step 2: cli.mdx**
 
 On the line that begins ``The `hono` target serves a **subset** of Dawn``, change `a \`workspace/\` directory, route skills, or route-level long-term memory` to `a \`workspace/\` directory, or route-level long-term memory`.
 
-- [ ] **Step 3: faq.mdx**
+- [x] **Step 3: faq.mdx**
 
 On the line that begins `Yes, for apps that fit the edge subset.`, change `The sandbox, workspace file and shell tools, tool-output offloading, skills, and long-term memory are unavailable there` to `The sandbox, workspace file and shell tools, tool-output offloading, and long-term memory are unavailable there; route skills, \`plan.md\`, and \`memory.md\` are bundled into the manifest at build time`.
 
-- [ ] **Step 4: upgrading.mdx**
+- [x] **Step 4: upgrading.mdx**
 
 Directly above the heading `## Gated features now fail loudly at request time, not just at build time`, add:
 
@@ -1495,7 +1495,7 @@ bundled](/docs/deployment/edge#skills-planmd-and-route-memorymd-are-bundled).
 
 In the existing section below it, change `\`sandbox\`, route [skills](/docs/skills), and \`toolOutput\` used to be read and then quietly do nothing on a runtime with no filesystem. All three now raise` to `\`sandbox\` and \`toolOutput\` used to be read and then quietly do nothing on a runtime with no filesystem. Both now raise`, and change `naming the feature and the config key that introduced it` to `naming the feature and the config key that introduced it; a manifest that records skills but bundles no bodies is reported the same way`.
 
-- [ ] **Step 5: Changeset**
+- [x] **Step 5: Changeset**
 
 Create `.changeset/edge-static-marker-files.md`:
 
@@ -1508,17 +1508,25 @@ Create `.changeset/edge-static-marker-files.md`:
 Bundle route skills, `plan.md`, and `memory.md` into the `hono` and `vercel` static manifests and serve them at request time through a new `staticMarkerFs`, so those capabilities work on edge targets. The build no longer gates skills off those targets; it instead enforces each marker's size limit by name before writing artifacts.
 ```
 
-- [ ] **Step 6: Run the docs check**
+- [x] **Step 6: Run the docs check**
 
 Run: `node scripts/check-docs.mjs && node scripts/check-changesets.mjs`
 Expected: both exit 0. If `check-docs` flags a phrase, reword it; do not add an exemption.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/web/content/docs/deployment/edge.mdx apps/web/content/docs/cli.mdx apps/web/content/docs/faq.mdx apps/web/content/docs/upgrading.mdx .changeset/edge-static-marker-files.md
 git commit -m "docs: skills, plan.md and memory.md are bundled for edge targets"
 ```
+
+**As built** — deltas from the steps above:
+- Also edited `apps/web/content/docs/deployment.mdx` (dropped "skills" from the target-matrix gated-surfaces phrase) and `apps/web/content/docs/deployment/edge.mdx`'s fit-check bullet, which still listed skills as a reason an app does not fit the edge.
+- `scripts/check-docs.mjs` required owner rows for the four new `@dawn-ai/core` exports, so `apps/web/content/docs/api/core.mdx` gained rows for `MAX_MEMORY_BYTES`, `MAX_PLAN_BYTES`, `StaticMarkerFiles` and `staticMarkerFs`.
+- Editing docs content invalidates `apps/web/app/seo/lastmod.generated.json`; regenerated with `pnpm --filter @dawn-ai/web seo:lastmod` (its `--check` runs in the web suite).
+- `packages/cli/docs/**` is untracked in this repo, so nothing there is committed; `packages/cli/README.md` is hand-written and needed no change.
+- The FAQ sentence keeps its original "the build fails naming them" clause and gains the bundling note as a following sentence, so "them" still refers to the unavailable surfaces.
+- The heading anchor used from `upgrading.mdx` is `/docs/deployment/edge#skills-planmd-and-route-memorymd-are-bundled` (verified against `github-slugger`).
 
 ---
 

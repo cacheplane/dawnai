@@ -85,12 +85,24 @@ normally. An empty `toolOutput: {}` expresses no intent and is not gated.
 **Node deployments are unaffected** — the gate is specific to the `hono` build
 target, and the matching runtime check (below) cannot fire on Node at all.
 
+## Skills, `plan.md`, and route `memory.md` now work on edge targets
+
+The `hono` and `vercel` targets used to fail the build when a route shipped
+skills, and `plan.md` and `memory.md` silently did nothing there. `dawn build`
+now bundles all three into `modules.edge.mjs` and serves them from the
+manifest at request time. An app that removed its skills to pass the gate can
+restore them; nothing else changes. Files over the marker's limit — 32 KiB for
+`SKILL.md` and `memory.md`, 64 KiB for `plan.md` — fail the build with
+`DAWN_E1005` by name. See [Skills, `plan.md`, and route `memory.md` are
+bundled](/docs/deployment/edge#skills-planmd-and-route-memorymd-are-bundled).
+
 ## Gated features now fail loudly at request time, not just at build time
 
-`sandbox`, route [skills](/docs/skills), and `toolOutput` used to be read and then
-quietly do nothing on a runtime with no filesystem. All three now raise
+`sandbox` and `toolOutput` used to be read and then
+quietly do nothing on a runtime with no filesystem. Both now raise
 `DAWN_E1005` on every request instead, naming the feature and the config key that
-introduced it. See [What the edge cannot
+introduced it; a manifest that records skills but bundles no bodies for them is
+reported the same way. See [What the edge cannot
 serve](/docs/deployment/edge#what-the-edge-cannot-serve).
 
 This closes a gap the build gate could not: composing an entry by hand over
