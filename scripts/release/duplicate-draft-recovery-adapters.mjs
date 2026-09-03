@@ -10,6 +10,7 @@ import {
 } from "./adapters/http.mjs"
 import { createNpmReader } from "./adapters/npm.mjs"
 import {
+  baseAssetNamespaceFromMarker,
   canonicalRecoveryNotice,
   canonicalRecoveryReceipt,
   DUPLICATE_DRAFT_RECOVERY_POLICY,
@@ -18,6 +19,7 @@ import {
   normalizeDuplicateDraftReleaseProjection,
   originalBodyAssetName,
   recoveryReceiptAssetName,
+  sameAssetSet,
 } from "./duplicate-draft-recovery.mjs"
 import { parseReleaseMarker } from "./metadata.mjs"
 
@@ -36,6 +38,14 @@ const CANDIDATE_RELEASE_IDS = new Set([
 ])
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const MAX_PAGES = 100
+const MAX_PAGINATION_TIMEOUT_FACTOR = 16
+const REPOSITORY_IDENTITY_FIELDS = Object.freeze([
+  "id",
+  "full_name",
+  "name",
+  "default_branch",
+  "owner.login",
+])
 const MAX_RECORDS = 10_000
 const RECOVERY_ASSET_BYTES = MAX_ARCHIVE_ASSET_BYTES
 const WRITER_MAX_TIMEOUT_MS = 300_000
@@ -147,6 +157,9 @@ export function createDuplicateDraftRecoveryReader({
     http,
     token: token ?? null,
     timeoutMs: timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+    // A paginated read walks several large pages, so the per-request timeout
+    // cannot also serve as the whole-walk deadline. Bound both explicitly.
+    paginationTimeoutMs: (timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS) * MAX_PAGINATION_TIMEOUT_FACTOR,
     maxResponseBytes,
     now,
   }
@@ -430,12 +443,14 @@ export function createDuplicateDraftRecoveryWriter(options = {}) {
     maxRecords: MAX_RECORDS,
   })
   const http = createHttpGet({ fetchImpl: strictFetchImpl, timeoutMs, maxResponseBytes })
+  const paginationTimeoutMs = timeoutMs * MAX_PAGINATION_TIMEOUT_FACTOR
   const context = Object.freeze({
     token,
     github,
     http,
     fetchImpl: strictFetchImpl,
     timeoutMs,
+    paginationTimeoutMs,
     maxResponseBytes,
     now: Date.now,
     observedNow,
@@ -828,10 +843,18 @@ function validateEscrowedSnapshot(snapshot) {
     throw new TypeError("Expected duplicate Release marker is not the approved candidate")
   }
   const originalAssets = snapshot.assets.slice(0, 45)
-  const baseAssetSetSha256 = sha256(
-    `${JSON.stringify(originalAssets.map(({ name, sha256: digest }) => ({ name, sha256: digest })))}\n`,
-  )
-  if (baseAssetSetSha256 !== parsed.baseAssetSetSha256) {
+  // The marker digest's order comes from the attestation subjects, not from
+  // GitHub's listing order, so derive the expected namespace from the marker
+  // and compare it to the live assets as a set.
+  const expectedBaseAssets = baseAssetNamespaceFromMarker(parsed)
+  if (
+    expectedBaseAssets === null ||
+    expectedBaseAssets.length !== 45 ||
+    sha256(
+      `${JSON.stringify(expectedBaseAssets.map(({ name, sha256: digest }) => ({ name, sha256: digest })))}\n`,
+    ) !== parsed.baseAssetSetSha256 ||
+    !sameAssetSet(expectedBaseAssets, originalAssets)
+  ) {
     throw new TypeError("Expected duplicate Release asset inventory is not exact")
   }
   const bodySha256 = sha256(snapshot.body)
@@ -1755,6 +1778,7 @@ async function readRepositoryState(context) {
     readExactJson(context, {
       path: `/repos/${OWNER}/${REPOSITORY}`,
       operation: "repository",
+      pickFields: REPOSITORY_IDENTITY_FIELDS,
     }),
     context.github.getRef({ ref: "heads/main" }),
   ])
@@ -2183,7 +2207,10 @@ function releaseMarker(body) {
   }
 }
 
-async function readExactJson(context, { path, operation, accept = "application/vnd.github+json" }) {
+async function readExactJson(
+  context,
+  { path, operation, accept = "application/vnd.github+json", pickFields = null },
+) {
   const result = await context.http.getJson({
     url: `${API_ORIGIN}${path}`,
     headers: githubHeaders(context.token, accept),
@@ -2197,7 +2224,12 @@ async function readExactJson(context, { path, operation, accept = "application/v
     fail(`${operation.toUpperCase().replaceAll("-", "_")}_UNAVAILABLE`, `${operation} read failed`)
   }
   const malformedCode = `${operation.toUpperCase().replaceAll("-", "_")}_MALFORMED`
-  return safeContextRemoteSnapshot(context, result.body, malformedCode)
+  // Some GitHub responses legitimately carry keys the unsafe-key guard rejects
+  // (for example the repository payload's `temp_clone_token` and
+  // `secret_scanning*` settings). Ingest only the fields this boundary needs so
+  // such a response is projected away rather than rejected wholesale.
+  const body = pickFields === null ? result.body : pickRemoteFields(result.body, pickFields)
+  return safeContextRemoteSnapshot(context, body, malformedCode)
 }
 
 async function readStrictPages(context, { path, operation, field, requireTotalCount = false }) {
@@ -2211,7 +2243,7 @@ async function readStrictPages(context, { path, operation, field, requireTotalCo
   if (!Number.isSafeInteger(startedAt)) {
     fail(`${operation}_UNAVAILABLE`, `${operation.toLowerCase()} read failed`)
   }
-  const deadline = startedAt + context.timeoutMs
+  const deadline = startedAt + context.paginationTimeoutMs
   for (let page = 0; page < MAX_PAGES; page += 1) {
     if (seenUrls.has(url)) fail("PAGINATION_DRIFT", "Recovery read pagination is unsafe")
     seenUrls.add(url)
@@ -2457,6 +2489,41 @@ function canonicalWriterRemoteJson(value, token) {
     })
   }
   return normalized
+}
+
+/**
+ * Project a raw remote JSON object onto an exact allowlist of dotted paths,
+ * reading only own data properties so no getter or inherited value is observed.
+ * Absent paths are omitted, which lets the caller's own exactness checks fail
+ * with their specific code rather than a generic malformed-response error.
+ */
+function pickRemoteFields(value, paths) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value
+  const projected = {}
+  for (const dotted of paths) {
+    const segments = dotted.split(".")
+    let source = value
+    let missing = false
+    for (const segment of segments.slice(0, -1)) {
+      const descriptor = Object.getOwnPropertyDescriptor(source, segment)
+      if (descriptor === undefined || !("value" in descriptor) || !isObject(descriptor.value)) {
+        missing = true
+        break
+      }
+      source = descriptor.value
+    }
+    if (missing) continue
+    const leaf = segments[segments.length - 1]
+    const descriptor = Object.getOwnPropertyDescriptor(source, leaf)
+    if (descriptor === undefined || !("value" in descriptor)) continue
+    let target = projected
+    for (const segment of segments.slice(0, -1)) {
+      if (!Object.hasOwn(target, segment)) target[segment] = {}
+      target = target[segment]
+    }
+    target[leaf] = descriptor.value
+  }
+  return projected
 }
 
 function canonicalRemoteJson(value, token) {

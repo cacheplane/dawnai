@@ -229,11 +229,34 @@ export async function runDuplicateDraftRecoveryCli({
           ? "Duplicate draft recovery output cleanup uncertain.\n"
           : input
             ? "Invalid duplicate draft recovery input.\n"
-            : "Duplicate draft recovery failed.\n",
+            : `Duplicate draft recovery failed.${diagnosticCodeSuffix(error)}\n`,
       )
     } catch {}
     return cleanupUncertain ? 3 : input ? 2 : 1
   }
+}
+
+/**
+ * Surface a failure's stable code so an operator holding an edit freeze can tell
+ * "evidence expired, recapture" from "the PATCH may have landed" without
+ * instrumenting the module. Recovery codes are built from static operation
+ * names, never from remote data; anything not matching that exact shape is
+ * withheld rather than risk echoing a response body.
+ */
+const RECOVERY_ERROR_NAMES = new Set([
+  "DuplicateDraftRecoveryCaptureError",
+  "DuplicateDraftRecoveryReadError",
+  "DuplicateDraftRecoveryWriteError",
+])
+
+function diagnosticCodeSuffix(error) {
+  // Only Dawn's own recovery errors qualify. A Node errno such as EIO carries a
+  // `code` too, and echoing arbitrary error codes would widen this surface
+  // beyond the curated recovery constants.
+  const name = Object.getOwnPropertyDescriptor(error ?? {}, "name")?.value ?? error?.name
+  if (!RECOVERY_ERROR_NAMES.has(name)) return ""
+  const code = Object.getOwnPropertyDescriptor(error ?? {}, "code")?.value
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/u.test(code) ? ` (code: ${code})` : ""
 }
 
 function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {

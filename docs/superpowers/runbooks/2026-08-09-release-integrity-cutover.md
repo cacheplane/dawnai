@@ -258,7 +258,7 @@ time rather than trusting this table):
 | Annotated tag `v0.8.22` peels to | `2a80deece2ff958fe7fde8fddeb4f99bed70a1c8` |
 | Draft Releases identifying the candidate | exactly three; no fourth |
 | Release IDs / temporary tag names | exactly the policy values |
-| Body SHA-256 of all three drafts | `54924b7e963e593d3988d9ce1708bfbb2dfec46606cd4a47125987d24ad789f0` (both duplicates `untouched`) |
+| Body SHA-256 of all three drafts | `5fe9fcab17cb6964658da89267beec5cf59cb04846b0209d9773e6b2e2c2e918` (both duplicates `untouched`). Digest the exact body bytes: `gh api … --jq .body \| shasum` appends a newline and yields a different value. |
 | Base assets per draft | 45, mutable, not prerelease |
 | `.github/workflows/release.yml` | `disabled_manually`, no nonterminal runs |
 | Candidate runs | 5, all `completed`; each `publish-npm` job `completed`/`skipped`, one attempt each |
