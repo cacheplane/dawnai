@@ -36,9 +36,16 @@ const POLICY = {
 const CANONICAL_OPAQUE_TAG = "untagged-be0ff4bee4ba43b521a9"
 const RELEASE_TITLE = "Dawn v0.8.22"
 const GITHUB_BASE = "https://api.github.com/repos/cacheplane/dawnai"
-// Escape before interpolating into a RegExp: an unescaped "." in the hostname
-// would let these matchers accept more hosts than the exact API origin.
-const GITHUB_BASE_PATTERN = GITHUB_BASE.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+const DECIMAL_ID = /^[1-9][0-9]*$/u
+
+// Match URLs by exact prefix rather than by interpolating the base into a
+// RegExp: an unescaped "." in the hostname would let these matchers accept
+// more hosts than the exact API origin.
+function exactTrailingId(url, prefix, suffix = "") {
+  if (!url.startsWith(prefix) || !url.endsWith(suffix)) return null
+  const rest = url.slice(prefix.length, url.length - suffix.length)
+  return DECIMAL_ID.test(rest) ? Number(rest) : null
+}
 
 const ORIGINAL_ASSETS = Array.from({ length: 45 }, (_, index) => ({
   id: 101 + index,
@@ -964,9 +971,9 @@ test("apply composes with the real Task 4 writer over an in-memory quarantine tr
         })),
       )
     }
-    const download = new RegExp(`^${GITHUB_BASE_PATTERN}/releases/assets/(\\d+)$`, "u").exec(url)
+    const download = exactTrailingId(url, `${GITHUB_BASE}/releases/assets/`)
     if (download !== null) {
-      const asset = currentSnapshot().assets.find(({ id }) => id === Number(download[1]))
+      const asset = currentSnapshot().assets.find(({ id }) => id === download)
       assert.ok(asset)
       return new Response(evidenceBytes(asset), {
         status: 200,
@@ -1646,14 +1653,12 @@ test("adapter canonical and duplicate snapshots compose directly into capture", 
     root: "/workspace",
     run: async () => `${MERGE_COMMIT_SHA}\n`,
     fetchImpl: async (url) => {
-      const match = new RegExp(
-        `^${GITHUB_BASE_PATTERN}/releases/(\\d+)(/assets\\?per_page=100)?$`,
-        "u",
-      ).exec(url)
-      assert.ok(match, `unexpected URL ${url}`)
-      const releaseId = Number(match[1])
+      const assetsSuffix = "/assets?per_page=100"
+      const assetsId = exactTrailingId(url, `${GITHUB_BASE}/releases/`, assetsSuffix)
+      const releaseId = assetsId ?? exactTrailingId(url, `${GITHUB_BASE}/releases/`)
+      assert.ok(releaseId !== null, `unexpected URL ${url}`)
       assert.equal(tags.has(releaseId), true)
-      if (match[2] !== undefined) {
+      if (assetsId !== null) {
         return jsonResponse(
           ORIGINAL_ASSETS.map((asset, index) => ({
             id: releaseId * 100 + index,
