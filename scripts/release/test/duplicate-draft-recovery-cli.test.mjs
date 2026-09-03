@@ -975,8 +975,33 @@ test("production recovery observer wires the real normal controller observer by 
     token: "test-token",
     fileSystem: {},
     runGit: async () => "",
+    terminalRecordRef: "9".repeat(40),
   })
   assert.equal(typeof normal, "function")
+
+  // The reviewed merge commit is required, never defaulted: an observer that silently read some
+  // other tree could report a terminal record that the recovery was not authorized against.
+  for (const invalid of [undefined, ""]) {
+    assert.throws(
+      () =>
+        recoveryCliModule.createNormalProductionRecoveryObserver({
+          root: "/workspace",
+          token: "test-token",
+          fileSystem: {},
+          runGit: async () => "",
+          terminalRecordRef: invalid,
+        }),
+      /Recovery terminal record ref is invalid/u,
+    )
+    assert.throws(
+      () =>
+        recoveryCliModule.createProductionRecoveryObserver({
+          ...productionObserverInput(productionObserverReader({ calls: [] })),
+          terminalRecordRef: invalid,
+        }),
+      /Recovery terminal record ref is invalid/u,
+    )
+  }
 
   const observer = recoveryCliModule.createProductionRecoveryObserver(
     productionObserverInput(productionObserverReader({ calls: [] })),
@@ -1108,6 +1133,7 @@ function productionObserverInput(reader) {
     environment: {},
     fileSystem: {},
     runGit: async () => "",
+    terminalRecordRef: "9".repeat(40),
   }
 }
 

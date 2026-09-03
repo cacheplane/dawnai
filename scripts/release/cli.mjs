@@ -245,6 +245,10 @@ async function runAbandon(options, runtime) {
   })
 }
 
+// release.yml's detect job checks out the default branch, so HEAD in the controller's own
+// checkout is the reviewed tip of main -- the only place a committed terminal record can live.
+const TERMINAL_RECORD_REF = "HEAD"
+
 async function runObserve(options, runtime) {
   const paths = Object.fromEntries(
     Object.entries(options).map(([key, value]) => [key, resolveCliPath(value, runtime.cwd)]),
@@ -318,6 +322,7 @@ async function runObserve(options, runtime) {
       npm,
       attestations,
       marker,
+      terminalRecordRef: TERMINAL_RECORD_REF,
     })
   } catch (error) {
     resolutionFailure = safeObservationFailure(error, "CANDIDATE_DISCOVERY_AMBIGUOUS")
@@ -388,6 +393,7 @@ async function runObserve(options, runtime) {
           npm,
           npmAuditFactory,
           attestations,
+          terminalRecordRef: TERMINAL_RECORD_REF,
           includeRecovery: true,
           ...(currentPublisherRun === null ? {} : { currentPublisherRun }),
         })

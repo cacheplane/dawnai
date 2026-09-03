@@ -228,6 +228,10 @@ export async function runIndependentAudit(argv, overrides = {}) {
             npm: runtime.npm,
             npmAuditFactory: runtime.npmAuditFactory,
             attestations: runtime.attestations,
+            // The audit job checks out the exact candidate tag, which predates any terminal
+            // record on main; TERMINAL_RECORD_PUBLISHED_VERSION therefore cannot fire here.
+            // Known limitation: this path never observes a record for the version it audits.
+            terminalRecordRef: candidate.commitSha,
           }),
         )
         if (

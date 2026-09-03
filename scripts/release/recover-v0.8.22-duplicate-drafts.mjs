@@ -189,6 +189,8 @@ export async function runDuplicateDraftRecoveryCli({
       environment: runtime.environment,
       fileSystem: runtime.fileSystem,
       runGit: runtime.runGit,
+      // The reviewed merge commit is the exact tree this recovery was authorized against.
+      terminalRecordRef: reviewedCommit,
       createNormalObserver: runtime.createNormalProductionRecoveryObserver,
     })
     const receipt = await runtime.applyDuplicateDraftRecovery({
@@ -1208,9 +1210,13 @@ export function createProductionRecoveryObserver({
   environment,
   fileSystem,
   runGit,
+  terminalRecordRef,
   createNormalObserver = createNormalProductionRecoveryObserver,
 }) {
   assertDuplicateDraftRecoveryReader(reader)
+  if (typeof terminalRecordRef !== "string" || terminalRecordRef.length === 0) {
+    throw new TypeError("Recovery terminal record ref is invalid")
+  }
   // Retain the exact repository environment gate used by the normal release
   // observer without allowing it to supply credentials or candidate identity.
   const repository = environmentDataProperty(environment, "GITHUB_REPOSITORY")
@@ -1220,7 +1226,13 @@ export function createProductionRecoveryObserver({
   if (typeof createNormalObserver !== "function") {
     throw new TypeError("Recovery normal observer factory is invalid")
   }
-  const normalObserver = createNormalObserver({ root, token, fileSystem, runGit })
+  const normalObserver = createNormalObserver({
+    root,
+    token,
+    fileSystem,
+    runGit,
+    terminalRecordRef,
+  })
   if (typeof normalObserver !== "function") {
     throw new TypeError("Recovery normal observer is invalid")
   }
@@ -1267,7 +1279,16 @@ export function productionRecoveryCandidate(candidate) {
   })
 }
 
-export function createNormalProductionRecoveryObserver({ root, token, fileSystem, runGit }) {
+export function createNormalProductionRecoveryObserver({
+  root,
+  token,
+  fileSystem,
+  runGit,
+  terminalRecordRef,
+}) {
+  if (typeof terminalRecordRef !== "string" || terminalRecordRef.length === 0) {
+    throw new TypeError("Recovery terminal record ref is invalid")
+  }
   const git = createGitReader({ root, run: runGit })
   const github = createGitHubReader({
     owner: "cacheplane",
@@ -1296,6 +1317,7 @@ export function createNormalProductionRecoveryObserver({ root, token, fileSystem
       github,
       npm,
       attestations,
+      terminalRecordRef,
     })
     const plan = planRelease({
       candidate: productionCandidate,

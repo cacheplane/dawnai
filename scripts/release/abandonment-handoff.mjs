@@ -122,6 +122,7 @@ export async function createAbandonmentArtifactContext(input, dependencies) {
       ...(npmAuditFactory === undefined ? {} : { npmAuditFactory }),
       attestations,
       marker,
+      terminalRecordRef: candidate.commitSha,
     }),
     candidate,
   )
@@ -135,6 +136,9 @@ export async function createAbandonmentArtifactContext(input, dependencies) {
       npm,
       ...(npmAuditFactory === undefined ? {} : { npmAuditFactory }),
       attestations,
+      // This command runs from the candidate checkout it already reads the immutable inventory
+      // from, so the candidate commit is the ref its own working tree exposes.
+      terminalRecordRef: candidate.commitSha,
     }),
   )
   assertExactFields(observed, ["observation", "diagnostics"], "production observation result")

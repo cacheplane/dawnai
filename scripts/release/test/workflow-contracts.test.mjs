@@ -50,8 +50,11 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // (scripts/release/adapters/github.mjs; GitHub began answering HTTP 415 to
 // application/octet-stream on the artifact zip endpoint on 2026-09-03).
 // Previously pinned at Task 11's starting HEAD e5cf1986c0f2cb2f55b891a7c92fa7291289dfdb.
+// Repinned for the required terminalRecordRef option on observeProductionCandidate /
+// resolveProductionCandidate (scripts/release/cli.mjs, independent-audit.mjs, and
+// post-publication-audit.mjs each now pass the ref their own job checks out).
 const STARTING_SCRIPT_PIN_SHA256 =
-  "b11d6a1b25b9db0586d324bd6b6845ad1cd557d2e1ebd421fdfff70c6441f6cd"
+  "e4b631197973dccbd88e1172cf4202228a8edd80535f50a5945dcd51a4e6d10d"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
