@@ -59,10 +59,10 @@ describe("collectRuntimeCapabilityGaps — fires when a feature is configured bu
     expect(found[0]?.source).toContain("`toolOutput` in dawn.config.ts")
   })
 
-  it("names the route's skills, which otherwise vanish from the prompt in silence", () => {
-    // The skills capability's `detect` returns false without a MarkerFs, so
-    // nothing at request time can tell "this route had skills" from "it had
-    // none". The build records the names into the manifest for exactly this.
+  it("names the route's skills when the manifest records names but bundles no bodies", () => {
+    // A hand-composed manifest, or one built before marker files were bundled:
+    // the skills capability's `detect` would return false and the skills would
+    // vanish from the prompt with nothing to report.
     const found = gaps({
       routes: [{ routeId: "/research", skills: ["synthesize-findings", "cite-sources"] }],
     })
@@ -72,6 +72,20 @@ describe("collectRuntimeCapabilityGaps — fires when a feature is configured bu
     expect(found[0]?.capability).toContain("cite-sources")
     expect(found[0]?.capability).toContain("synthesize-findings")
     expect(found[0]?.source).toContain("/research")
+  })
+
+  it("does not report skills whose bodies the manifest bundles", () => {
+    const found = gaps({
+      routes: [
+        {
+          markerFiles: { "/ns/src/app/research/skills/cite-sources/SKILL.md": "…" },
+          routeId: "/research",
+          skills: ["cite-sources"],
+        },
+      ],
+    })
+
+    expect(found).toEqual([])
   })
 
   it("reports every gap at once, so one deploy teaches the operator all of it", () => {

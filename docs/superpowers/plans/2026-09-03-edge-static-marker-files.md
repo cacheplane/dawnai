@@ -912,7 +912,7 @@ git commit -m "feat(cli): bundle route marker files into the edge static manifes
 - Modify: `packages/cli/src/lib/dev/runtime-fetch-core.ts`
 - Test: `packages/cli/test/runtime-capability-guards.test.ts`
 
-- [ ] **Step 1: Write the failing guard tests**
+- [x] **Step 1: Write the failing guard tests**
 
 In `packages/cli/test/runtime-capability-guards.test.ts`, replace the existing `it("names the route's skills, which otherwise vanish from the prompt in silence", ...)` case with these two:
 
@@ -949,12 +949,12 @@ In `packages/cli/test/runtime-capability-guards.test.ts`, replace the existing `
 
 In the `"reports every gap at once"` case in the same file, the `/research` route has skills and no `markerFiles`, so it still reports; leave it unchanged.
 
-- [ ] **Step 2: Run the guard tests to verify the new one fails**
+- [x] **Step 2: Run the guard tests to verify the new one fails**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/runtime-capability-guards.test.ts`
 Expected: the "does not report skills whose bodies the manifest bundles" case FAILS (one violation reported), and the compiler may reject `markerFiles` on the input type.
 
-- [ ] **Step 3: Update the request-time guard**
+- [x] **Step 3: Update the request-time guard**
 
 In `packages/cli/src/lib/runtime/edge-capability-report.ts`, in `RuntimeCapabilityInput.routes`, add a member after `skills`:
 
@@ -983,7 +983,7 @@ Change the skills loop in `collectRuntimeCapabilityGaps`:
   }
 ```
 
-- [ ] **Step 4: Thread a static MarkerFs into route preparation**
+- [x] **Step 4: Thread a static MarkerFs into route preparation**
 
 In `packages/cli/src/lib/runtime/execute-route-core.ts`:
 
@@ -1043,12 +1043,12 @@ Also find the line in the same header comment that reads `*   - route \`skills/\
 
 `runtime-fetch-core.ts` needs no change: it already passes `options.modules?.routes` (which now carry `markerFiles`) to `collectRuntimeCapabilityGaps`, and `staticModules` reaches `execute-route-core` through `BootResolvedInstances`.
 
-- [ ] **Step 5: Run the guard tests and typecheck**
+- [x] **Step 5: Run the guard tests and typecheck**
 
 Run: `pnpm --filter @dawn-ai/cli typecheck && pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/runtime-capability-guards.test.ts test/edge-runtime-diagnostics.test.ts`
 Expected: typecheck exit 0; both suites PASS unchanged. `edge-runtime-diagnostics.test.ts` injects `skills: ["cite-sources"]` onto built routes with no `markerFiles`, which is exactly the case that must still raise, and it asserts only that the message contains "skills".
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/cli/src/lib/runtime/execute-route-core.ts packages/cli/src/lib/runtime/edge-capability-report.ts packages/cli/test/runtime-capability-guards.test.ts packages/cli/test/edge-runtime-diagnostics.test.ts

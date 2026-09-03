@@ -44,6 +44,7 @@ import {
   resolveGuardedSubagent,
   resolveSubagentRegistry,
   resolveToolScope,
+  staticMarkerFs,
   toolOrigin,
   wrapToolWithApproval,
   wrapToolWithConstraint,
@@ -98,7 +99,7 @@ import {
   type ScenarioToolCallJournal,
   type ScenarioToolOverride,
 } from "./scenario-tool-overrides.js"
-import type { DawnStaticModules } from "./static-modules-core.js"
+import { type DawnStaticModules, staticModulesMarkerFiles } from "./static-modules-core.js"
 import type { StreamChunk } from "./stream-types.js"
 import type { DiscoveredToolDefinition } from "./tool-shape.js"
 
@@ -203,9 +204,11 @@ export interface RuntimeBootFallbacks {
  *                               takes its documented default
  *   - `resolveMemoryWrites`   → "candidate" (the same default an app with no
  *                               `memory.writes` gets)
- *   - `markerFs`              → omitted from `applyCapabilities`; an absent
- *                               MarkerFs means "no filesystem" by contract, so
- *                               the disk-backed markers contribute nothing
+ *   - `markerFs`              → the manifest's bundled marker files when it
+ *                               carries any (`staticMarkerFs`), else omitted
+ *                               from `applyCapabilities`; an absent MarkerFs
+ *                               means "no filesystem" by contract, so the
+ *                               disk-backed markers contribute nothing
  *   - `hasWorkspaceDir`       → false ⇒ tool-output offloading stays off; it
  *                               is an optimization, not a capability the route
  *                               asked for (this also makes the offload store's
@@ -227,11 +230,14 @@ export interface RuntimeBootFallbacks {
  *                               when nothing asked: a `sandbox` block on a
  *                               fallback-less runtime with no injected
  *                               `sandboxManager` is DAWN_E1005 at boot
- *   - route `skills/`         → contribute nothing without a `markerFs`. A
- *                               route the BUILD recorded skills for is
- *                               DAWN_E1005 at boot (the manifest carries the
- *                               names precisely because nothing else at request
- *                               time can tell "had skills" from "had none")
+ *   - route `skills/`         → contribute nothing without a `markerFs`. The
+ *                               edge manifest supplies one when the build
+ *                               bundled the skill bodies, so those skills serve
+ *                               normally. A route the BUILD recorded skills for
+ *                               but bundled no bodies for is DAWN_E1005 at boot
+ *                               (the manifest carries the names precisely
+ *                               because nothing else at request time can tell
+ *                               "had skills" from "had none")
  *   - `resolveIdentityKeys`   → the default semantic identity for memory
  *                               approve (memory-handler)
  *
@@ -1085,6 +1091,10 @@ async function prepareRouteExecutionForInvocation(
     }
 
     const capabilityBackends = sandboxBackends ?? configBackends
+    // Node reads markers (AGENTS.md, skills/) from disk through the fallback
+    // bag. A runtime with no fallbacks serves them from the manifest instead,
+    // which the build bundled precisely because there is no disk to read.
+    const markerFs = fallbacks ? fallbacks.markerFs : getStaticMarkerFs(options.staticModules)
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
@@ -1102,7 +1112,7 @@ async function prepareRouteExecutionForInvocation(
             },
           }
         : {}),
-      ...(fallbacks ? { markerFs: fallbacks.markerFs } : {}),
+      ...(markerFs ? { markerFs } : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,
       ...(sandboxWorkspaceRoot ? { workspaceRoot: sandboxWorkspaceRoot } : {}),
@@ -1734,6 +1744,25 @@ export function getCachedStaticDescriptorMaps(modules: DawnStaticModules): Stati
     staticDescriptorMapsCache.set(modules, maps)
   }
   return maps
+}
+
+/**
+ * One `MarkerFs` per manifest, built on first use. The manifest is immutable
+ * and process-wide, so the cache is a WeakMap keyed on it — never rebuilt per
+ * request, never leaked past the manifest's lifetime. `null` records "this
+ * manifest bundles no marker files" so the union is not recomputed per route.
+ */
+const staticMarkerFsCache = new WeakMap<DawnStaticModules, MarkerFs | null>()
+
+function getStaticMarkerFs(modules: DawnStaticModules | undefined): MarkerFs | undefined {
+  if (!modules) return undefined
+  let cached = staticMarkerFsCache.get(modules)
+  if (cached === undefined) {
+    const files = staticModulesMarkerFiles(modules)
+    cached = files ? staticMarkerFs(files) : null
+    staticMarkerFsCache.set(modules, cached)
+  }
+  return cached ?? undefined
 }
 
 export interface ChildPreparationContext {

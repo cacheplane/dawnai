@@ -135,6 +135,8 @@ export interface RuntimeCapabilityInput {
     readonly routeId: string
     /** Skill directory names this route had at BUILD time (see StaticRouteModule). */
     readonly skills?: readonly string[]
+    /** Bundled marker file bodies (see StaticRouteModule.markerFiles); their presence serves the skills. */
+    readonly markerFiles?: Readonly<Record<string, string>>
   }[]
 }
 
@@ -201,10 +203,13 @@ export function collectRuntimeCapabilityGaps(
   // route loads, and without a MarkerFs the skills capability's `detect` simply
   // returns false. Nothing at request time can tell "this route had skills"
   // from "this route had none", which is why the BUILD records the names into
-  // the static manifest and this reads them back.
+  // the static manifest and this reads them back. A build that also BUNDLED the
+  // bodies (`markerFiles`) serves them through `staticMarkerFs`, so such a route
+  // has no gap left to report.
   for (const route of input.routes) {
     const skills = route.skills
     if (!skills || skills.length === 0) continue
+    if (route.markerFiles && Object.keys(route.markerFiles).length > 0) continue
     violations.push({
       // Re-sorted even though `discoverSkillDirs` already sorts: `route.skills`
       // here can come from a hand-composed manifest fed straight to this
@@ -216,9 +221,10 @@ export function collectRuntimeCapabilityGaps(
       source: `the skills/ directory of route "${route.routeId}", recorded in the static module manifest at build time`,
       reason:
         "skill bodies are read from disk when the route loads, and this runtime has no filesystem " +
-        "to read them from — the skills would vanish from the prompt with no error at all",
+        "to read them from — the manifest records the skill names but bundles no bodies, so the " +
+        "skills would vanish from the prompt with no error at all",
       remedy:
-        "Inline the instructions into the route's `systemPrompt`, or serve them from a tool that fetches them",
+        "Rebuild with `dawn build` so the manifest bundles the skill bodies, or inline the instructions into the route's `systemPrompt`",
     })
   }
 
