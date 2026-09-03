@@ -104,11 +104,16 @@ export async function evaluateAbandonment(input) {
 
 export function canonicalAbandonmentBytes(value) {
   const source = snapshotJson(value)
-  if (
-    isRecord(source) &&
-    isRecord(source.authority) &&
-    source.authority.mode === OPERATOR_RECOVERY_MODE
-  ) {
+  if (!isRecord(source)) {
+    throw new TypeError("Canonical abandonment input is invalid")
+  }
+  if (isRecord(source.authority) && source.authority.mode === OPERATOR_RECOVERY_MODE) {
+    // MAX_TERMINAL_RECORD_BYTES (512 KiB, terminal-record-store.mjs) must stay
+    // below RELEASE_PAYLOAD_LIMITS.auditReceiptBytes (1 MiB, limits.mjs): this
+    // producer accepts anything up to the smaller terminal-record cap, and
+    // parseAbandonmentReleaseBody enforces the larger audit-receipt cap on the
+    // embedded bytes it reads back. If that ordering ever inverted, a body this
+    // function happily produced could be rejected on read.
     const bytes = canonicalTerminalRecordBytes(source)
     parseOperatorRecoveryRecord(bytes)
     return bytes
@@ -144,6 +149,14 @@ export function canonicalAbandonmentArtifactContextBytes(value, options) {
   return encodeArtifactContext(parseAbandonmentArtifactContext(value, options))
 }
 
+/** The tag NAME of either tombstone variant (legacy: string; operator-recovery: `{ name, objectSha, commitSha }`). */
+export function abandonmentRecordTag(record) {
+  const tag = record?.tag
+  if (typeof tag === "string") return tag
+  if (isRecord(tag) && typeof tag.name === "string") return tag.name
+  throw new TypeError("Abandonment record tag is invalid")
+}
+
 export function canonicalAbandonmentReleaseBody(input) {
   const source = snapshotJson(input)
   const keys = isRecord(source) ? Object.keys(source) : []
@@ -166,12 +179,11 @@ export function canonicalAbandonmentReleaseBody(input) {
     ...(predecessorMarker === null ? {} : { previousMarker: predecessorMarker }),
   })
   const releaseMarker = parseReleaseMarker(body)
-  const recordTag = isRecord(record.tag) ? record.tag.name : record.tag
   if (
     releaseMarker.phase !== "ABANDONED_PREPUBLICATION" ||
     record.version !== releaseMarker.version ||
     record.commitSha !== releaseMarker.commitSha ||
-    recordTag !== releaseMarker.tag ||
+    abandonmentRecordTag(record) !== releaseMarker.tag ||
     sha256(tombstoneBytes) !== releaseMarker.abandonmentSha256
   ) {
     throw new TypeError("Abandonment Release body evidence does not match its marker")
@@ -1059,6 +1071,10 @@ export function parseAnyAbandonmentRecord(value) {
     isRecord(source.authority) &&
     source.authority.mode === OPERATOR_RECOVERY_MODE
   ) {
+    // canonicalAbandonmentBytes(source) above already ran parseOperatorRecoveryRecord
+    // once (to canonicalize `source` into bytes); re-parsing those bytes here is
+    // deliberate defence in depth at the trust boundary that turns bytes back into
+    // a record callers rely on, not redundant validation worth trimming.
     const parsed = parseOperatorRecoveryRecord(canonicalAbandonmentBytes(source))
     const { sha256: _digest, ...record } = parsed
     return deepFreeze(record)
