@@ -2380,11 +2380,13 @@ test("recovery pagination enforces one cumulative response-byte budget", async (
 })
 
 test("recovery pagination enforces one cumulative operation deadline", async () => {
-  const clock = [0, 0, 10]
+  // The cumulative budget is the pagination budget, not the per-request
+  // timeout: a multi-page walk legitimately outlives one request's timeout.
+  const clock = [0, 0, 10 * 16 + 1]
   const reader = createDuplicateDraftRecoveryReader({
     root: "/workspace",
     timeoutMs: 10,
-    now: () => clock.shift() ?? 10,
+    now: () => clock.shift() ?? 10 * 16 + 1,
     run: async () => `${REVIEWED_COMMIT}\n`,
     fetchImpl: async () =>
       jsonResponse(
@@ -2397,6 +2399,66 @@ test("recovery pagination enforces one cumulative operation deadline", async () 
     reader.listCandidateReleases(),
     (error) => error.code === "RELEASE_LIST_UNAVAILABLE",
   )
+})
+
+test("recovery pagination spans pages that together outlive one request timeout", async () => {
+  // Regression: a real release-runs read walks several large pages and takes
+  // longer than a single request's timeout. Using the per-request timeout as
+  // the whole-walk deadline made that read fail before it could complete.
+  let currentMs = 0
+  const pages = []
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    timeoutMs: 10,
+    now: () => {
+      currentMs += 6
+      return currentMs
+    },
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) => {
+      pages.push(url)
+      const page = new URL(url).searchParams.get("page")
+      if (page === null) {
+        return jsonResponse(
+          Array.from({ length: 100 }, (_, index) => releaseRow(index + 1)),
+          200,
+          { link: `<${BASE}/releases?per_page=100&page=2>; rel="next"` },
+        )
+      }
+      return jsonResponse([releaseRow(101)], 200, {})
+    },
+  })
+
+  const releases = await reader.listCandidateReleases()
+  assert.equal(pages.length, 2)
+  assert.ok(currentMs > 10, "the walk must outlive a single request timeout")
+  assert.ok(Array.isArray(releases))
+})
+
+test("recovery repository read ingests only identity fields from the real payload", async () => {
+  // Regression: GitHub's repository response carries `temp_clone_token` and
+  // `secret_scanning*` keys. Canonicalizing the whole body rejected them as
+  // unsafe keys, so this read could never succeed against production.
+  const reader = createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    token: "secret-token",
+    run: async () => `${REVIEWED_COMMIT}\n`,
+    fetchImpl: async (url) => {
+      if (url === BASE) return repositoryResponse()
+      if (url === `${BASE}/git/ref/heads%2Fmain`) return jsonResponse(mainRef(REVIEWED_COMMIT))
+      throw new Error(`unexpected URL ${url}`)
+    },
+  })
+
+  const state = await reader.readRepositoryState()
+  assert.deepEqual(Object.keys(state).sort(), ["id", "mainSha", "nameWithOwner"])
+  assert.equal(state.id, 1210070282)
+  assert.equal(state.nameWithOwner, "cacheplane/dawnai")
+  assert.equal(state.mainSha, REVIEWED_COMMIT)
+  const serialized = JSON.stringify(state)
+  assert.equal(serialized.includes("temp_clone_token"), false)
+  assert.equal(serialized.includes("secret_scanning"), false)
+  assert.equal(serialized.includes("v1.9c8b7a6d5e4f3c2b1a09"), false)
 })
 
 function reviewedReader({
@@ -2506,12 +2568,23 @@ function reviewedPull() {
 }
 
 function repositoryResponse() {
+  // Mirrors the real GitHub payload, including the keys the unsafe-key guard
+  // rejects (`temp_clone_token`, `security_and_analysis.secret_scanning*`).
+  // A minimal fixture here hid a defect that failed on every production run.
   return jsonResponse({
     id: 1210070282,
     name: "dawnai",
     full_name: "cacheplane/dawnai",
     default_branch: "main",
-    owner: { login: "cacheplane" },
+    owner: { login: "cacheplane", id: 244036129, type: "Organization" },
+    private: false,
+    temp_clone_token: "v1.9c8b7a6d5e4f3c2b1a09",
+    security_and_analysis: {
+      secret_scanning: { status: "enabled" },
+      secret_scanning_push_protection: { status: "enabled" },
+      secret_scanning_non_provider_patterns: { status: "disabled" },
+      secret_scanning_validity_checks: { status: "disabled" },
+    },
   })
 }
 

@@ -47,15 +47,27 @@ function exactTrailingId(url, prefix, suffix = "") {
   return DECIMAL_ID.test(rest) ? Number(rest) : null
 }
 
-const ORIGINAL_ASSETS = Array.from({ length: 45 }, (_, index) => ({
-  id: 101 + index,
-  name: `asset-${String(index + 1).padStart(2, "0")}.json`,
-  sha256: "0123456789abcdef"[index % 16].repeat(64),
-  size: index + 1,
-}))
-const BASE_ASSET_SET_SHA256 = assetSetSha256(ORIGINAL_ASSETS)
 const MANIFEST = createManifest()
 const ORIGINAL_MARKER = createEscrowedMarker(MANIFEST)
+const BASE_ASSET_SET_SHA256 = ORIGINAL_MARKER.baseAssetSetSha256
+// GitHub lists release assets by name, which is deliberately NOT the order the
+// marker digest is computed in. Synthetic asset names hid a production defect.
+const ORIGINAL_ASSETS = canonicalBaseAssets(
+  ORIGINAL_MARKER.attestationSet.subjects.map((subject) => ({
+    name: subject.subjectName,
+    sha256: subject.subjectSha256,
+  })),
+  ORIGINAL_MARKER.releaseRecordSha256,
+  ORIGINAL_MARKER.manifestSha256,
+)
+  .slice()
+  .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+  .map((asset, index) => ({
+    id: 101 + index,
+    name: asset.name,
+    sha256: asset.sha256,
+    size: index + 1,
+  }))
 const ORIGINAL_BODY = canonicalReleaseBody({ marker: ORIGINAL_MARKER, manifest: MANIFEST })
 const BODY_SHA256 = createHash("sha256").update(ORIGINAL_BODY, "utf8").digest("hex")
 
@@ -108,7 +120,13 @@ function createEscrowedMarker(manifest) {
     tag: `v${POLICY.version}`,
     manifestSha256: createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex"),
     releaseRecordSha256: "e".repeat(64),
-    baseAssetSetSha256: assetSetSha256(ORIGINAL_ASSETS),
+    baseAssetSetSha256: assetSetSha256(
+      canonicalBaseAssets(
+        subjects,
+        "e".repeat(64),
+        createHash("sha256").update(canonicalManifestBytes(manifest)).digest("hex"),
+      ),
+    ),
     attestationSet: {
       repository: POLICY.repository,
       workflow: ".github/workflows/release.yml",
@@ -128,6 +146,17 @@ function createEscrowedMarker(manifest) {
     audit: null,
     abandonmentSha256: null,
   }
+}
+
+// Mirrors observation-schema.mjs: the digest's order comes from the marker's
+// attestation subjects, NOT from the order GitHub lists assets in.
+function canonicalBaseAssets(subjects, releaseRecordSha256, manifestSha256) {
+  return [
+    { name: "release-record.json", sha256: releaseRecordSha256 },
+    { name: "manifest.json", sha256: manifestSha256 },
+    ...subjects.slice(1).map(({ name, sha256 }) => ({ name, sha256 })),
+    ...subjects.map(({ name }) => ({ name: `${name}.intoto.jsonl`, sha256: "f".repeat(64) })),
+  ]
 }
 
 function assetSetSha256(assets) {

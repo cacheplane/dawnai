@@ -684,8 +684,8 @@ export function classifyDuplicateDraft(value, expected) {
   ) {
     throw new Error("Duplicate canonical body marker is not the approved ESCROWED marker")
   }
-  const expectedBaseAssetSetSha256 = assetSetSha256(originalAssets)
-  if (parsedCanonicalMarker.baseAssetSetSha256 !== expectedBaseAssetSetSha256) {
+  const expectedBaseAssetSetSha256 = parsedCanonicalMarker.baseAssetSetSha256
+  if (!canonicalBaseAssetsMatch(parsedCanonicalMarker, originalAssets)) {
     throw new Error("Duplicate canonical marker base-asset digest is not exact")
   }
   const bodyAssetName = originalBodyAssetName(
@@ -1116,7 +1116,7 @@ function normalizeRecoveryReleases(value, { reviewedAuthority, candidate }) {
     name,
     sha256: digest,
   }))
-  const baseAssetSetSha256 = assetSetSha256(canonical.assets)
+  const baseAssetSetSha256 = canonical.marker.baseAssetSetSha256
   const duplicates = source.duplicates.map((value, index) => {
     const raw = normalizeRecoveryDuplicateSource(value, canonical.assets)
     const configured = DUPLICATE_DRAFT_RECOVERY_POLICY.duplicates[index]
@@ -1237,7 +1237,7 @@ function normalizeCanonicalRecoveryRelease(value, candidate) {
     marker.version !== candidate.version ||
     marker.commitSha !== candidate.commitSha ||
     marker.tag !== `v${candidate.version}` ||
-    marker.baseAssetSetSha256 !== assetSetSha256(assets)
+    !canonicalBaseAssetsMatch(marker, assets)
   ) {
     throw new TypeError("Canonical Release marker is not exact")
   }
@@ -2245,6 +2245,54 @@ function compareText(left, right) {
 
 function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex")
+}
+
+/**
+ * Rebuild the canonical 45-member base-asset namespace from the release marker,
+ * in the exact order the controller uses to compute `baseAssetSetSha256`
+ * (see `abandonmentBaseAssetsFromMarker` in observation-schema.mjs).
+ *
+ * The digest is order-dependent and is NOT the order GitHub lists assets in, so
+ * it must be derived from the marker rather than recomputed from a listing.
+ */
+/**
+ * Require the marker's own base-asset digest to be self-consistent and to
+ * describe exactly the assets the Release actually carries. Listing order is
+ * not significant to the comparison; the digest's own order comes from the
+ * marker.
+ */
+function canonicalBaseAssetsMatch(marker, assets) {
+  const expected = baseAssetNamespaceFromMarker(marker)
+  if (expected === null || expected.length !== 45) return false
+  if (new Set(expected.map(({ name }) => name)).size !== 45) return false
+  if (assetSetSha256(expected) !== marker.baseAssetSetSha256) return false
+  return sameAssetSet(expected, assets)
+}
+
+export function baseAssetNamespaceFromMarker(marker) {
+  const subjects = marker?.attestationSet?.subjects
+  if (!Array.isArray(subjects) || subjects.length < 2) return null
+  return [
+    { name: "release-record.json", sha256: marker.releaseRecordSha256 },
+    { name: "manifest.json", sha256: marker.manifestSha256 },
+    ...subjects.slice(1).map((subject) => ({
+      name: subject.subjectName,
+      sha256: subject.subjectSha256,
+    })),
+    ...subjects.map((subject) => ({ name: subject.bundleName, sha256: subject.bundleSha256 })),
+  ]
+}
+
+/** Order-independent equality over an exact {name, sha256} namespace. */
+export function sameAssetSet(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+  const key = (assets) =>
+    JSON.stringify(
+      assets
+        .map(({ name, sha256: digest }) => `${name}:${digest}`)
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    )
+  return key(left) === key(right)
 }
 
 function assetSetSha256(assets) {
