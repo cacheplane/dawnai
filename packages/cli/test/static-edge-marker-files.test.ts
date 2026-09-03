@@ -7,7 +7,7 @@ import { discoverRoutes } from "@dawn-ai/core/node"
 import { __resetMaterializedAgentsForTests } from "@dawn-ai/langchain"
 import { matchPermission, type PermissionsStore } from "@dawn-ai/permissions"
 import { createThreadsStore, sqliteCheckpointer } from "@dawn-ai/sqlite-storage"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import { type AimockFixture, createAimock } from "../../testing/dist/index.js"
 import {
@@ -43,6 +43,14 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", ".
 const cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn()
+})
+
+/** Route loads, the config and the materialized agents are all module-level
+ * caches shared by every case in this file — start each one clean. */
+beforeEach(() => {
+  __resetRouteLoadCachesForTests()
+  __clearDawnConfigCacheForTests()
+  __resetMaterializedAgentsForTests()
 })
 
 const SKILL_BODY = "Always cite the corpus path in square brackets."
@@ -96,7 +104,24 @@ async function startAimock() {
   const prevKey = process.env.OPENAI_API_KEY
   process.env.OPENAI_BASE_URL = aimock.baseUrl
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-not-used"
+  let stopped = false
+  // Idempotent: registered for the `afterEach` drain right here so a throw
+  // while building a fetch handler cannot leak the server or the patched
+  // base URL into a later test, and still safe to call from a `finally`.
+  const stop = async () => {
+    if (stopped) return
+    stopped = true
+    await aimock.close()
+    if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+    else process.env.OPENAI_BASE_URL = prevBaseUrl
+    if (prevKey === undefined) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = prevKey
+  }
+  cleanup.push(stop)
   return {
+    /** How many requests the model has served so far — snapshot it before a
+     * turn so the turn's own request can be addressed without magic indices. */
+    requestCount: () => aimock.getRequests().length,
     /** The system prompt the model saw on the Nth request (default: first).
      * `gpt-5*` models carry it as the `developer` role, not `system`. */
     systemPromptAt: (index = 0) => {
@@ -105,13 +130,7 @@ async function startAimock() {
         | undefined
       return entry?.find((m) => m.role === "system" || m.role === "developer")?.content ?? ""
     },
-    stop: async () => {
-      await aimock.close()
-      if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
-      else process.env.OPENAI_BASE_URL = prevBaseUrl
-      if (prevKey === undefined) delete process.env.OPENAI_API_KEY
-      else process.env.OPENAI_API_KEY = prevKey
-    },
+    stop,
   }
 }
 
@@ -145,14 +164,23 @@ async function requestStoresFor(): Promise<(request: Request) => RequestStores> 
 interface Observed {
   readonly systemPrompt: string
   readonly readSkillResult: string
-  readonly todos: unknown
+  readonly todosFromBody: unknown
+  readonly todosFromState: unknown
 }
 
 interface Handler {
   fetch: (request: Request) => Promise<Response>
 }
 
-async function drive(handler: Handler, systemPrompt: () => string): Promise<Observed> {
+interface PromptSource {
+  requestCount: () => number
+  systemPromptAt: (index: number) => string
+}
+
+async function drive(handler: Handler, aimock: PromptSource): Promise<Observed> {
+  // Address this turn's first model request relatively, so a second turn on the
+  // same mock does not need a hand-counted index.
+  const before = aimock.requestCount()
   const post = (path: string, body: unknown) =>
     handler.fetch(
       new Request(`http://localhost${path}`, {
@@ -177,8 +205,9 @@ async function drive(handler: Handler, systemPrompt: () => string): Promise<Obse
     (m) => Array.isArray(m.id) && m.id.includes("ToolMessage") && m.kwargs?.name === "readSkill",
   )
 
-  // The seeded todos live on the checkpointed state, which the run response
-  // does not necessarily carry — read them back the way a client would.
+  // The seeded todos surface in two places: on the run response and on the
+  // checkpointed state a client would read back. Both are observed, so a
+  // divergence between them fails rather than being papered over.
   const stateResponse = await handler.fetch(
     new Request(`http://localhost/threads/${encodeURIComponent(created.thread_id)}/state`),
   )
@@ -187,8 +216,9 @@ async function drive(handler: Handler, systemPrompt: () => string): Promise<Obse
 
   return {
     readSkillResult: String(toolMessage?.kwargs?.content ?? ""),
-    systemPrompt: systemPrompt(),
-    todos: turnBody.todos ?? state.values?.todos,
+    systemPrompt: aimock.systemPromptAt(before),
+    todosFromBody: turnBody.todos,
+    todosFromState: state.values?.todos,
   }
 }
 
@@ -228,7 +258,7 @@ describe("bundled marker files — node vs edge", () => {
     const nodeHandler = await createNodeRuntimeFetchHandler({ appRoot, modules: nodeModules })
     let nodeRun: Observed
     try {
-      nodeRun = await drive(nodeHandler, nodeAimock.systemPromptAt)
+      nodeRun = await drive(nodeHandler, nodeAimock)
     } finally {
       await nodeHandler.close()
       await nodeAimock.stop()
@@ -253,7 +283,7 @@ describe("bundled marker files — node vs edge", () => {
     })
     let edgeRun: Observed
     try {
-      edgeRun = await drive(edgeHandler, edgeAimock.systemPromptAt)
+      edgeRun = await drive(edgeHandler, edgeAimock)
     } finally {
       await edgeHandler.close()
       await edgeAimock.stop()
@@ -266,7 +296,8 @@ describe("bundled marker files — node vs edge", () => {
     expect(nodeRun.systemPrompt).toContain("# Route Memory")
     expect(nodeRun.systemPrompt).toContain(MEMORY_BODY)
     expect(nodeRun.readSkillResult).toContain(SKILL_BODY)
-    expect(JSON.stringify(nodeRun.todos)).toContain("Restate the question")
+    expect(JSON.stringify(nodeRun.todosFromBody)).toContain("Restate the question")
+    expect(JSON.stringify(nodeRun.todosFromState)).toContain("Restate the question")
 
     // And the edge run is indistinguishable.
     expect(edgeRun).toEqual(nodeRun)
@@ -305,8 +336,8 @@ describe("bundled marker files — node vs edge", () => {
     })
     try {
       // Two separate threads, same handler — the second must not be degraded.
-      const first = await drive(handler, () => aimock.systemPromptAt(0))
-      const second = await drive(handler, () => aimock.systemPromptAt(2))
+      const first = await drive(handler, aimock)
+      const second = await drive(handler, aimock)
 
       for (const run of [first, second]) {
         expect(run.systemPrompt).toContain("# Skills")

@@ -1429,6 +1429,14 @@ git add packages/cli/test/static-edge-marker-files.test.ts
 git commit -m "test(cli): node and edge serve bundled skills, plan.md and memory.md identically"
 ```
 
+**As built** — deltas from the code block above:
+- The system-prompt accessor tolerates the `developer` role as well as `system`: `gpt-5*` models carry the system prompt as `developer`.
+- The suite calls `ensureLinkedDistsFresh()` (from `test/helpers/hono-edge-fixture.js`) before building each fixture, so the linked `@dawn-ai/*` dists the fixture route resolves through are current.
+- The `readSkill` tool result is found by a LangChain-serialized `ToolMessage` predicate (`Array.isArray(m.id) && m.id.includes("ToolMessage") && m.kwargs?.name === "readSkill"`), and its body is read from `kwargs.content`.
+- Todos are observed from BOTH the `/runs/wait` body (`todosFromBody`) and `GET /threads/:id/state` (`todosFromState`), with no `??` fallback, so a divergence between the two shapes fails instead of being masked.
+- A second case was added — "keeps the bundled marker facade across runs on one edge handler" — driving two threads through ONE edge handler, because a facade built once and dropped would serve run 1 and leave run 2 with no skills.
+- Teardown/prompt-capture hardening: `startAimock` pushes its idempotent `stop` onto the `cleanup` stack immediately (a throw during handler construction can no longer leak the mock server or a patched `OPENAI_BASE_URL` into a later test), exposes `requestCount()` so `drive` snapshots the request index instead of using magic indices, and a `beforeEach` resets the route-load, config and materialized-agent caches so every case starts clean.
+
 ---
 
 ### Task 9: Documentation and changeset
