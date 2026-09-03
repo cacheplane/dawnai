@@ -2526,7 +2526,7 @@ function dataValue(value, key) {
   return descriptor.value
 }
 
-function validateMarker(value) {
+export function validateMarker(value) {
   const marker = snapshotJson(value)
   assertExactFields(marker, MARKER_FIELDS, "release marker")
   if (
