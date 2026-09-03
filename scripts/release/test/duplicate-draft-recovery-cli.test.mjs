@@ -18,6 +18,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { promisify } from "node:util"
+import { planRelease } from "../planner.mjs"
 import * as recoveryCliModule from "../recover-v0.8.22-duplicate-drafts.mjs"
 import {
   parseDuplicateDraftRecoveryCliArguments,
@@ -922,6 +923,43 @@ test("production recovery observer rejects an alternate sole Release ID and a fo
       /candidate|inventory|Release|identity/iu,
     )
     assert.equal(normalCalls, 0)
+  }
+})
+
+test("the production candidate satisfies the real controller planner contract", async () => {
+  // Regression: the observer passed bare {version, commitSha}, which
+  // observeProductionCandidate rejects as "Release candidate is invalid". That
+  // gate runs only AFTER both duplicates are quarantined, so the failure landed
+  // at the worst possible moment and produced no authorization receipt.
+  const candidate = recoveryCliModule.productionRecoveryCandidate({
+    version: "0.8.22",
+    commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8",
+  })
+  assert.deepEqual(Object.keys(candidate).sort(), [
+    "ciCheck",
+    "ciWorkflow",
+    "commitSha",
+    "publisherWorkflow",
+    "version",
+  ])
+  assert.equal(candidate.ciWorkflow, "CI")
+  assert.equal(candidate.ciCheck, "validate")
+  assert.equal(candidate.publisherWorkflow, ".github/workflows/release.yml")
+
+  // Prove the shape against the REAL planner rather than a local copy of the
+  // field list: planRelease validates candidates the same way the observer does.
+  const plan = planRelease({
+    candidate,
+    observation: { state: "UNKNOWN", diagnostics: [], conflicts: [] },
+    mode: "controller",
+  })
+  assert.equal(typeof plan.state, "string")
+
+  for (const invalid of [
+    { version: "0.8.22", commitSha: "2a80deece2ff958fe7fde8fddeb4f99bed70a1c8", extra: 1 },
+    { version: "0.8.22" },
+  ]) {
+    assert.throws(() => recoveryCliModule.productionRecoveryCandidate(invalid))
   }
 })
 
