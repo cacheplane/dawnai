@@ -11,6 +11,7 @@ import {
   type EdgeCapabilityInput,
 } from "../lib/build/targets/edge-capabilities.js"
 import { knownTargetNames } from "../lib/build/targets/index.js"
+import { assertRouteMarkerFileLimits } from "../lib/build/targets/marker-files.js"
 import { loadDawnConfig } from "../lib/node-config.js"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 import { collectDelegationErrors } from "../lib/runtime/collect-delegation-errors.js"
@@ -117,6 +118,9 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
           { appRoot: manifest.appRoot, config: loadedConfig, manifest },
           targetName,
         )
+        // The same limit the edge emitters apply to every bundled marker file,
+        // surfaced by `dawn check` rather than by a failed build.
+        await assertRouteMarkerFileLimits({ appRoot: manifest.appRoot, manifest })
       }
     }
 

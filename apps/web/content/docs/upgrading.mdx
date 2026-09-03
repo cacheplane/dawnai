@@ -93,7 +93,7 @@ now bundles all three into `modules.edge.mjs` and serves them from the
 manifest at request time. An app that removed its skills to pass the gate can
 restore them; nothing else changes. Files over the marker's limit — 32 KiB for
 `SKILL.md` and `memory.md`, 64 KiB for `plan.md` — fail the build with
-`DAWN_E1005` by name. See [Skills, `plan.md`, and route `memory.md` are
+`DAWN_E1005` by name (`dawn check` applies the same limits). See [Skills, `plan.md`, and route `memory.md` are
 bundled](/docs/deployment/edge#skills-planmd-and-route-memorymd-are-bundled).
 
 ## Gated features now fail loudly at request time, not just at build time

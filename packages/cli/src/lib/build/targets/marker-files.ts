@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { readFile, stat } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
 
-import { MAX_MEMORY_BYTES, MAX_PLAN_BYTES } from "@dawn-ai/core"
+import { MAX_MEMORY_BYTES, MAX_PLAN_BYTES, type RouteManifest } from "@dawn-ai/core"
 
 import { CliError } from "../../output.js"
 import { discoverSkillDirs } from "./edge-capabilities.js"
@@ -20,6 +20,9 @@ export interface RouteMarkerFile {
  * new limit because the skills marker reads eagerly with no cap.
  */
 export const MARKER_FILE_LIMITS = {
+  // Build-only: the skills marker reads eagerly with no runtime cap, so there
+  // is no `@dawn-ai/core` constant to track. Changing the cap for `SKILL.md`
+  // means changing it HERE — nothing else enforces it.
   "SKILL.md": 32 * 1024,
   "memory.md": MAX_MEMORY_BYTES,
   "plan.md": MAX_PLAN_BYTES,
@@ -78,24 +81,27 @@ function throwOversized(oversized: readonly OversizedMarkerFile[]): never {
     [
       "Marker file(s) too large for the static module manifest edge targets bundle:",
       ...lines,
-      "The limit the runtime applies is enforced at build time. Shorten the file; for a skill, split it into smaller skills.",
+      "Edge builds cap each bundled marker; `memory.md` and `plan.md` use the limits the runtime already applies, and `SKILL.md` gets a build-only cap. Shorten the file; for a skill, split it into smaller skills.",
     ].join("\n"),
     1,
     { code: "DAWN_E1005" },
   )
 }
 
+interface RouteMarkerScan {
+  readonly files: readonly RouteMarkerFile[]
+  readonly oversized: readonly OversizedMarkerFile[]
+}
+
 /**
- * Every marker file an edge manifest must carry for one route, in a stable
- * order, or `undefined` when the route has none. Read failures propagate: a
- * present-but-unreadable file must fail the build, never ship a manifest
- * without it. Over-limit files are aggregated across the whole route and
- * reported together in a single error.
+ * One route's marker files and its over-limit findings, without throwing — so
+ * a caller checking a whole app can aggregate findings across routes and report
+ * them in a single error.
  */
-export async function collectRouteMarkerFiles(options: {
+async function scanRouteMarkerFiles(options: {
   readonly appRoot: string
   readonly routeDir: string
-}): Promise<readonly RouteMarkerFile[] | undefined> {
+}): Promise<RouteMarkerScan> {
   const { appRoot, routeDir } = options
   const appRelativeRouteDir = relative(appRoot, routeDir).split(sep).join("/")
   const found: RouteMarkerFile[] = []
@@ -119,6 +125,41 @@ export async function collectRouteMarkerFiles(options: {
     )
   }
 
+  return { files: found, oversized }
+}
+
+/**
+ * Every marker file an edge manifest must carry for one route, in a stable
+ * order, or `undefined` when the route has none. Read failures propagate: a
+ * present-but-unreadable file must fail the build, never ship a manifest
+ * without it. Over-limit files are aggregated across the whole route and
+ * reported together in a single error.
+ */
+export async function collectRouteMarkerFiles(options: {
+  readonly appRoot: string
+  readonly routeDir: string
+}): Promise<readonly RouteMarkerFile[] | undefined> {
+  const { files, oversized } = await scanRouteMarkerFiles(options)
   if (oversized.length > 0) throwOversized(oversized)
-  return found.length > 0 ? found : undefined
+  return files.length > 0 ? [...files] : undefined
+}
+
+/**
+ * The same per-file limits the edge emitters apply, run over every route of an
+ * app without emitting anything — so `dawn check` reports an over-limit marker
+ * instead of leaving it for a failed build. Findings are aggregated across ALL
+ * routes into one error, so a user fixing an app sees every offending file at
+ * once rather than one route per run.
+ */
+export async function assertRouteMarkerFileLimits(input: {
+  readonly appRoot: string
+  readonly manifest: RouteManifest
+}): Promise<void> {
+  const { appRoot, manifest } = input
+  const oversized: OversizedMarkerFile[] = []
+  for (const route of manifest.routes) {
+    const scan = await scanRouteMarkerFiles({ appRoot, routeDir: route.routeDir })
+    oversized.push(...scan.oversized)
+  }
+  if (oversized.length > 0) throwOversized(oversized)
 }

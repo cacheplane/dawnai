@@ -122,9 +122,9 @@ async function startAimock() {
     /** How many requests the model has served so far — snapshot it before a
      * turn so the turn's own request can be addressed without magic indices. */
     requestCount: () => aimock.getRequests().length,
-    /** The system prompt the model saw on the Nth request (default: first).
+    /** The system prompt the model saw on the Nth request.
      * `gpt-5*` models carry it as the `developer` role, not `system`. */
-    systemPromptAt: (index = 0) => {
+    systemPromptAt: (index: number) => {
       const entry = aimock.getRequests()[index]?.body?.messages as
         | { role: string; content: string }[]
         | undefined
@@ -264,6 +264,8 @@ describe("bundled marker files — node vs edge", () => {
       await nodeAimock.stop()
     }
 
+    // Between the two runs, not for the fixture: run 2 must re-load the route
+    // from the edge modules rather than reuse run 1's node-loaded caches.
     __resetRouteLoadCachesForTests()
     __clearDawnConfigCacheForTests()
     __resetMaterializedAgentsForTests()
@@ -321,10 +323,6 @@ describe("bundled marker files — node vs edge", () => {
     }
     const edgePath = join(buildDir, "modules.edge.mjs")
     await writeFile(edgePath, emitEdgeModulesFile({ appRoot, buildDir, discoveries }), "utf8")
-
-    __resetRouteLoadCachesForTests()
-    __clearDawnConfigCacheForTests()
-    __resetMaterializedAgentsForTests()
 
     const edgeModules = await loadStaticModules(pathToFileURL(edgePath))
     const aimock = await startAimock()

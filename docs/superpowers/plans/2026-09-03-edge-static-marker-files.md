@@ -1527,6 +1527,10 @@ git commit -m "docs: skills, plan.md and memory.md are bundled for edge targets"
 - `packages/cli/docs/**` is untracked in this repo, so nothing there is committed; `packages/cli/README.md` is hand-written and needed no change.
 - The FAQ sentence keeps its original "the build fails naming them" clause and gains the bundling note as a following sentence, so "them" still refers to the unavailable surfaces.
 - The heading anchor used from `upgrading.mdx` is `/docs/deployment/edge#skills-planmd-and-route-memorymd-are-bundled` (verified against `github-slugger`).
+- Review follow-ups landed after the docs commit:
+  - The changeset leads with the consumer-visible change and keeps a closing sentence about the two newly exported constants (`MAX_PLAN_BYTES`, `MAX_MEMORY_BYTES`).
+  - `dawn check` now enforces the marker-file limits too, via a new `assertRouteMarkerFileLimits` in `packages/cli/src/lib/build/targets/marker-files.ts` called per edge target in `packages/cli/src/commands/check.ts` — the spec's Error Handling section requires `DAWN_E1005` from both `dawn build` and `dawn check`. Findings are aggregated across ALL routes into one error; the build path's discovery-driven enforcement is unchanged.
+  - Three factual corrections in `apps/web/content/docs/deployment/edge.mdx`: a bodyless manifest is detected at boot but fails every *request* (the runtime raises the gap from `fetch`), `workspace/AGENTS.md` is the one marker *file* (not capability) that stays off the edge, and the build *caps* each bundled marker rather than mirroring a runtime limit for all three (`SKILL.md`'s cap is build-only). `upgrading.mdx` notes that `dawn check` applies the same limits.
 
 ---
 

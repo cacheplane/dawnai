@@ -516,6 +516,13 @@ describe("hono target — edge capability gating", () => {
       "src/app/chat/skills/big/SKILL.md": `---\ndescription: Big.\n---\n${"x".repeat(32 * 1024)}`,
     })
 
+    // `dawn check` applies the same limit, asserted BEFORE the build so the
+    // fixture's `.dawn/build` is still empty (check's stale-manifest pass would
+    // otherwise import an emitted modules.edge.mjs this fixture cannot resolve).
+    const checkError = await runCheck(appRoot).catch((e: unknown) => e)
+    expect(String(checkError)).toContain("src/app/chat/skills/big/SKILL.md")
+    expect((checkError as { code?: string }).code).toBe("DAWN_E1005")
+
     const error = await runBuild(appRoot).catch((e: unknown) => e)
 
     expect(String(error)).toContain("src/app/chat/skills/big/SKILL.md")

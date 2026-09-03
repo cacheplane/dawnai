@@ -2,10 +2,11 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { MAX_MEMORY_BYTES, MAX_PLAN_BYTES } from "@dawn-ai/core"
+import { MAX_MEMORY_BYTES, MAX_PLAN_BYTES, type RouteDefinition } from "@dawn-ai/core"
 import { afterEach, describe, expect, it } from "vitest"
 
 import {
+  assertRouteMarkerFileLimits,
   collectRouteMarkerFiles,
   MARKER_FILE_LIMITS,
 } from "../src/lib/build/targets/marker-files.js"
@@ -135,5 +136,63 @@ describe("collectRouteMarkerFiles", () => {
       "32772 bytes after UTF-8 re-encoding, over the 32768-byte limit for memory.md",
     )
     expect((error as { code?: string }).code).toBe("DAWN_E1005")
+  })
+})
+
+describe("assertRouteMarkerFileLimits", () => {
+  it("reports oversized files from every route in one error", async () => {
+    const appRoot = await realpath(await mkdtemp(join(tmpdir(), "dawn-marker-files-")))
+    cleanup.push(() => rm(appRoot, { force: true, maxRetries: 5, recursive: true }))
+    const routes: RouteDefinition[] = []
+    for (const name of ["chat", "support"]) {
+      const dir = join(appRoot, "src/app", name)
+      const filePath = join(dir, "plan.md")
+      await mkdir(dir, { recursive: true })
+      await writeFile(filePath, "x".repeat(MARKER_FILE_LIMITS["plan.md"] + 1), "utf8")
+      routes.push({
+        entryFile: join(dir, "route.ts"),
+        id: name,
+        kind: "agent",
+        pathname: `/${name}`,
+        routeDir: dir,
+        segments: [{ kind: "static", raw: name }],
+      })
+    }
+
+    const error = await assertRouteMarkerFileLimits({
+      appRoot,
+      manifest: { appRoot, routes },
+    }).catch((e: unknown) => e)
+
+    const message = String(error)
+    expect(message).toContain("src/app/chat/plan.md")
+    expect(message).toContain("src/app/support/plan.md")
+    // One error for the whole app, not one per route.
+    expect(
+      message.match(/Marker file\(s\) too large for the static module manifest/g),
+    ).toHaveLength(1)
+    expect((error as { code?: string }).code).toBe("DAWN_E1005")
+  })
+
+  it("resolves for an app whose markers are all within their limits", async () => {
+    const { appRoot, routeDir: dir } = await appRouteDir({ "plan.md": "- [ ] one\n" })
+    await expect(
+      assertRouteMarkerFileLimits({
+        appRoot,
+        manifest: {
+          appRoot,
+          routes: [
+            {
+              entryFile: join(dir, "route.ts"),
+              id: "chat",
+              kind: "agent",
+              pathname: "/chat",
+              routeDir: dir,
+              segments: [{ kind: "static", raw: "chat" }],
+            },
+          ],
+        },
+      }),
+    ).resolves.toBeUndefined()
   })
 })

@@ -152,9 +152,9 @@
       "recordDigest": "32b34e2c0540709d2670b849bdf3784eee6d8db328b6954e101c9ba07f0d7f53"
     },
     "/docs/deployment/edge": {
-      "lastModified": "2026-09-03T22:48:05.469Z",
-      "sourceDigest": "b8d9348e28bfd74e77bd634b7483c58b6737a0d191602121fa0d94f1d5e99f84",
-      "recordDigest": "13c6e001b7462829f89a17593d8f155218b3d90fa4bfc57cce1ad38f6435278b"
+      "lastModified": "2026-09-03T23:01:54.017Z",
+      "sourceDigest": "6cedfc66cccda2faa1f1a893b687f99650f8f2ff25aca6c90f477036afd48eda",
+      "recordDigest": "160ac57df542c9fa04d7d59bc0933f061ad2ad9b8f2985aa70ba0966056d4d8c"
     },
     "/docs/deployment/kubernetes": {
       "lastModified": "2026-08-31T23:34:54.000Z",
@@ -392,9 +392,9 @@
       "recordDigest": "3ad152bedc7f5d2ae83b5efd06b7f4071706a4d83435d8dd84470e81d4cb4f28"
     },
     "/docs/upgrading": {
-      "lastModified": "2026-09-03T22:48:05.469Z",
-      "sourceDigest": "87df4eca774735428e73380cc80fa325632a7521a4759f4ae34c23b9bc5e7b7c",
-      "recordDigest": "27543141d1e335c8e19c2f943e51c8750489f5d4d2173ca3d94d8d216771764b"
+      "lastModified": "2026-09-03T23:01:54.017Z",
+      "sourceDigest": "d7367b3f18a94c68fb29b6ec82dc32f519a1e0323888d02cfad3ba05d2677f53",
+      "recordDigest": "654d787a3173dddbf0eae638011600e8414e6dd6e2f2c0d20ed09a3eebe2ed0e"
     },
     "/docs/workspace": {
       "lastModified": "2026-08-25T19:40:17.000Z",
