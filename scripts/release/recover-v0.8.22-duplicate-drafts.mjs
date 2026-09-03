@@ -1248,6 +1248,25 @@ export function createProductionRecoveryObserver({
   }
 }
 
+/**
+ * Build the controller's exact candidate shape. `observeProductionCandidate`
+ * and `planRelease` require identity PLUS the CI/publisher policy fields, with
+ * no extra keys — passing bare identity throws "Release candidate is invalid"
+ * only at run time, after both duplicates have already been quarantined.
+ * Mirrors CANDIDATE_POLICY (candidate.mjs) and DEFAULT_CANDIDATE_POLICY
+ * (observe.mjs).
+ */
+export function productionRecoveryCandidate(candidate) {
+  assertRecoveryObserverCandidate(candidate)
+  return Object.freeze({
+    version: candidate.version,
+    commitSha: candidate.commitSha,
+    ciWorkflow: "CI",
+    ciCheck: "validate",
+    publisherWorkflow: ".github/workflows/release.yml",
+  })
+}
+
 export function createNormalProductionRecoveryObserver({ root, token, fileSystem, runGit }) {
   const git = createGitReader({ root, run: runGit })
   const github = createGitHubReader({
@@ -1264,12 +1283,13 @@ export function createNormalProductionRecoveryObserver({ root, token, fileSystem
     fileSystem,
   })
   return async ({ candidate }) => {
+    const productionCandidate = productionRecoveryCandidate(candidate)
     const [managedInventory, marker] = await Promise.all([
       inventory.read({ ref: candidate.commitSha }),
       readCandidateControllerMarker({ git, candidate }),
     ])
     const observed = await observeProductionCandidate({
-      candidate,
+      candidate: productionCandidate,
       inventory: managedInventory,
       marker,
       git,
@@ -1278,7 +1298,7 @@ export function createNormalProductionRecoveryObserver({ root, token, fileSystem
       attestations,
     })
     const plan = planRelease({
-      candidate,
+      candidate: productionCandidate,
       observation: observed.observation,
       mode: "controller",
     })
