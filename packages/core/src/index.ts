@@ -83,6 +83,8 @@ export {
 } from "./runtime-env.js"
 export type { ResolveStateFieldsOptions } from "./state/resolve-state-fields.js"
 export { resolveStateFields } from "./state/resolve-state-fields.js"
+export type { StaticMarkerFiles } from "./static-marker-fs.js"
+export { staticMarkerFs } from "./static-marker-fs.js"
 export type {
   GuardedSubagentResult,
   ResolveGuardedSubagentArgs,
