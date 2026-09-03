@@ -139,6 +139,7 @@ export interface StaticToolModuleInput {
 export interface StaticRouteModuleInput {
   /** Route kind as discovered at build time (drift-checked at runtime). */
   readonly kind: RouteKind
+  /** Emitted by the edge manifest flavors only; omitted when the route has none. */
   readonly markerFiles?: Readonly<Record<string, string>>
   /** The route's `memory.ts` namespace object, when the file exists. */
   readonly memoryModule?: unknown
@@ -246,8 +247,10 @@ export function staticModulesMarkerFiles(
   let union: Record<string, string> | undefined
   for (const route of modules.routes) {
     if (!route.markerFiles) continue
-    union ??= {}
-    Object.assign(union, route.markerFiles)
+    // Spread, not `Object.assign`: a literal `__proto__` key in a route's map
+    // would reach the prototype setter through `Object.assign`, while a spread
+    // defines it as an own property.
+    union = { ...union, ...route.markerFiles }
   }
   return union
 }

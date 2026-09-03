@@ -33,10 +33,13 @@ interface OversizedMarkerFile {
   readonly size: number
   readonly limit: number
   readonly kind: MarkerKind
+  /** The reported size came from re-encoding the decoded text, not from `stat`. */
+  readonly reEncoded: boolean
 }
 
 interface ReadMarkerFileResult {
-  readonly file: RouteMarkerFile
+  /** Absent when the stat pre-check rejected the file before reading it. */
+  readonly file: RouteMarkerFile | undefined
   readonly oversized: OversizedMarkerFile | undefined
 }
 
@@ -49,20 +52,27 @@ async function readMarkerFile(
   const absolute = join(routeDir, ...relativePath.split("/"))
   const statSize = (await stat(absolute)).size
   const limit = MARKER_FILE_LIMITS[kind]
+  const path = appRelativeRouteDir === "" ? relativePath : `${appRelativeRouteDir}/${relativePath}`
+  // Stat pre-check first, so a file far over the limit is never materialized
+  // into the build's memory just to be rejected.
+  if (statSize > limit) {
+    return { file: undefined, oversized: { path, size: statSize, limit, kind, reEncoded: false } }
+  }
   const content = await readFile(absolute, "utf8")
   // Invalid UTF-8 bytes decode to U+FFFD and can re-encode to more bytes than
   // were on disk, so a file can pass the stat pre-check and still exceed the
   // runtime facade's TextEncoder length; report whichever size is larger.
   const encodedSize = Buffer.byteLength(content, "utf8")
   const size = Math.max(statSize, encodedSize)
-  const path = `${appRelativeRouteDir}/${relativePath}`
-  const oversized = size > limit ? { path, size, limit, kind } : undefined
+  const oversized =
+    size > limit ? { path, size, limit, kind, reEncoded: encodedSize > statSize } : undefined
   return { file: { content, relativePath }, oversized }
 }
 
 function throwOversized(oversized: readonly OversizedMarkerFile[]): never {
   const lines = oversized.map(
-    (o) => `  • ${o.path} — ${o.size} bytes, over the ${o.limit}-byte limit for ${o.kind}`,
+    (o) =>
+      `  • ${o.path} — ${o.size} bytes${o.reEncoded ? " after UTF-8 re-encoding" : ""}, over the ${o.limit}-byte limit for ${o.kind}`,
   )
   throw new CliError(
     [
@@ -92,7 +102,7 @@ export async function collectRouteMarkerFiles(options: {
   const oversized: OversizedMarkerFile[] = []
 
   const record = (result: ReadMarkerFileResult): void => {
-    found.push(result.file)
+    if (result.file) found.push(result.file)
     if (result.oversized) oversized.push(result.oversized)
   }
 
@@ -102,7 +112,8 @@ export async function collectRouteMarkerFiles(options: {
   if (existsSync(join(routeDir, "plan.md"))) {
     record(await readMarkerFile(routeDir, appRelativeRouteDir, "plan.md", "plan.md"))
   }
-  for (const name of [...discoverSkillDirs(join(routeDir, "skills"))].sort()) {
+  // `discoverSkillDirs` already returns sorted names.
+  for (const name of discoverSkillDirs(join(routeDir, "skills"))) {
     record(
       await readMarkerFile(routeDir, appRelativeRouteDir, `skills/${name}/SKILL.md`, "SKILL.md"),
     )

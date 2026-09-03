@@ -111,6 +111,10 @@ describe("collectRouteMarkerFiles", () => {
     expect(
       message.match(/Marker file\(s\) too large for the static module manifest/g),
     ).toHaveLength(1)
+    // Same order the collector walks: plan.md before any skill.
+    expect(message.indexOf("src/app/chat/plan.md")).toBeLessThan(
+      message.indexOf("src/app/chat/skills/big/SKILL.md"),
+    )
     expect((error as { code?: string }).code).toBe("DAWN_E1005")
   })
 
@@ -127,7 +131,9 @@ describe("collectRouteMarkerFiles", () => {
     )
     const error = await collectRouteMarkerFiles({ appRoot, routeDir: dir }).catch((e: unknown) => e)
     expect(String(error)).toContain("memory.md")
-    expect(String(error)).toContain("32772")
+    expect(String(error)).toContain(
+      "32772 bytes after UTF-8 re-encoding, over the 32768-byte limit for memory.md",
+    )
     expect((error as { code?: string }).code).toBe("DAWN_E1005")
   })
 })

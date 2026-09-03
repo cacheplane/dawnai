@@ -315,11 +315,13 @@ export async function collectEdgeDependencyNotice(
 // ---------------------------------------------------------------------------
 
 /**
- * Skill directory names under `skillsDir`, by the SAME rule the skills
+ * Skill directory names under `skillsDir`, sorted, by the SAME rule the skills
  * capability applies (`packages/core/src/capabilities/built-in/skills.ts`):
  * an identifier-shaped directory name containing a `SKILL.md`. Duplicated here
  * rather than imported because that walker takes a `MarkerFs`, which is the
- * runtime's seam, not the build's.
+ * runtime's seam, not the build's. Sorted rather than left in `readdirSync`
+ * order so every consumer — the gate, the recorded manifest names, and the
+ * marker-file reader — sees the same deterministic order.
  *
  * Exported because the static-module emitter records the same names into the
  * manifest (see `RouteStaticDiscovery.skills`), and the request-time guard
@@ -336,12 +338,14 @@ export function discoverSkillDirs(skillsDir: string): readonly string[] {
   } catch {
     return []
   }
-  return entries.filter(
-    (name) =>
-      VALID_SKILL_DIR_NAME.test(name) &&
-      isDirectory(join(skillsDir, name)) &&
-      existsSync(join(skillsDir, name, "SKILL.md")),
-  )
+  return entries
+    .filter(
+      (name) =>
+        VALID_SKILL_DIR_NAME.test(name) &&
+        isDirectory(join(skillsDir, name)) &&
+        existsSync(join(skillsDir, name, "SKILL.md")),
+    )
+    .sort()
 }
 
 function isDirectory(path: string): boolean {
