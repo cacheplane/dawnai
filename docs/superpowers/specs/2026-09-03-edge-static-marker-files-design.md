@@ -48,8 +48,8 @@ serve these files from the bundle.
   supplies no marker files still fails at boot rather than dropping the
   skills silently.
 - `@dawn-ai/core`'s default barrel stays free of `node:fs`.
-- Bundle growth is bounded by an explicit per-file limit that matches the
-  runtime limit the markers already apply.
+- Bundle growth is bounded by explicit per-file limits that match the limits
+  the markers already apply at runtime.
 
 ## Non-goals
 
@@ -119,11 +119,13 @@ result and the edge manifest emitter, not the shared node emitter:
    - `memory.md` when present.
    Discovery reads these files only when the emitter is producing an edge
    flavor. The node manifest keeps its current shape.
-2. Each bundled file is limited to 32 KiB, the same limit `planning.ts` and
-   `memory-md.ts` already enforce at runtime and the limit this design applies
-   to skill bodies. A file over the limit fails the build with `DAWN_E1005`,
-   naming the file and its size, before any artifact is written. This keeps
-   the property that a green build never ships a silently disabled feature.
+2. Each bundled file is limited to the size its marker enforces at runtime:
+   `plan.md` 64 KiB (`MAX_PLAN_BYTES` in `planning.ts`), `memory.md` 32 KiB
+   (`MAX_MEMORY_BYTES` in `memory-md.ts`), and `SKILL.md` 32 KiB, which is a
+   new limit because the skills marker reads eagerly with no cap. A file over
+   its limit fails the build with `DAWN_E1005`, naming the file and its size,
+   before any artifact is written. This keeps the property that a green build
+   never ships a silently disabled feature.
 3. `emitEdgeModulesFile` emits a `markerFiles` object on each route entry
    whose keys are namespace paths built the same way every other edge path is
    built: `appRoot + "/<route-relative-path>"`, where `appRoot` is the literal
@@ -183,8 +185,9 @@ result and the edge manifest emitter, not the shared node emitter:
 
 - `deployment/edge.mdx`: remove the skills row from the gate table, add a
   short section stating that skills, `plan.md`, and route `memory.md` are
-  bundled into the manifest at build time with a 32 KiB per-file limit, and
-  update the sentence that says marker capabilities do not activate on the
+  bundled into the manifest at build time with per-file limits of 32 KiB for
+  SKILL.md and memory.md and 64 KiB for plan.md, and update the sentence that
+  says marker capabilities do not activate on the
   edge to name only `workspace/AGENTS.md`.
 - `skills.mdx` and `planning.mdx` make no target claims today and need no
   change.
@@ -199,7 +202,7 @@ result and the edge manifest emitter, not the shared node emitter:
 
 ## Error Handling
 
-- A marker file over 32 KiB fails the build and `dawn check` with
+- A marker file over its limit fails the build and `dawn check` with
   `DAWN_E1005`, naming the route-relative path and the byte size, before any
   artifact is written. The remedy text says to shorten the file or split a
   skill.
@@ -233,7 +236,8 @@ CLI build (`packages/cli`):
   namespace keys and exact contents; a route without marker files emits no
   `markerFiles` key; the node manifest is unchanged.
 - `hono-target` and `vercel-target` tests: a fixture with skills builds
-  successfully (today it must fail); a fixture with a 33 KiB `SKILL.md` fails
+  successfully (today it must fail); a fixture with a `SKILL.md` one byte over
+  32 KiB fails
   before any artifact is written, naming the file.
 - `static-check` test: `dawn check` on a hono app with skills passes.
 
