@@ -70,7 +70,9 @@ export async function emitWebRuntimeArtifacts(
   // marker bodies an edge runtime has no filesystem to read.
   //
   // Runs BEFORE the mkdir/writes below on purpose: an over-limit marker file
-  // must fail the build with nothing written.
+  // must fail THIS target's build with none of its artifacts written. Other
+  // targets configured earlier in `build.targets` may already have written
+  // theirs — this guard only protects the target currently building.
   const discoveries: RouteStaticDiscovery[] = []
   for (const route of manifest.routes) {
     discoveries.push(await collectRouteStaticDiscovery({ appRoot, markerFiles: true, route }))

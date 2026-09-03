@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { discoverRoutes } from "@dawn-ai/core/node"
+import { pureDirname } from "@dawn-ai/sdk/pure"
 import { transform } from "esbuild"
 import { afterEach, describe, expect, it } from "vitest"
 
@@ -15,6 +16,7 @@ import {
   type RouteStaticDiscovery,
 } from "../src/lib/build/targets/modules-emitter.js"
 import { loadStaticModules } from "../src/lib/runtime/static-modules.js"
+import { ensureLinkedDistsFresh } from "./helpers/hono-edge-fixture.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 
@@ -475,6 +477,7 @@ describe("emitEdgeModulesFile — marker files", () => {
   })
 
   it("survives the round trip through loadStaticModules with the runtime's routeDir keys", async () => {
+    await ensureLinkedDistsFresh()
     const appRoot = await markerFixtureApp()
     const discoveries = await collectMarkerDiscoveries(appRoot)
     const buildDir = join(appRoot, ".dawn", "build")
@@ -500,5 +503,43 @@ describe("emitEdgeModulesFile — marker files", () => {
     })
     expect(chat?.skills).toEqual(["cite-sources"])
     expect(zeta?.markerFiles).toBeUndefined()
+  }, 30_000)
+
+  it("keys every markerFiles entry under the route's own routeFile directory", async () => {
+    await ensureLinkedDistsFresh()
+    const appRoot = await markerFixtureApp()
+    const discoveries = await collectMarkerDiscoveries(appRoot)
+    const buildDir = join(appRoot, ".dawn", "build")
+    await mkdir(buildDir, { recursive: true })
+    await mkdir(join(appRoot, "node_modules", "@dawn-ai"), { recursive: true })
+    await symlink(
+      join(repoRoot, "packages", "cli"),
+      join(appRoot, "node_modules", "@dawn-ai", "cli"),
+      "dir",
+    )
+    const modulesPath = join(buildDir, "modules.edge.mjs")
+    await writeFile(modulesPath, emitEdgeModulesFile({ appRoot, buildDir, discoveries }), "utf8")
+
+    const modules = await loadStaticModules(pathToFileURL(modulesPath))
+    const chat = modules.routes.find((route) => route.routeId === "/chat")
+    if (!chat?.markerFiles || !chat.routeFile) {
+      throw new Error("expected the /chat route to carry markerFiles and a routeFile")
+    }
+
+    // Assert the invariant from the manifest's own data — the directory each
+    // key must be rooted at is derived from `routeFile` the same way the
+    // runtime derives it, not from a hand-written string.
+    const expectedDir = pureDirname(chat.routeFile)
+    const keys = Object.keys(chat.markerFiles)
+    for (const key of keys) {
+      expect(key.startsWith(`${expectedDir}/`)).toBe(true)
+    }
+    expect(new Set(keys)).toEqual(
+      new Set([
+        `${expectedDir}/memory.md`,
+        `${expectedDir}/plan.md`,
+        `${expectedDir}/skills/cite-sources/SKILL.md`,
+      ]),
+    )
   }, 30_000)
 })

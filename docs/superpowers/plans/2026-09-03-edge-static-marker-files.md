@@ -48,7 +48,7 @@
 
 The runtime limits are not uniform: `planning.ts` uses `MAX_PLAN_BYTES = 64 * 1024`, `memory-md.ts` uses `MAX_MEMORY_BYTES = 32 * 1024`, and skills have no runtime limit. The build limit must match each marker, so the spec's "32 KiB" wording is corrected before code follows it.
 
-- [ ] **Step 1: Replace the limit wording**
+- [x] **Step 1: Replace the limit wording**
 
 In the spec, find the paragraph in "Design → Build side" item 2 that begins `Each bundled file is limited to 32 KiB` and replace the whole item with:
 
@@ -70,7 +70,7 @@ In "Documentation", change `with a 32 KiB per-file limit` to `with per-file limi
 
 In "Testing and Verification", change `a fixture with a 33 KiB SKILL.md fails` to `a fixture with a SKILL.md one byte over 32 KiB fails`.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-09-03-edge-static-marker-files-design.md
@@ -86,7 +86,7 @@ git commit -m "docs: match marker file limits to each marker's runtime limit"
 - Modify: `packages/core/src/index.ts`
 - Test: `packages/core/test/static-marker-fs.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/core/test/static-marker-fs.test.ts`:
 
@@ -164,12 +164,12 @@ describe("staticMarkerFs", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `pnpm --filter @dawn-ai/core exec vitest --run --config vitest.config.ts test/static-marker-fs.test.ts`
 Expected: FAIL with "Cannot find module '../src/static-marker-fs.js'" (or equivalent resolution error).
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `packages/core/src/static-marker-fs.ts`:
 
@@ -246,7 +246,7 @@ export function staticMarkerFs(files: StaticMarkerFiles): MarkerFs {
 }
 ```
 
-- [ ] **Step 4: Export from the barrel**
+- [x] **Step 4: Export from the barrel**
 
 In `packages/core/src/index.ts`, directly after the line `export { createWorkspaceFs } from "./capabilities/workspace-fs.js"`, add:
 
@@ -255,17 +255,17 @@ export type { StaticMarkerFiles } from "./static-marker-fs.js"
 export { staticMarkerFs } from "./static-marker-fs.js"
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `pnpm --filter @dawn-ai/core exec vitest --run --config vitest.config.ts test/static-marker-fs.test.ts`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 6: Build core and typecheck**
+- [x] **Step 6: Build core and typecheck**
 
 Run: `pnpm --filter @dawn-ai/core build && pnpm --filter @dawn-ai/core typecheck`
 Expected: both exit 0.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add packages/core/src/static-marker-fs.ts packages/core/src/index.ts packages/core/test/static-marker-fs.test.ts
@@ -281,7 +281,7 @@ git commit -m "feat(core): add staticMarkerFs, a MarkerFs over an in-memory map"
 
 This is the guarantee the whole change rests on: the markers do not change, so the only thing to prove is that the facade is indistinguishable from disk for the three markers.
 
-- [ ] **Step 1: Add the failing test**
+- [x] **Step 1: Add the failing test**
 
 At the top of `packages/core/test/capabilities/markers-marker-fs.test.ts`, add the import after the existing `nodeMarkerFs` import:
 
@@ -344,12 +344,12 @@ describe("staticMarkerFs is indistinguishable from nodeMarkerFs for the bundled 
 
 The `status` strings come from `packages/core/src/capabilities/built-in/plan-md-parser.ts`, which maps `[ ]` to `"pending"` and anything else to `"completed"`.
 
-- [ ] **Step 2: Run the test**
+- [x] **Step 2: Run the test**
 
 Run: `pnpm --filter @dawn-ai/core exec vitest --run --config vitest.config.ts test/capabilities/markers-marker-fs.test.ts`
 Expected: PASS. Any failure means the facade is wrong; fix `static-marker-fs.ts`, not the test.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add packages/core/test/capabilities/markers-marker-fs.test.ts
@@ -364,7 +364,7 @@ git commit -m "test(core): markers behave identically over staticMarkerFs"
 - Create: `packages/cli/src/lib/build/targets/marker-files.ts`
 - Test: `packages/cli/test/marker-files.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/cli/test/marker-files.test.ts`:
 
@@ -444,12 +444,12 @@ describe("collectRouteMarkerFiles", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/marker-files.test.ts`
 Expected: FAIL, module not found.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `packages/cli/src/lib/build/targets/marker-files.ts`:
 
@@ -524,12 +524,12 @@ export async function collectRouteMarkerFiles(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/marker-files.test.ts`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/cli/src/lib/build/targets/marker-files.ts packages/cli/test/marker-files.test.ts
@@ -544,7 +544,7 @@ git commit -m "feat(cli): read route marker files with per-kind limits at build 
 - Modify: `packages/cli/src/lib/runtime/static-modules-core.ts`
 - Test: `packages/cli/test/static-modules-marker-files.test.ts` (new)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/cli/test/static-modules-marker-files.test.ts`:
 
@@ -597,12 +597,12 @@ describe("static modules — marker files", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/static-modules-marker-files.test.ts`
 Expected: FAIL, `staticModulesMarkerFiles` is not exported.
 
-- [ ] **Step 3: Add the field and the helper**
+- [x] **Step 3: Add the field and the helper**
 
 In `packages/cli/src/lib/runtime/static-modules-core.ts`:
 
@@ -655,17 +655,17 @@ export function staticModulesMarkerFiles(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/static-modules-marker-files.test.ts`
 Expected: PASS, 2 tests.
 
-- [ ] **Step 5: Typecheck the CLI**
+- [x] **Step 5: Typecheck the CLI**
 
 Run: `pnpm --filter @dawn-ai/cli typecheck`
 Expected: exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/cli/src/lib/runtime/static-modules-core.ts packages/cli/test/static-modules-marker-files.test.ts
@@ -682,7 +682,7 @@ git commit -m "feat(cli): carry per-route marker files on static route modules"
 - Test: `packages/cli/test/edge-modules-emitter.test.ts`
 - Test: `packages/cli/test/modules-emitter.test.ts`
 
-- [ ] **Step 1: Write the failing edge emitter test**
+- [x] **Step 1: Write the failing edge emitter test**
 
 `packages/cli/test/edge-modules-emitter.test.ts` has a golden inline snapshot of the whole emitted manifest for its shared `fixtureApp()`. Leave that fixture and `collectFixtureDiscoveries` untouched so the snapshot stays valid; the existing `collectFixtureDiscoveries` (which does not ask for marker files) doubles as proof that the emitter omits `markerFiles` when discovery did not collect them.
 
@@ -787,7 +787,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", ".
 
 (Replace the existing `import { join } from "node:path"` and the existing `emitEdgeModulesFile` import with the lines above.)
 
-- [ ] **Step 2: Write the failing node-emitter regression test**
+- [x] **Step 2: Write the failing node-emitter regression test**
 
 In `packages/cli/test/modules-emitter.test.ts`, inside `describe("emitModulesFile — route skills", ...)`, add a second `it` after the existing one:
 
@@ -803,12 +803,12 @@ In `packages/cli/test/modules-emitter.test.ts`, inside `describe("emitModulesFil
   })
 ```
 
-- [ ] **Step 3: Run both tests to verify they fail**
+- [x] **Step 3: Run both tests to verify they fail**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/edge-modules-emitter.test.ts test/modules-emitter.test.ts`
 Expected: the two new edge cases FAIL (no `markerFiles` in output; `markerFiles` is not an accepted option). The node regression case passes already; keep it.
 
-- [ ] **Step 4: Extend discovery and the emitter**
+- [x] **Step 4: Extend discovery and the emitter**
 
 In `packages/cli/src/lib/build/targets/modules-emitter.ts`:
 
@@ -890,12 +890,12 @@ In `packages/cli/src/lib/build/targets/web-runtime.ts`, change the discovery loo
   }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/edge-modules-emitter.test.ts test/modules-emitter.test.ts`
 Expected: PASS, including the untouched golden inline snapshot (its fixture has no marker files, so its output is byte-for-byte unchanged).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/cli/src/lib/build/targets/modules-emitter.ts packages/cli/src/lib/build/targets/web-runtime.ts packages/cli/test/edge-modules-emitter.test.ts packages/cli/test/modules-emitter.test.ts

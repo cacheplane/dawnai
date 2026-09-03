@@ -206,6 +206,12 @@ export function collectRuntimeCapabilityGaps(
     const skills = route.skills
     if (!skills || skills.length === 0) continue
     violations.push({
+      // Re-sorted even though `discoverSkillDirs` already sorts: `route.skills`
+      // here can come from a hand-composed manifest fed straight to this
+      // function, which carries no guarantee of that order. This does not
+      // contradict discoverSkillDirs's "every consumer sees the same order"
+      // comment — it is a defensive re-sort for inputs that never went through
+      // that function at all.
       capability: `skills (${[...skills].sort().join(", ")})`,
       source: `the skills/ directory of route "${route.routeId}", recorded in the static module manifest at build time`,
       reason:

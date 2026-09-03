@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
-import { dirname, join, relative, sep } from "node:path"
+import { join, relative, sep } from "node:path"
 
 import type { RouteDefinition, RouteKind } from "@dawn-ai/core"
 
@@ -49,6 +49,11 @@ export interface RouteStaticDiscovery {
    * node manifest never carries bodies; it reads them from disk.
    */
   readonly markerFiles?: readonly RouteMarkerFile[]
+  /**
+   * `routeDir` relative to the app root, forward-slashed — the directory the
+   * marker files were read from. Present exactly when `markerFiles` is.
+   */
+  readonly markerFilesDir?: string
   /**
    * `state.ts` defaults as entries; `undefined` when the route has no state
    * definition, `[]` when it has a defined-but-empty one (mirrors the
@@ -133,6 +138,12 @@ export async function collectRouteStaticDiscovery(options: {
   const markerFiles = options.markerFiles
     ? await collectRouteMarkerFiles({ appRoot, routeDir: route.routeDir })
     : undefined
+  // Pinned to the SAME directory `collectRouteMarkerFiles` just read from —
+  // never re-derived from `entryFile` at emit time, which is how the emitter
+  // and the collector could drift onto different directories for a route
+  // whose entry file does not live directly in `routeDir`.
+  const markerFilesFields: Pick<RouteStaticDiscovery, "markerFiles" | "markerFilesDir"> =
+    markerFiles ? { markerFiles, markerFilesDir: appRootRelative(appRoot, route.routeDir) } : {}
 
   return {
     entryFile: route.entryFile,
@@ -141,7 +152,7 @@ export async function collectRouteStaticDiscovery(options: {
     reducers,
     routeId: route.id,
     ...(skillDirs.length > 0 ? { skills: skillDirs } : {}),
-    ...(markerFiles ? { markerFiles } : {}),
+    ...markerFilesFields,
     stateDefaults,
     toolSchemas,
     tools,
@@ -341,11 +352,18 @@ export function emitModulesFileWithFlavor(
     // perform a prototype assignment this way, and every key/value goes
     // through JSON.stringify so no content can break out of its literal.
     if (discovery.markerFiles && discovery.markerFiles.length > 0) {
-      const routeDirRelative = appRootRelative(appRoot, dirname(discovery.entryFile))
-      const entries = discovery.markerFiles.map(
-        (file) =>
-          `        [${flavor.appRootPathExpression(`${routeDirRelative}/${file.relativePath}`)}, ${JSON.stringify(file.content)}],`,
-      )
+      if (discovery.markerFilesDir === undefined) {
+        throw new Error(
+          `Route "${discovery.routeId}" has markerFiles but no markerFilesDir — malformed ` +
+            `RouteStaticDiscovery (collectRouteStaticDiscovery must set both together).`,
+        )
+      }
+      const routeDirRelative = discovery.markerFilesDir
+      const entries = discovery.markerFiles.map((file) => {
+        const key =
+          routeDirRelative === "" ? file.relativePath : `${routeDirRelative}/${file.relativePath}`
+        return `        [${flavor.appRootPathExpression(key)}, ${JSON.stringify(file.content)}],`
+      })
       lines.push(`      markerFiles: Object.fromEntries([`)
       lines.push(...entries)
       lines.push(`      ]),`)
