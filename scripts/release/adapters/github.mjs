@@ -6,6 +6,10 @@ const JSON_ACCEPT = "application/vnd.github+json"
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u
 const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u
+// A GitHub login: alphanumeric segments joined by single hyphens, never
+// leading or trailing. Stricter than OWNER_PATTERN on purpose, so an
+// authenticated-user read cannot report a login the record store would reject.
+const LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/u
 const REPOSITORY_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/u
 const SAFE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u
 const CURSOR_PATTERN = /^[A-Za-z0-9._~+/=-]{1,512}$/u
@@ -282,6 +286,16 @@ export function createGitHubReader({
         operation: "environments",
         extract: objectArray("environments"),
         compare: compareStringFieldThenCanonical("name"),
+      })
+    },
+    // The only read on this reader that is not scoped to the repository: it
+    // names the identity the configured token acts as.
+    getAuthenticatedUser() {
+      return readObject(context, {
+        url: `${context.apiOrigin}/user`,
+        operation: "authenticated-user",
+        validate: (body) =>
+          isObject(body) && typeof body.login === "string" && LOGIN_PATTERN.test(body.login),
       })
     },
     getBranchProtection({ branch }) {

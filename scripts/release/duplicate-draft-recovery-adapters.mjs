@@ -235,6 +235,19 @@ export function createDuplicateDraftRecoveryReader({
       return readRepositoryState(context)
     },
 
+    /** The login the configured token acts as, for the recovery record's authority. */
+    async readAuthenticatedLogin() {
+      const user = requirePresent(
+        await github.getAuthenticatedUser(),
+        "AUTHENTICATED_USER_UNAVAILABLE",
+        "Authenticated operator identity could not be verified",
+      )
+      if (!isObject(user) || !isBoundedText(user.login, 39)) {
+        fail("AUTHENTICATED_USER_MALFORMED", "Authenticated operator identity is malformed")
+      }
+      return user.login
+    },
+
     async readCandidateTag() {
       const ref = requirePresent(
         await github.getRef({ ref: `tags/${CANDIDATE_TAG}` }),

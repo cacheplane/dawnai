@@ -637,6 +637,16 @@ test("the canonical normalizers reject a foreign Release identity", () => {
   )
   assert.throws(
     () =>
+      normalizeTerminalReleaseSnapshot({
+        release: { ...release, id: CANONICAL_RELEASE_ID },
+        rawAssets: fixture.rawAssets,
+        releaseId: DUPLICATE_ID,
+      }),
+    { code: "RELEASE_MALFORMED" },
+    "the releaseId parameter is pinned independently of the payload's own ID",
+  )
+  assert.throws(
+    () =>
       normalizeTerminalReleaseProjection({ ...fixture.escrowSnapshot, releaseId: DUPLICATE_ID }),
     /projection metadata is not exact/iu,
   )

@@ -16,6 +16,7 @@ import { canonicalReleaseBody, parseReleaseMarker } from "../metadata.mjs"
 
 const EXPECTED_METHODS = [
   "listCandidateReleases",
+  "readAuthenticatedLogin",
   "readCandidatePublishJobs",
   "readCandidateTag",
   "readImmutableReleases",
@@ -1972,6 +1973,34 @@ test("npm absence performs exact-version E404 plus package metadata confirmation
     calls.map(({ url }) => url),
     [`https://registry.npmjs.org/${encoded}/0.8.22`, `https://registry.npmjs.org/${encoded}`],
   )
+})
+
+test("the authenticated login is read from GET /user and must be a well-formed login", async () => {
+  const login = async (body) => {
+    const calls = []
+    const reader = createDuplicateDraftRecoveryReader({
+      root: "/workspace",
+      token: "secret-token",
+      run: async () => `${REVIEWED_COMMIT}\n`,
+      fetchImpl: routingFetch(calls, (url) => {
+        if (url === "https://api.github.com/user") return jsonResponse(body)
+        assert.fail(`unexpected URL ${url}`)
+      }),
+    })
+    return { result: await reader.readAuthenticatedLogin().catch((error) => error), calls }
+  }
+
+  const accepted = await login({ login: "blove", id: 1 })
+  assert.equal(accepted.result, "blove")
+  assert.deepEqual(
+    accepted.calls.map(({ url }) => url),
+    ["https://api.github.com/user"],
+  )
+  for (const body of [{ login: "-bad" }, { login: "" }, { id: 1 }, { login: 42 }]) {
+    const rejected = await login(body)
+    assert.equal(rejected.result.name, "DuplicateDraftRecoveryReadError")
+    assert.equal(rejected.result.code, "AUTHENTICATED_USER_UNAVAILABLE")
+  }
 })
 
 test("release snapshots read complete assets and required recovery bytes through safe redirects", async () => {

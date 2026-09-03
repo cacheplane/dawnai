@@ -53,8 +53,10 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for the required terminalRecordRef option on observeProductionCandidate /
 // resolveProductionCandidate (scripts/release/cli.mjs, independent-audit.mjs, and
 // post-publication-audit.mjs each now pass the ref their own job checks out).
+// Repinned for getAuthenticatedUser on the GitHub reader (scripts/release/adapters/github.mjs):
+// the v0.8.22 terminal recovery record names the operator login its token acts as.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "e4b631197973dccbd88e1172cf4202228a8edd80535f50a5945dcd51a4e6d10d"
+  "23b0a9057c4f8051049e4ebd71f40c8844cca4ce9f562b6f40c5d82e066fbdb0"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
