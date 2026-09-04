@@ -48,7 +48,8 @@ jobs:
       actions: read
       attestations: read
       checks: read
-      contents: read
+      # contents: write — the only scope that exposes draft Releases to GITHUB_TOKEN (spec 2026-09-04-controller-draft-visibility).
+      contents: write
     outputs:
       candidate_sha: ${{ steps.observe.outputs.candidate_sha }}
       candidate_version: ${{ steps.observe.outputs.candidate_version }}
@@ -1111,7 +1112,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: write
-      contents: read
+      # contents: write — the only scope that exposes draft Releases to GITHUB_TOKEN (spec 2026-09-04-controller-draft-visibility).
+      contents: write
     outputs:
       dispatch_artifact_id: ${{ steps.receipt.outputs.artifact-id }}
     steps:

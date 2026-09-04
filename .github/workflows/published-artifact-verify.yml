@@ -32,7 +32,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: write
-      contents: read
+      # contents: write — the only scope that exposes draft Releases to GITHUB_TOKEN (spec 2026-09-04-controller-draft-visibility).
+      contents: write
     outputs:
       mode: ${{ steps.route.outputs.mode }}
     steps:
@@ -73,7 +74,8 @@ jobs:
       actions: read
       attestations: read
       checks: read
-      contents: read
+      # contents: write — the only scope that exposes draft Releases to GITHUB_TOKEN (spec 2026-09-04-controller-draft-visibility).
+      contents: write
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
