@@ -1,5 +1,18 @@
 # @dawn-example/research-server
 
+## 0.0.11
+
+### Patch Changes
+
+- Updated dependencies [21654e8]
+- Updated dependencies [7e62bb1]
+- Updated dependencies [47bf96b]
+  - @dawn-ai/cli@0.8.23
+  - @dawn-ai/core@0.8.23
+  - @dawn-ai/langchain@0.8.23
+  - @dawn-ai/sandbox@0.8.23
+  - @dawn-ai/sdk@0.8.23
+
 ## 0.0.10
 
 ### Patch Changes

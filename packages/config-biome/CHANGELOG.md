@@ -1,5 +1,12 @@
 # @dawn-ai/config-biome
 
+## 0.8.23
+
+### Patch Changes
+
+- 7e62bb1: Refresh the GitHub and npm documentation surfaces, add package discovery
+  metadata, and introduce reproducible product-loop media. No runtime API changed.
+
 ## 0.8.22
 
 ### Patch Changes

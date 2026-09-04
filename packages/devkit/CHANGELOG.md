@@ -1,5 +1,13 @@
 # @dawn-ai/devkit
 
+## 0.8.23
+
+### Patch Changes
+
+- 21654e8: Align the CopilotKit v2 examples, research scaffold, and Dawn AG-UI runtime on CopilotKit 1.70 and AG-UI 0.0.59.
+- 7e62bb1: Refresh the GitHub and npm documentation surfaces, add package discovery
+  metadata, and introduce reproducible product-loop media. No runtime API changed.
+
 ## 0.8.22
 
 ### Patch Changes

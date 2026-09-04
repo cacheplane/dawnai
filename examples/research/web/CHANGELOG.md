@@ -1,5 +1,13 @@
 # @dawn-example/research-web
 
+## 0.0.2
+
+### Patch Changes
+
+- Updated dependencies [21654e8]
+- Updated dependencies [7e62bb1]
+  - @dawn-ai/ag-ui@0.8.23
+
 ## 0.0.1
 
 ### Patch Changes

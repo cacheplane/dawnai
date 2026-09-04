@@ -1,5 +1,12 @@
 # @dawn-ai/web
 
+## 0.0.2
+
+### Patch Changes
+
+- Updated dependencies [7e62bb1]
+  - @dawn-ai/sdk@0.8.23
+
 ## 0.0.1
 
 ### Patch Changes
