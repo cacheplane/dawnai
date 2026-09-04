@@ -1105,6 +1105,12 @@ export async function runAbandonCli({
   dependencies = {},
 } = {}) {
   let reservation = null
+  // Set once production may have changed, so a failure between the apply and
+  // the committed receipt is reported as a post-mutation failure rather than an
+  // inert one. A `preexisting-abandoned` apply performs no write of its own,
+  // but "re-run apply" is still the correct instruction: the rerun
+  // re-classifies the ladder and finishes.
+  let mutated = false
   try {
     const options = parseAbandonCliArguments(argv)
     const runtime = normalizeRuntime({
@@ -1145,6 +1151,7 @@ export async function runAbandonCli({
     }
 
     const receiptBytes = await applyReviewedRecord(runtime, root, options, reader, token)
+    mutated = true
     assertCredentialFreeBytes(receiptBytes, token, "Terminal recovery receipt")
     await reassertOutputPolicy(runtime, root, output, options.reviewedCommit)
     await reservation.commit(receiptBytes, MAX_TERMINAL_RECORD_BYTES)
@@ -1162,18 +1169,37 @@ export async function runAbandonCli({
     }
     const input = error instanceof RecoveryInputError
     try {
+      // What happened to PRODUCTION outranks what happened to the local output
+      // file: an operator holding the freeze must be told the draft changed
+      // even when the receipt could not be written. The exit code still reports
+      // the local outcome, so an uncertain cleanup stays a 3.
       stderr.write(
-        cleanupUncertain
-          ? "Terminal recovery output cleanup uncertain.\n"
-          : input
-            ? "Invalid terminal recovery input.\n"
-            : error?.mutated === true
-              ? `Terminal recovery failed after mutation; re-run apply to classify and finish.${diagnosticCodeSuffix(error)}\n`
-              : `Terminal recovery failed.${diagnosticCodeSuffix(error)}\n`,
+        failureMessage(error, {
+          mutated: mutated || error?.mutated === true,
+          cleanupUncertain,
+          input,
+        }),
       )
     } catch {}
     return cleanupUncertain ? 3 : input ? 2 : 1
   }
+}
+
+/**
+ * The one line an operator acts on. A non-terminal final observation after the
+ * stamp gets its own sentence: the draft is already abandoned, so a rerun
+ * classifies as `preexisting-abandoned` and re-runs the very observation that
+ * just failed — it cannot fix anything, and repeating it wastes the freeze.
+ */
+function failureMessage(error, { mutated, cleanupUncertain, input }) {
+  if (input) return "Invalid terminal recovery input.\n"
+  if (mutated) {
+    return error?.code === "FINAL_OBSERVATION_NOT_TERMINAL"
+      ? `Terminal recovery stamped the draft but the final observation is not terminal; keep the freeze, preserve the receipt path, and escalate — do not re-run apply.${diagnosticCodeSuffix(error)}\n`
+      : `Terminal recovery failed after mutation; re-run apply to classify and finish.${diagnosticCodeSuffix(error)}\n`
+  }
+  if (cleanupUncertain) return "Terminal recovery output cleanup uncertain.\n"
+  return `Terminal recovery failed.${diagnosticCodeSuffix(error)}\n`
 }
 
 /**

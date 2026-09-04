@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { execFile as execFileCallback } from "node:child_process"
 import { createHash } from "node:crypto"
+import * as nodeFileSystem from "node:fs/promises"
 import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -1547,12 +1548,13 @@ test("the runner refuses to apply when the reviewed commit is not HEAD", async (
 test("the runner refuses a receipt carrying the configured credential", async (t) => {
   const bytes = canonicalTerminalRecordBytes(boundRecord())
   const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const stderr = sink()
   const result = await runAbandonCli({
     argv: applyArgv(root),
     cwd: root,
     environment: { GITHUB_TOKEN: "apply-token" },
     stdout: sink(),
-    stderr: sink(),
+    stderr,
     dependencies: {
       createReader: () => cliReader(),
       createWriter: () => Object.freeze({ kind: "writer" }),
@@ -1561,6 +1563,12 @@ test("the runner refuses a receipt carrying the configured credential", async (t
     },
   })
   assert.equal(result, 1)
+  // The apply already stamped the draft, so a refused receipt is a
+  // post-mutation failure, not an inert one.
+  assert.equal(
+    stderr.text,
+    "Terminal recovery failed after mutation; re-run apply to classify and finish. (code: OUTPUT_CREDENTIAL_LEAK)\n",
+  )
   await assert.rejects(readFile(path.join(root, APPLY_PATH)))
   assert.ok(MAX_TERMINAL_RECORD_BYTES > 0)
 })
@@ -1812,5 +1820,111 @@ test("apply marks a post-write failure as mutated and an ambiguous first write t
     // No transition was recorded, but the request went out: the operator must
     // still be told production may have changed.
     (error) => error.mutated === true,
+  )
+})
+
+/** Apply-command dependencies that succeed, so a test can fail one later step. */
+function successfulApplyDependencies(extra = {}) {
+  return {
+    createReader: () => cliReader(),
+    createWriter: () => Object.freeze({ kind: "writer" }),
+    createObserver: () => async () => terminalObservation(),
+    applyTerminalRecord: async () => ({ schemaVersion: 1, outcome: "performed" }),
+    ...extra,
+  }
+}
+
+test("the runner reports a post-apply output-policy failure as a post-mutation failure", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const stderr = sink()
+  // The apply lands, then the ignore-policy re-check that guards the commit
+  // fails: production is changed even though nothing was written locally.
+  let checkIgnores = 0
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: sink(),
+    stderr,
+    dependencies: successfulApplyDependencies({
+      async runGit(command, args, options) {
+        if (args.includes("check-ignore")) {
+          checkIgnores += 1
+          if (checkIgnores === 2) throw new Error("ignore check unavailable")
+        }
+        const { execFile: run } = await import("node:child_process")
+        return await new Promise((resolve, reject) => {
+          run(command, args, options, (error, stdout) =>
+            error === null ? resolve(stdout) : reject(error),
+          )
+        })
+      },
+    }),
+  })
+
+  assert.equal(result, 1)
+  assert.equal(
+    stderr.text,
+    "Terminal recovery failed after mutation; re-run apply to classify and finish.\n",
+  )
+  await assert.rejects(readFile(path.join(root, APPLY_PATH)))
+})
+
+test("a post-apply cleanup-uncertain failure still exits 3 and names the mutation", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const stderr = sink()
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: sink(),
+    stderr,
+    dependencies: successfulApplyDependencies({
+      // The receipt is linked into place and then every cleanup unlink fails,
+      // so the local output outcome is genuinely uncertain.
+      fileSystem: {
+        ...nodeFileSystem,
+        unlink: async () => {
+          throw Object.assign(new Error("unlink unavailable"), { code: "EIO" })
+        },
+      },
+    }),
+  })
+
+  assert.equal(result, 3, "an uncertain local cleanup still owns the exit code")
+  assert.equal(
+    stderr.text,
+    "Terminal recovery failed after mutation; re-run apply to classify and finish.\n",
+  )
+})
+
+test("a non-terminal final observation after the stamp tells the operator to escalate", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const stderr = sink()
+  const failure = new TerminalRecoveryError(
+    "FINAL_OBSERVATION_NOT_TERMINAL",
+    "Final observation is not terminal for the candidate",
+  )
+  Object.defineProperty(failure, "mutated", { value: true, enumerable: false })
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: sink(),
+    stderr,
+    dependencies: successfulApplyDependencies({
+      applyTerminalRecord: async () => {
+        throw failure
+      },
+    }),
+  })
+
+  assert.equal(result, 1)
+  assert.equal(
+    stderr.text,
+    "Terminal recovery stamped the draft but the final observation is not terminal; keep the freeze, preserve the receipt path, and escalate — do not re-run apply. (code: FINAL_OBSERVATION_NOT_TERMINAL)\n",
   )
 })
