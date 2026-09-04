@@ -1940,3 +1940,103 @@ test("a non-terminal final observation after the stamp tells the operator to esc
     "Terminal recovery stamped the draft but the final observation is not terminal; keep the freeze, preserve the receipt path, and escalate — do not re-run apply. (code: FINAL_OBSERVATION_NOT_TERMINAL)\n",
   )
 })
+
+const APPLY_TIME_COMMIT = "8".repeat(40)
+
+/**
+ * A reader whose merge-authority read pins the reviewed commit to local HEAD,
+ * exactly as the production duplicate-draft reader does
+ * (`REVIEWED_COMMIT_NOT_LOCAL_HEAD`). At apply time HEAD is the record pull
+ * request's merge commit, which is NOT the commit the record was captured from.
+ */
+function headPinnedReader(fixture, headCommitSha) {
+  return {
+    ...fixture.reader,
+    async readReviewedMergeAuthority(sha) {
+      if (sha !== headCommitSha) {
+        throw Object.assign(new Error("Reviewed recovery commit is not local HEAD"), {
+          name: "DuplicateDraftRecoveryReadError",
+          code: "REVIEWED_COMMIT_NOT_LOCAL_HEAD",
+        })
+      }
+      return { mergeCommitSha: sha, reviewedHeadSha: "5".repeat(40), pullRequestNumber: 601 }
+    },
+  }
+}
+
+test("apply re-captures evidence at the apply-time commit, not the capture-time commit", async () => {
+  const fixture = applyFixture()
+  assert.notEqual(fixture.record.authority.reviewedCommit, APPLY_TIME_COMMIT)
+  const calls = []
+  const receipt = await applyTerminalRecord({
+    recordBytes: fixture.bytes,
+    reviewedCommit: APPLY_TIME_COMMIT,
+    reader: headPinnedReader(fixture, APPLY_TIME_COMMIT),
+    createWriter: () => stampingWriter(calls, fixture.snapshot),
+    observer: async () => terminalObservation(),
+    now: () => APPLY_NOW,
+    wait: async () => {},
+  })
+
+  assert.equal(receipt.outcome, "performed")
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["upload", "patch"],
+  )
+  // The record still names the commit it was captured from; only the live reads
+  // are authorized by the commit this apply is running at.
+  assert.equal(receipt.record.reviewedCommit, REVIEWED)
+  assert.equal(receipt.authority.reviewedCommit, APPLY_TIME_COMMIT)
+})
+
+test("the runner applies a record committed before HEAD end to end", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  // The record landed in an earlier commit; HEAD is the merge commit the apply
+  // runs at, which is what the reviewed-merge authority is read against.
+  await execFile("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Recovery Test",
+    "-c",
+    "user.email=recovery@example.invalid",
+    "commit",
+    "--quiet",
+    "--allow-empty",
+    "-m",
+    "merge the record pull request",
+  ])
+  const { stdout } = await execFile("git", ["-C", root, "rev-parse", "HEAD"])
+  const head = stdout.trim()
+  REVIEWED_COMMITS.set(root, head)
+  assert.notEqual(head, boundRecord().authority.reviewedCommit)
+
+  const fixture = applyFixture()
+  const stdoutSink = sink()
+  const stderrSink = sink()
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: stdoutSink,
+    stderr: stderrSink,
+    dependencies: {
+      createReader: () => headPinnedReader(fixture, head),
+      createWriter: () => stampingWriter([], fixture.snapshot),
+      createObserver: () => async () => terminalObservation(),
+      // The real apply, so the re-capture runs against the head-pinned reader.
+      // Only the clock is stubbed: the sixty-second npm sweep gap is real time.
+      applyTerminalRecord: (input) =>
+        applyTerminalRecord({ ...input, now: () => APPLY_NOW, wait: async () => {} }),
+    },
+  })
+
+  assert.equal(stderrSink.text, "")
+  assert.equal(result, 0)
+  assert.equal(stdoutSink.text, "Terminal recovery applied.\n")
+  const receipt = JSON.parse(await readFile(path.join(root, APPLY_PATH), "utf8"))
+  assert.equal(receipt.outcome, "performed")
+  assert.equal(receipt.authority.reviewedCommit, head)
+  assert.equal(receipt.record.reviewedCommit, boundRecord().authority.reviewedCommit)
+})
