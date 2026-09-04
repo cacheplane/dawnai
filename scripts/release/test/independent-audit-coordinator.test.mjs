@@ -174,12 +174,13 @@ function githubBoundary({ releases, calls, refType = "tag", tagTargetSha }) {
         return present("releases", releases)
       },
       async getReleaseByTag({ tag }) {
-        return present(
-          "release",
-          releases.find(
-            (release) => release.tag_name === tag || parseReleaseMarker(release.body).tag === tag,
-          ),
-        )
+        // Real GitHub resolves a Release by tag only once it is published: a draft
+        // carries an opaque `untagged-<id>` name and 404s here however its marker
+        // reads. Matching a draft's marker tag would make this fake more capable
+        // than the API it stands in for, which is exactly how a coordinator that
+        // could not observe its own draft reached production.
+        const found = releases.find((release) => release.draft !== true && release.tag_name === tag)
+        return found === undefined ? absent("release") : present("release", found)
       },
       async getRef({ ref }) {
         selectedTag = ref.replace(/^tags\//u, "")
@@ -215,4 +216,8 @@ function githubBoundary({ releases, calls, refType = "tag", tagTargetSha }) {
 
 function present(operation, value) {
   return { status: "PRESENT", operation, httpStatus: 200, code: null, value }
+}
+
+function absent(operation) {
+  return { status: "ABSENT", operation, httpStatus: 404, code: "NOT_FOUND", value: null }
 }

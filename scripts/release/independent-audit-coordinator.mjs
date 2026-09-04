@@ -40,14 +40,9 @@ export async function coordinateIndependentAudit(input) {
     if (invocation.sha !== invocation.inputs.commitSha) {
       throw new Error("Exact-tag audit SHA does not match its candidate input")
     }
-    const release = await readReleaseByTag(
-      invocation.github.reader,
-      `v${invocation.inputs.version}`,
-    )
-    const managed = parseManagedRelease(release, {
+    const managed = await readAuditableManagedRelease(invocation.github.reader, {
       defaultBranch: invocation.defaultBranch,
       expected: invocation.inputs,
-      allowDraft: true,
     })
     await verifyAnnotatedTag(invocation.github.reader, managed)
     return Object.freeze({ mode: managed.mode, ...managedIdentity(managed) })
@@ -79,6 +74,40 @@ export async function coordinateIndependentAudit(input) {
   )
   assertDispatchReceipt(receipt)
   return Object.freeze({ mode: "relayed", ...identity })
+}
+
+/**
+ * Find the managed Release for an exact candidate.
+ *
+ * A managed draft carries no resolvable `tag_name` — GitHub names it
+ * `untagged-<id>` until it is published — so `GET /releases/tags/{tag}` cannot
+ * see it and returns 404. The draft is instead identified by its marker, which
+ * `parseManagedRelease` already reads. Listing is paginated and covers drafts
+ * and published releases alike.
+ *
+ * Candidates are narrowed by exact release name before parsing, so a malformed
+ * release for this very version fails loudly instead of being skipped, and more
+ * than one match is an error rather than a silent pick: a duplicated draft is
+ * the hazard that stranded v0.8.22.
+ */
+async function readAuditableManagedRelease(reader, { defaultBranch, expected }) {
+  const releases = await readEnvelopeValue(reader.listReleases(), "releases")
+  if (!Array.isArray(releases)) throw new Error("GitHub Release list is malformed")
+  const name = `Dawn v${expected.version}`
+  const matches = releases.filter(
+    (release) =>
+      release !== null &&
+      typeof release === "object" &&
+      !Array.isArray(release) &&
+      release.name === name,
+  )
+  if (matches.length === 0) {
+    throw new Error(`No managed Release named ${name} was found`)
+  }
+  if (matches.length > 1) {
+    throw new Error(`Managed Release ${name} is duplicated`)
+  }
+  return parseManagedRelease(matches[0], { defaultBranch, expected, allowDraft: true })
 }
 
 async function discoverLatestPublishedRelease(reader, defaultBranch) {

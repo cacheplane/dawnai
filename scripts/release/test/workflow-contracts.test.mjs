@@ -93,7 +93,7 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // environment and the abandonment environment. It is declared in RELEASE_DATA_FILES and anchored
 // to those readers, so the declaration fails as a stale pin if they stop naming it.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "fb2b8f444e43553779db4f36435f68d8278e14a84debda1be4c1b837306232c7"
+  "8009b5b7f7cc4aed302b134ad9b9eab117fbf75a478a653b1c8ad66c21ec2f49"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
