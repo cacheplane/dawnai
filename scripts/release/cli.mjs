@@ -2860,6 +2860,17 @@ function usageError() {
   )
 }
 
+const FAILURE_DETAIL_MAX_LENGTH = 512
+const FAILURE_DETAIL_MAX_CAUSES = 3
+const FAILURE_DETAIL_REDACTIONS = Object.freeze([
+  /gh[pous]_[A-Za-z0-9]{20,}/gu,
+  /github_pat_[A-Za-z0-9_]{20,}/gu,
+  /npm_[A-Za-z0-9]{20,}/gu,
+  /Bearer\s+\S+/gu,
+  /authorization:\s*\S+(?:\s+\S+)?/giu,
+  /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
+])
+
 const executedPath =
   process.argv[1] === undefined ? null : pathToFileURL(path.resolve(process.argv[1])).href
 if (executedPath === import.meta.url) {
@@ -2867,6 +2878,7 @@ if (executedPath === import.meta.url) {
     await runReleaseCli(process.argv.slice(2))
   } catch (error) {
     process.stderr.write(`release CLI failed: ${safeCode(error)}\n`)
+    process.stderr.write(`release CLI failure detail: ${safeDetail(error)}\n`)
     process.exitCode = 1
   }
 }
@@ -2876,6 +2888,50 @@ function safeCode(error) {
   return typeof code === "string" && /^[A-Z0-9_]{1,128}$/u.test(code)
     ? code
     : "INVALID_RELEASE_COMMAND"
+}
+
+/**
+ * One operator-facing line describing why the CLI failed. Most controller failures are
+ * plain Errors without a code, so `release CLI failed: INVALID_RELEASE_COMMAND` alone hides
+ * the actual reason (run 33889526426 failed in escrow with exactly that masked line). The
+ * detail is derived from the error message chain only: never a stack, never a body.
+ */
+export function safeDetail(error) {
+  const messages = []
+  let current = error
+  for (
+    let depth = 0;
+    depth <= FAILURE_DETAIL_MAX_CAUSES && (depth === 0 || current !== undefined);
+    depth += 1
+  ) {
+    const message = current?.message
+    messages.push(typeof message === "string" && message.length > 0 ? message : "(no message)")
+    current = current !== null && typeof current === "object" ? current.cause : undefined
+  }
+  let detail = Array.from(messages.join(" <- "), (character) =>
+    isControlCharacter(character) ? " " : character,
+  ).join("")
+  detail = detail.replace(/https?:\/\/[^\s?#]*\?\S*/gu, (token) =>
+    token.slice(0, token.indexOf("?")),
+  )
+  for (const pattern of FAILURE_DETAIL_REDACTIONS) {
+    detail = detail.replace(pattern, "[redacted]")
+  }
+  detail = detail.replace(/\s+/gu, " ").trim()
+  if (detail.length > FAILURE_DETAIL_MAX_LENGTH) {
+    detail = `${detail.slice(0, FAILURE_DETAIL_MAX_LENGTH - 1)}\u2026`
+  }
+  return detail
+}
+
+function isControlCharacter(character) {
+  const codePoint = character.codePointAt(0)
+  return (
+    codePoint < 0x20 ||
+    (codePoint >= 0x7f && codePoint <= 0x9f) ||
+    codePoint === 0x2028 ||
+    codePoint === 0x2029
+  )
 }
 
 function safeObservationFailure(error, fallback) {
