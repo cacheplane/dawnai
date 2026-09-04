@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { ThreadAccessPolicy } from "@dawn-ai/sdk"
@@ -17,6 +17,7 @@ import { createAimock } from "../../testing/dist/aimock-runner.js"
 import { script } from "../../testing/dist/fixture-builder.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import { terminalStatus } from "../src/lib/dev/terminal-status.js"
+import { atomicWriteLines, waitForFile } from "./helpers/probe-file.js"
 
 const cleanup: Array<() => Promise<void> | void> = []
 
@@ -35,12 +36,14 @@ const ECHO_ROUTE = ["export const graph = async () => ({ ok: true })", ""].join(
  * run slot until a release file appears, so a cancel can land mid-run. It
  * deliberately ignores ctx.signal and self-releases after 15s. */
 const BLOCKING_ROUTE = [
-  'import { readFile, writeFile } from "node:fs/promises"',
+  'import { readFile, rename, writeFile } from "node:fs/promises"',
   "export const graph = async (",
   "  input: { startedFile?: string; releaseFile?: string } | undefined,",
   "  _ctx: { signal: AbortSignal },",
   ") => {",
-  "  if (input?.startedFile) await writeFile(input.startedFile, 'started')",
+  "  if (input?.startedFile) {",
+  ...atomicWriteLines("input.startedFile", "'started'", "    "),
+  "  }",
   "  const deadline = Date.now() + 15000",
   "  while (Date.now() < deadline) {",
   "    if (!input?.releaseFile) break",
@@ -82,13 +85,13 @@ const BROKEN_AGENT_ROUTE = [
  * /runs/wait turn is durably parked but has not returned yet. Routine app code:
  * a slow sibling tool call is what any real agent turn looks like. */
 const SLOW_PING_TOOL = [
-  'import { readFile, writeFile } from "node:fs/promises"',
+  'import { readFile, rename, writeFile } from "node:fs/promises"',
   "/** Ping a host, slowly. */",
   "export default async function slowPing(input: {",
   "  startedFile: string",
   "  releaseFile: string",
   "}): Promise<string> {",
-  "  await writeFile(input.startedFile, 'started')",
+  ...atomicWriteLines("input.startedFile", "'started'"),
   "  const deadline = Date.now() + 15000",
   "  while (Date.now() < deadline) {",
   "    try { await readFile(input.releaseFile, 'utf8'); break } catch {}",
@@ -772,7 +775,7 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     // running, and the permission interrupt is already DURABLE in the
     // checkpoint. The second is the attacker's oracle — everything the endpoint
     // would hand over already exists at this instant.
-    await waitForFile(startedFile)
+    await waitForFile(startedFile, { what: "started probe" })
     await waitForParkedWrite(saver, threadId)
 
     // Both of these are ungated today, which is what makes the window
@@ -856,7 +859,7 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     const streamPromise = handler.fetch(
       parkRunRequest(threadId, "deploy to staging", { "x-admin": "1" }),
     )
-    await waitForFile(startedFile)
+    await waitForFile(startedFile, { what: "started probe" })
 
     // Every settle path ends in updateMetadata, which is a documented NO-OP for
     // a missing row — not an error. So deleting the row here used to let the
@@ -943,18 +946,6 @@ async function threadStatus(handler: Handler, threadId: string): Promise<string>
   return ((await response.json()) as { status: string }).status
 }
 
-async function waitForFile(path: string, timeoutMs = 15_000): Promise<string> {
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      return await readFile(path, "utf8")
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 25))
-    }
-  }
-  throw new Error(`probe file never appeared: ${path}`)
-}
-
 // ---------------------------------------------------------------------------
 // "interrupted" is deliberately overloaded: cancelled OR parked. The
 // discriminator is pending_interrupts — non-empty means the agent is waiting
@@ -987,7 +978,7 @@ describe("thread status after a parked or cancelled turn", () => {
     const runResponse = await handler.fetch(
       runStreamRequest(threadId, "/blocking#graph", { releaseFile, startedFile }),
     )
-    await waitForFile(startedFile)
+    await waitForFile(startedFile, { what: "started probe" })
     expect((await handler.fetch(cancelRequest(threadId))).status).toBe(200)
     await drain(runResponse)
 

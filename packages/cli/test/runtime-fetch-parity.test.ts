@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import type { IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -14,6 +14,7 @@ import { createRunRegistry } from "../src/lib/dev/run-registry.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import type { RuntimeRegistry } from "../src/lib/dev/runtime-registry.js"
 import { statusResponse } from "../src/lib/dev/status-response.js"
+import { atomicWriteLines, waitForFile, waitForJsonFile } from "./helpers/probe-file.js"
 
 const cleanup: Array<() => Promise<void> | void> = []
 
@@ -172,14 +173,18 @@ async function fixtureApp(): Promise<string> {
     // A slow non-agent route that records, at completion, whether its run
     // signal was aborted — the probe for disconnect-abort behavior.
     "src/app/noop/index.ts": [
-      'import { writeFile } from "node:fs/promises"',
+      'import { rename, writeFile } from "node:fs/promises"',
       "export const graph = async (",
       "  input: { probeFile?: string } | undefined,",
       "  ctx: { signal: AbortSignal },",
       ") => {",
       "  await new Promise((resolve) => setTimeout(resolve, 150))",
       "  if (input?.probeFile) {",
-      "    await writeFile(input.probeFile, JSON.stringify({ aborted: ctx.signal.aborted }))",
+      ...atomicWriteLines(
+        "input.probeFile",
+        "JSON.stringify({ aborted: ctx.signal.aborted })",
+        "    ",
+      ),
       "  }",
       "  return { ok: true }",
       "}",
@@ -205,18 +210,6 @@ function streamRequest(threadId: string, probeFile?: string): Request {
   })
 }
 
-async function waitForFile(path: string, timeoutMs = 15_000): Promise<string> {
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      return await readFile(path, "utf8")
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 25))
-    }
-  }
-  throw new Error(`probe file never appeared: ${path}`)
-}
-
 describe("runtime fetch handler parity", () => {
   // Not merely legacy parity: continuing on disconnect is the documented
   // decision for the durable AP surface. Explicit stop is POST /threads/:id/cancel.
@@ -238,9 +231,9 @@ describe("runtime fetch handler parity", () => {
     expect(handler.state.activeRequests).toBe(0)
 
     // ...but the run itself keeps going and completes un-aborted.
-    const probe = JSON.parse(await waitForFile(probeFile)) as {
-      aborted: boolean
-    }
+    const probe = await waitForJsonFile<{ aborted: boolean }>(probeFile, {
+      what: "disconnect probe",
+    })
     expect(probe.aborted).toBe(false)
 
     // With no active requests, close() resolves promptly.
@@ -260,7 +253,7 @@ describe("runtime fetch handler parity", () => {
 
     // Wait for the run to finish so shutdown has no background work — the
     // body is still entirely unread, so the in-flight slot is still held.
-    await waitForFile(probeFile)
+    await waitForFile(probeFile, { what: "unread probe" })
     expect(handler.state.activeRequests).toBe(1)
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
