@@ -79,12 +79,53 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // at its boundary (an includeOpenAi leak killed the 0.8.24 storage probes), the runtime-target
 // probe asserts graphAdapter's real BackendAdapter shape instead of typeof "function", and
 // formatSmokeError flattens AggregateError causes so a masked containment failure names itself.
+// Repinned when the audited set grew from the 29 workflow command-line entrypoints to the
+// 58-file transitive closure of their repository-local module loads. The 29 previously audited
+// hashes are unchanged; the 29 added files were already executing during every release with no
+// content pin -- among them scripts/release/smoke-process-runner.mjs and smoke-containment.mjs
+// (the strict runner and systemd containment builder every smoke lane runs through) and the
+// release CLI's sibling graph (controller.mjs, audit.mjs, planner.mjs, prepare.mjs,
+// abandonment-authority.mjs, the git/github write adapters), which cli.mjs loads through its
+// injected `new URL("./sibling.mjs", import.meta.url)` loader rather than a static import.
+// Repinned again for scripts/release/controller-schema.json, the one release data file: no module
+// imports it, so no import closure can reach it, but candidate.mjs, cli.mjs, and
+// independent-audit.mjs all read it off disk and its values select the npm trusted-publisher
+// environment and the abandonment environment. It is declared in RELEASE_DATA_FILES and anchored
+// to those readers, so the declaration fails as a stale pin if they stop naming it.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "faeb5a309eb86de93e30c26a2e052d8d2d24bc2dfbd1e5e964b2b187a5e0bdb0"
+  "4a583c0ad48fd33c9fb0ba206f76a40ef6c60d43466805740fd58e30e99a70db"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
 const PNPM_REFERENCE = /(?:^|[\s;&|"'(])pnpm\s+(?:run\s+)?(?!-)([\w:.-]+)/gu
+const MODULE_FILE = /\.[cm]?[jt]sx?$/u
+const RELEASE_IMPORT_CLOSURE_BOUND = 512
+// A dynamic `import()` whose specifier this check cannot reduce to a literal normally fails the
+// closure closed. This list records the ones that have been read and accepted instead, keyed by
+// the exact argument source so a second, different dynamic import in the same file still fails.
+// scripts/release/cli.mjs loads every sibling module through an injectable `importModule`
+// boundary whose production default is `(specifier) => import(specifier)`; the ~36 call sites all
+// pass `new URL("./sibling.mjs", import.meta.url).href`, and the closure resolves those call
+// sites directly, so the thunk itself adds no unaudited reach. cli.mjs's own bytes are pinned, so
+// widening this seam cannot land without a release-integrity review of the diff.
+const REVIEWED_DYNAMIC_IMPORT_SEAMS = Object.freeze([
+  Object.freeze({ file: "scripts/release/cli.mjs", expression: "specifier" }),
+])
+// Repository files a pinned module reads at release time through the filesystem instead of a
+// module load. The import closure cannot reach them, but their bytes steer release behavior, so
+// they are audited with the scripts. Each entry must still be named by a module in the closure,
+// so an entry whose reader disappears fails as a stale pin rather than lingering unreviewed.
+// scripts/release/controller-schema.json selects the npm trusted-publisher environment and the
+// abandonment environment; candidate.mjs, cli.mjs, and independent-audit.mjs all read it.
+const RELEASE_DATA_FILES = Object.freeze(["scripts/release/controller-schema.json"])
+const RELEASE_PIN_REACH = Object.freeze({
+  workflowEntrypoint:
+    "A final release owner runs it directly or through package.json, so its bytes must be pinned with the command line.",
+  import:
+    "A pinned release entrypoint imports it, so it executes during a release and its bytes must be pinned too.",
+  data: "A pinned release module reads it at release time, so its bytes steer a release and must be pinned too.",
+})
+const REPOSITORY_PATH_LITERAL = /^(?:scripts|\.github)\/[\w.-]+(?:\/[\w.-]+)*$/u
 const ACTIONS = Object.freeze({
   attest: "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
   changesets: "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
@@ -2387,14 +2428,36 @@ test("all scripts reachable from final release ownership match audited content p
   assert.deepEqual(Object.keys(pins).sort(), ["schemaVersion", "scripts"])
   assert.equal(pins.schemaVersion, 1)
   assert.deepEqual(coverage.unfollowable, [])
-  assert.deepEqual(Object.keys(pins.scripts).sort(), coverage.referenced)
-  await assertPinnedScriptContents(ROOT, pins, coverage.referenced)
+  const reachable = await assertReleaseScriptCoverage(
+    ROOT,
+    sources,
+    packageJson,
+    Object.keys(pins.scripts),
+  )
+  assert.deepEqual(Object.keys(pins.scripts).sort(), reachable)
+  // Reached only by import, never by a workflow command line: the strict command runner and the
+  // systemd containment builder every smoke lane executes through, and the release CLI's whole
+  // sibling graph, which it loads through its injected `new URL(..., import.meta.url)` loader.
+  for (const file of [
+    "scripts/release/smoke-process-runner.mjs",
+    "scripts/release/smoke-containment.mjs",
+    "scripts/release/controller.mjs",
+    "scripts/release/audit.mjs",
+    "scripts/release/planner.mjs",
+  ]) {
+    assert.ok(reachable.includes(file), `${file} executes during a release and must be pinned`)
+  }
+  await assertPinnedScriptContents(ROOT, pins, reachable)
 })
 
 test("final release reachability fails closed on hidden scripts and package indirection", async (t) => {
   const packageJson = {
     scripts: { version: "changeset version && node scripts/sync.mjs" },
   }
+  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-release-reach-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(path.join(root, "scripts"), { recursive: true })
+  await writeFile(path.join(root, "scripts", "visible.mjs"), "export {}\n")
   const step = (body) =>
     `on:\n  workflow_dispatch: {}\njobs:\n  release:\n    steps:\n      - name: Publish\n${body}`
   const cases = [
@@ -2418,19 +2481,20 @@ test("final release reachability fails closed on hidden scripts and package indi
     ],
   ]
   for (const [name, source, pattern] of cases) {
-    await t.test(name, () => {
-      assert.throws(
-        () => assertReleaseScriptCoverage({ "release.yml": source }, packageJson, []),
+    await t.test(name, async () => {
+      await assert.rejects(
+        () => assertReleaseScriptCoverage(root, { "release.yml": source }, packageJson, [], []),
         pattern,
         name,
       )
     })
   }
 
-  await t.test("action input naming no package.json script", () => {
-    assert.throws(
+  await t.test("action input naming no package.json script", async () => {
+    await assert.rejects(
       () =>
         assertReleaseScriptCoverage(
+          root,
           {
             "release.yml": step(
               "        uses: example/action@x\n        with:\n          publish: pnpm ghost\n",
@@ -2438,20 +2502,186 @@ test("final release reachability fails closed on hidden scripts and package indi
           },
           packageJson,
           [],
+          [],
         ),
       /cannot follow to a repository script/u,
     )
   })
 
-  await t.test("a stale pin whose step disappeared", () => {
-    assert.throws(
+  await t.test("a stale pin whose step disappeared", async () => {
+    await assert.rejects(
       () =>
         assertReleaseScriptCoverage(
+          root,
           { "release.yml": step("        run: node scripts/visible.mjs\n") },
           packageJson,
           ["scripts/stale.mjs", "scripts/visible.mjs"],
+          [],
         ),
       /pinned but no final owner workflow reaches/u,
+    )
+  })
+})
+
+test("final release reachability pins the transitive import closure of every entrypoint", async (t) => {
+  const packageJson = { scripts: {} }
+  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-release-imports-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  for (const directory of ["nested", "release"]) {
+    await mkdir(path.join(root, "scripts", directory), { recursive: true })
+  }
+  const write = (relative, body) => writeFile(path.join(root, relative), body)
+  const workflow = (command) =>
+    `on:\n  workflow_dispatch: {}\njobs:\n  release:\n    steps:\n      - name: Publish\n        run: ${command}\n`
+  const coverage = (pinned, dataFiles = [], command = "node scripts/entry.mjs") =>
+    assertReleaseScriptCoverage(
+      root,
+      { "release.yml": workflow(command) },
+      packageJson,
+      pinned,
+      dataFiles,
+    )
+
+  await t.test("a module reached only by import must be pinned, transitively", async () => {
+    await write("scripts/entry.mjs", 'import "./nested/helper.mjs"\n')
+    await write("scripts/nested/helper.mjs", 'export * from "../deep.mjs"\n')
+    await write("scripts/deep.mjs", "export const value = 1\n")
+    await assert.rejects(
+      () => coverage(["scripts/entry.mjs"]),
+      (error) =>
+        /scripts\/(?:deep|nested\/helper)\.mjs/u.test(error.message) &&
+        /imports it, so it executes during a release/u.test(error.message),
+      "an imported module with no pin must be demanded by name and by reason",
+    )
+    await assert.rejects(
+      () => coverage(["scripts/entry.mjs", "scripts/nested/helper.mjs"]),
+      /scripts\/deep\.mjs/u,
+      "the import closure must keep walking past the first hop",
+    )
+    assert.deepEqual(
+      await coverage(["scripts/entry.mjs", "scripts/nested/helper.mjs", "scripts/deep.mjs"]),
+      ["scripts/deep.mjs", "scripts/entry.mjs", "scripts/nested/helper.mjs"],
+    )
+  })
+
+  await t.test("bare and node: specifiers are not repository files", async () => {
+    await write(
+      "scripts/entry.mjs",
+      'import { readFile } from "node:fs/promises"\nimport { parse } from "yaml"\nexport { readFile, parse }\n',
+    )
+    assert.deepEqual(await coverage(["scripts/entry.mjs"]), ["scripts/entry.mjs"])
+  })
+
+  await t.test("a dynamic import with a literal specifier is followed", async () => {
+    await write("scripts/entry.mjs", 'export const load = () => import("./lazy.mjs")\n')
+    await write("scripts/lazy.mjs", "export const value = 1\n")
+    await assert.rejects(() => coverage(["scripts/entry.mjs"]), /scripts\/lazy\.mjs/u)
+    assert.deepEqual(await coverage(["scripts/entry.mjs", "scripts/lazy.mjs"]), [
+      "scripts/entry.mjs",
+      "scripts/lazy.mjs",
+    ])
+  })
+
+  await t.test("a new URL(..., import.meta.url) module load is followed", async () => {
+    await write(
+      "scripts/entry.mjs",
+      'export const load = (runtime) =>\n  runtime.importModule(new URL("./sibling.mjs", import.meta.url).href)\n',
+    )
+    await write("scripts/sibling.mjs", "export const value = 1\n")
+    await assert.rejects(() => coverage(["scripts/entry.mjs"]), /scripts\/sibling\.mjs/u)
+    assert.deepEqual(await coverage(["scripts/entry.mjs", "scripts/sibling.mjs"]), [
+      "scripts/entry.mjs",
+      "scripts/sibling.mjs",
+    ])
+  })
+
+  const unfollowable = [
+    [
+      "a computed dynamic import specifier",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source for the module under test
+      "const name = process.env.MODULE\nexport const load = () => import(`./${name}.mjs`)\n",
+      /import\(`\.\/\$\{name\}\.mjs`\)/u,
+    ],
+    [
+      "a dynamic import of a variable",
+      "export const load = (specifier) => import(specifier)\n",
+      /import\(specifier\)/u,
+    ],
+    [
+      "a static import that resolves to nothing",
+      'import "./absent.mjs"\n',
+      /does not resolve to a repository file/u,
+    ],
+    [
+      "a repository-relative specifier that escapes the repository",
+      'import "../../outside.mjs"\n',
+      /escapes the repository/u,
+    ],
+    [
+      "a module that cannot be parsed",
+      "export const broken = (\n",
+      /cannot be parsed as a module/u,
+    ],
+  ]
+  for (const [name, body, pattern] of unfollowable) {
+    await t.test(`${name} fails closed`, async () => {
+      await write("scripts/entry.mjs", body)
+      await assert.rejects(
+        () => coverage(["scripts/entry.mjs"]),
+        (error) =>
+          pattern.test(error.message) &&
+          /cannot follow|Release script import closure/u.test(error.message),
+        name,
+      )
+    })
+  }
+
+  await t.test("the reviewed seam is keyed to one exact expression in one file", async () => {
+    assert.deepEqual(
+      REVIEWED_DYNAMIC_IMPORT_SEAMS.map((seam) => seam.file),
+      ["scripts/release/cli.mjs"],
+    )
+    assert.ok(isReviewedDynamicImportSeam("scripts/release/cli.mjs", "specifier"))
+    assert.ok(!isReviewedDynamicImportSeam("scripts/release/cli.mjs", "other"))
+    assert.ok(!isReviewedDynamicImportSeam("scripts/entry.mjs", "specifier"))
+  })
+
+  await t.test("a release data file is pinned and its reader must survive", async () => {
+    await write("scripts/entry.mjs", 'export const SCHEMA = "scripts/release/schema.json"\n')
+    await write("scripts/release/schema.json", '{"npmTrustedPublisherEnvironment":null}\n')
+    const data = ["scripts/release/schema.json"]
+    await assert.rejects(
+      () => coverage(["scripts/entry.mjs"], data),
+      (error) =>
+        /scripts\/release\/schema\.json/u.test(error.message) &&
+        /reads it at release time/u.test(error.message),
+      "a filesystem-read release data file must be demanded by name and by reason",
+    )
+    assert.deepEqual(await coverage(["scripts/entry.mjs", "scripts/release/schema.json"], data), [
+      "scripts/entry.mjs",
+      "scripts/release/schema.json",
+    ])
+
+    // The declaration is anchored to a real reader, so a data pin cannot outlive its module.
+    await write("scripts/entry.mjs", "export const SCHEMA = null\n")
+    await assert.rejects(
+      () => coverage(["scripts/entry.mjs", "scripts/release/schema.json"], data),
+      /Release data pin is stale/u,
+    )
+  })
+
+  await t.test("the declared release data files are read by pinned release modules", () => {
+    assert.deepEqual(RELEASE_DATA_FILES, ["scripts/release/controller-schema.json"])
+  })
+
+  await t.test("a pinned module that disappeared fails closed", async () => {
+    await write("scripts/entry.mjs", 'import "./gone.mjs"\n')
+    await write("scripts/gone.mjs", "export {}\n")
+    await coverage(["scripts/entry.mjs", "scripts/gone.mjs"])
+    await rm(path.join(root, "scripts", "gone.mjs"))
+    await assert.rejects(
+      () => coverage(["scripts/entry.mjs", "scripts/gone.mjs"]),
+      /does not resolve to a repository file/u,
     )
   })
 })
@@ -3600,7 +3830,155 @@ function releaseWorkflowScriptReferences(sources, packageJson) {
   return { referenced: [...referenced].sort(), unfollowable }
 }
 
-function assertReleaseScriptCoverage(sources, packageJson, pinned) {
+// Every module a release entrypoint loads runs during a release, so the audited set is the
+// transitive closure of repository-local module loads rather than the workflow command lines
+// alone. Static `import` / `export ... from`, dynamic `import()` with a literal specifier, and
+// the `new URL("./sibling.mjs", import.meta.url)` form the release CLI hands to its injected
+// loader are all resolved here. Bare and `node:` specifiers are not repository files and are
+// skipped. Anything else -- a computed specifier, or a repository-relative specifier that does
+// not resolve to a regular file -- is reported as unfollowable so the check fails closed instead
+// of silently dropping a module that executes during a release out of the pin set.
+async function releaseScriptImportClosure(root, entrypoints) {
+  const files = new Set()
+  const unfollowable = []
+  const readers = new Map()
+  const queue = [...entrypoints]
+  while (queue.length > 0) {
+    const file = normalizeReachablePath(queue.shift())
+    if (files.has(file)) continue
+    if (files.size >= RELEASE_IMPORT_CLOSURE_BOUND) {
+      throw new Error("Release script import closure exceeds the traversal bound")
+    }
+    files.add(file)
+    if (!MODULE_FILE.test(file)) continue
+    let source
+    try {
+      source = await readBoundedFixture(path.join(root, file), { root, maxBytes: 1024 * 1024 })
+    } catch {
+      unfollowable.push(
+        `${file} is loaded during a release but is missing or is not a regular file inside the repository`,
+      )
+      continue
+    }
+    const loads = moduleLoadSpecifiers(source, file)
+    unfollowable.push(...loads.unfollowable)
+    for (const literal of loads.pathLiterals) readers.set(literal, file)
+    for (const { specifier, where } of loads.specifiers) {
+      if (!/^\.\.?\//u.test(specifier)) continue
+      let resolved
+      try {
+        resolved = normalizeReachablePath(path.posix.join(path.posix.dirname(file), specifier))
+      } catch {
+        unfollowable.push(`${where} loads \`${specifier}\`, which escapes the repository`)
+        continue
+      }
+      let status
+      try {
+        status = await lstat(path.join(root, resolved))
+      } catch {
+        unfollowable.push(
+          `${where} loads \`${specifier}\`, which does not resolve to a repository file`,
+        )
+        continue
+      }
+      // A repository-local URL that names a directory is a data path, not a loadable module.
+      if (status.isDirectory()) continue
+      queue.push(resolved)
+    }
+  }
+  return { files: [...files].sort(), unfollowable, readers }
+}
+
+// Reads every module-loading specifier out of one file without executing it. A specifier the
+// parser cannot reduce to a literal is returned as unfollowable, never dropped.
+function moduleLoadSpecifiers(source, file) {
+  const specifiers = []
+  const unfollowable = []
+  const pathLiterals = new Set()
+  const sourceFile = typescript.createSourceFile(
+    file,
+    source,
+    typescript.ScriptTarget.Latest,
+    true,
+    typescriptScriptKind(file),
+  )
+  if (sourceFile.parseDiagnostics.length > 0) {
+    const diagnostic = sourceFile.parseDiagnostics[0]
+    const message = typescript.flattenDiagnosticMessageText(diagnostic.messageText, " ")
+    return {
+      specifiers,
+      pathLiterals,
+      unfollowable: [
+        `${file} cannot be parsed as a module, so its loads cannot be audited: ${message}`,
+      ],
+    }
+  }
+  const at = (node) =>
+    `${file}:${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}`
+  const visit = (node) => {
+    if (typescript.isStringLiteralLike(node) && REPOSITORY_PATH_LITERAL.test(node.text)) {
+      pathLiterals.add(node.text)
+    }
+    if (
+      (typescript.isImportDeclaration(node) || typescript.isExportDeclaration(node)) &&
+      node.moduleSpecifier !== undefined
+    ) {
+      if (typescript.isStringLiteralLike(node.moduleSpecifier)) {
+        specifiers.push({ specifier: node.moduleSpecifier.text, where: at(node) })
+      } else {
+        unfollowable.push(`${at(node)} declares a module specifier that is not a string literal`)
+      }
+    } else if (typescript.isNewExpression(node)) {
+      const sibling = importMetaUrlLiteral(node)
+      if (sibling !== undefined) specifiers.push({ specifier: sibling, where: at(node) })
+    } else if (
+      typescript.isCallExpression(node) &&
+      node.expression.kind === typescript.SyntaxKind.ImportKeyword
+    ) {
+      const argument = node.arguments[0]
+      if (argument !== undefined && typescript.isStringLiteralLike(argument)) {
+        specifiers.push({ specifier: argument.text, where: at(node) })
+      } else {
+        const expression = argument === undefined ? "" : argument.getText(sourceFile)
+        if (!isReviewedDynamicImportSeam(file, expression)) {
+          unfollowable.push(
+            `${at(node)} runs \`import(${expression})\`, whose specifier this check cannot resolve statically`,
+          )
+        }
+      }
+    }
+    typescript.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return { specifiers, unfollowable, pathLiterals }
+}
+
+// Matches `new URL("./sibling.mjs", import.meta.url)`, optionally followed by `.href`, and
+// returns the literal. Any other shape returns undefined so the caller keeps failing closed.
+function importMetaUrlLiteral(node) {
+  if (!typescript.isNewExpression(node)) return undefined
+  if (!typescript.isIdentifier(node.expression) || node.expression.text !== "URL") return undefined
+  const args = node.arguments ?? []
+  if (args.length !== 2 || !typescript.isStringLiteralLike(args[0])) return undefined
+  const base = args[1]
+  if (!typescript.isPropertyAccessExpression(base) || base.name.text !== "url") return undefined
+  if (!typescript.isMetaProperty(base.expression)) return undefined
+  return args[0].text
+}
+
+function isReviewedDynamicImportSeam(file, expression) {
+  return REVIEWED_DYNAMIC_IMPORT_SEAMS.some(
+    (seam) => seam.file === file && seam.expression === expression,
+  )
+}
+
+async function assertReleaseScriptCoverage(
+  root,
+  sources,
+  packageJson,
+  pinned,
+  dataFiles = RELEASE_DATA_FILES,
+) {
   const { referenced, unfollowable } = releaseWorkflowScriptReferences(sources, packageJson)
   if (unfollowable.length > 0) {
     throw new Error(
@@ -3611,19 +3989,32 @@ function assertReleaseScriptCoverage(sources, packageJson, pinned) {
       ].join("\n"),
     )
   }
-  for (const file of referenced) {
-    if (pinned.includes(file)) continue
+  for (const file of referenced) assertPinnedReleaseScript(file, pinned, "workflowEntrypoint")
+  const closure = await releaseScriptImportClosure(root, referenced)
+  if (closure.unfollowable.length > 0) {
     throw new Error(
       [
-        `Release workflow reaches a repository script with no content pin: ${file}`,
-        "A final release owner runs it directly or through package.json, so its bytes must be pinned with the command line.",
-        `Add its sha256 to ${SCRIPT_PIN_FIXTURE}. Compute the hash with:`,
-        `  node -p "require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('${file}')).digest('hex')"`,
+        "Release script import closure reaches a module load this check cannot follow:",
+        ...closure.unfollowable.map((entry) => `  ${entry}`),
+        "An unfollowable load could pull in an unpinned module during a release; give it a literal repository-relative specifier.",
       ].join("\n"),
     )
   }
+  for (const file of closure.files) assertPinnedReleaseScript(file, pinned, "import")
+  for (const file of dataFiles) {
+    if (!closure.readers.has(file)) {
+      throw new Error(
+        [
+          `Release data pin is stale: ${file} is declared as a release data file but no pinned module names it.`,
+          "Either restore the module that reads it or drop it from RELEASE_DATA_FILES.",
+        ].join("\n"),
+      )
+    }
+    assertPinnedReleaseScript(file, pinned, "data")
+  }
+  const audited = [...new Set([...closure.files, ...dataFiles])].sort()
   for (const file of pinned) {
-    if (referenced.includes(file)) continue
+    if (audited.includes(file)) continue
     throw new Error(
       [
         `Release script pin is stale: ${file} is pinned but no final owner workflow reaches it.`,
@@ -3631,6 +4022,19 @@ function assertReleaseScriptCoverage(sources, packageJson, pinned) {
       ].join("\n"),
     )
   }
+  return audited
+}
+
+function assertPinnedReleaseScript(file, pinned, reach) {
+  if (pinned.includes(file)) return
+  throw new Error(
+    [
+      `Release workflow reaches a repository script with no content pin: ${file}`,
+      RELEASE_PIN_REACH[reach],
+      `Add its sha256 to ${SCRIPT_PIN_FIXTURE}. Compute the hash with:`,
+      `  node -p "require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('${file}')).digest('hex')"`,
+    ].join("\n"),
+  )
 }
 
 function matchAllGroups(value, pattern) {
