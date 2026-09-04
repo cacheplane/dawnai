@@ -1538,7 +1538,12 @@ observer at `RECOVERY_SHA` and requires `ABANDONED_PREPUBLICATION` with
 disposition `noop`, no conflicts, and no diagnostics, before writing the
 receipt. Exit code 2 is invalid input, 1 is a refused or failed transition, and
 3 means output cleanup is uncertain; treat 3 exactly as the duplicate-draft
-procedure does. On any nonzero exit, preserve everything, keep the freeze, and
+procedure does. Every conflict prints a stable `code:` on stderr. A failure
+reported as "after mutation" means a write landed: re-run `apply` and it will
+classify the ladder and finish. The one exception is
+`FINAL_OBSERVATION_NOT_TERMINAL`: the draft was stamped but the observer does
+not classify it terminal; keep the freeze, preserve the receipt path, and
+escalate instead of re-running. On any nonzero exit, preserve everything, keep the freeze, and
 re-run only after a fresh read-only inspection proves one of the three ladder
 states: `escrowed`, `asset-uploaded`, or `abandoned`. A rerun after a
 successful stamp is safe: the command reads the canonical Release only through
