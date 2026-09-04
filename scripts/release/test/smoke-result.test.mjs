@@ -10,6 +10,7 @@ import {
   canonicalSmokeResultBytes,
   correlateSmokeResults,
   executeSmokeLane,
+  formatSmokeError,
   parseSmokeLaneArgs,
   parseSmokeResult,
   REQUIRED_RELEASE_SMOKE_LANES,
@@ -447,6 +448,32 @@ test("bounds and redacts multibyte failure details so the receipt is always writ
   assert.equal(receipt.conclusion, "failure")
   assert.equal(Buffer.byteLength(receipt.checks[0].detail, "utf8") <= 4_096, true)
   assert.doesNotMatch(receipt.checks[0].detail, /super_secret/u)
+})
+
+test("failure detail surfaces aggregated workload and cleanup causes", () => {
+  const detail = formatSmokeError(
+    new AggregateError(
+      [new Error("tar extraction failed"), new Error("cgroup cleanup failed")],
+      "Contained smoke workload and cleanup did not both succeed",
+    ),
+  )
+  assert.match(detail, /Contained smoke workload and cleanup did not both succeed/u)
+  assert.match(detail, /tar extraction failed/u)
+  assert.match(detail, /cgroup cleanup failed/u)
+})
+
+test("aggregated failure detail stays redacted, bounded, and non-recursive", () => {
+  const nested = new AggregateError(
+    [new AggregateError([new Error("npm_super_secret_token leaked")], "inner")],
+    "outer",
+  )
+  const detail = formatSmokeError(nested)
+  assert.doesNotMatch(detail, /super_secret/u)
+  assert.equal(Buffer.byteLength(detail, "utf8") <= 4_096, true)
+
+  const cyclic = new AggregateError([new Error("boom")], "cyclic")
+  cyclic.errors.push(cyclic)
+  assert.match(formatSmokeError(cyclic), /boom/u)
 })
 
 function sequenceClock(...timestamps) {

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
 import {
   cleanupStorageContainer,
@@ -6,6 +9,10 @@ import {
   startDisposableDatabase,
   storageDockerIdentities,
 } from "../smoke/storage.mjs"
+import {
+  assertStrictSmokeCommandOptions,
+  STRICT_SMOKE_COMMAND_OPTION_FIELDS,
+} from "../smoke-process-runner.mjs"
 import { parseSmokeResult } from "../smoke-result.mjs"
 
 const options = Object.freeze({
@@ -280,12 +287,55 @@ function clock() {
   return () => values.shift() ?? new Date("2026-08-25T12:00:01.000Z")
 }
 
+test("storage runtime probes reach the strict runner with only contract option fields", async (t) => {
+  const seen = []
+  let receipt
+  const probeRoot = await mkdtemp(join(tmpdir(), "dawn-storage-smoke-"))
+  t.after(async () => {
+    await rm(probeRoot, { recursive: true, force: true })
+  })
+  await runStorageSmoke(options, {
+    env: releaseEnv("602", "1"),
+    now: clock(),
+    randomUUID: () => "123e4567-e89b-42d3-a456-426614174000",
+    async makeTempDir() {
+      return probeRoot
+    },
+    async removeDir() {},
+    strictRunner: fakeStrictRunner(async (command, args, runOptions) => {
+      seen.push({ command, args, fields: Object.keys(runOptions).sort() })
+      return { stdout: "", stderr: "" }
+    }),
+    async startDatabase({ kind }) {
+      return `postgres://postgres:postgres@127.0.0.1/${kind}`
+    },
+    async stopContainer() {},
+    async writeFile(_path, bytes) {
+      receipt = parseSmokeResult(bytes)
+    },
+    async mkdir() {},
+  })
+
+  assert.equal(receipt.conclusion, "success")
+  const probes = seen.filter((entry) => entry.command === "node")
+  assert.ok(probes.length >= 2, "both storage runtime probes must run through the strict runner")
+  for (const probe of probes) {
+    assert.deepEqual(
+      probe.fields.filter((field) => !STRICT_SMOKE_COMMAND_OPTION_FIELDS.includes(field)),
+      [],
+    )
+  }
+})
+
 function fakeStrictRunner(runCommand) {
   return {
     async probe() {
       return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
     },
-    runCommand,
+    async runCommand(command, args, options = {}) {
+      assertStrictSmokeCommandOptions(options)
+      return await runCommand(command, args, options)
+    },
   }
 }
 

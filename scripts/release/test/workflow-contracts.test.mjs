@@ -75,8 +75,12 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // matches Bearer case-insensitively, and falls back to the placeholder when the error itself
 // throws or its message is whitespace-only. The same anchored JWT pattern (lookbehind
 // without a dot, so v1.<jwt> still redacts) is applied to artifact-store.mjs for consistency.
+// Repinned for the smoke-lane fixes: every lane now picks only strict-runner contract fields
+// at its boundary (an includeOpenAi leak killed the 0.8.24 storage probes), the runtime-target
+// probe asserts graphAdapter's real BackendAdapter shape instead of typeof "function", and
+// formatSmokeError flattens AggregateError causes so a masked containment failure names itself.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "5a539c58d49ad0b6305de6ca4bcebed48497cf254c833533fc78eca950265072"
+  "faeb5a309eb86de93e30c26a2e052d8d2d24bc2dfbd1e5e964b2b187a5e0bdb0"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

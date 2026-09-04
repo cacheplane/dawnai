@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url"
 import { makeTempDir, publicNpmEnvironment, removeDir } from "../../lib/published-artifacts.mjs"
 import {
   createStrictSmokeProcessRunner,
+  pickStrictSmokeCommandOptions,
   strictContainmentReceiptDetail,
 } from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
@@ -110,8 +111,19 @@ import { discoverRoutes } from "@dawn-ai/core/node"
 import { graphAdapter } from "@dawn-ai/langgraph"
 import { toAguiEvents } from "@dawn-ai/ag-ui"
 
-for (const [name, value] of Object.entries({ agent, discoverRoutes, graphAdapter, toAguiEvents })) {
+for (const [name, value] of Object.entries({ agent, discoverRoutes, toAguiEvents })) {
   assert.equal(typeof value, "function", name + " must be a function")
+}
+
+assert.equal(typeof graphAdapter, "object", "graphAdapter must be a backend adapter object")
+assert.notEqual(graphAdapter, null, "graphAdapter must be a backend adapter object")
+assert.equal(graphAdapter.kind, "graph", "graphAdapter must declare the graph backend kind")
+for (const method of ["execute", "stream"]) {
+  assert.equal(
+    typeof graphAdapter[method],
+    "function",
+    "graphAdapter." + method + " must be a function",
+  )
 }
 `
 }
@@ -135,7 +147,7 @@ assert.deepEqual(edgeSurface(), ["function", "function"])
 
 function productionCommandOptions(options = {}) {
   return {
-    ...options,
+    ...pickStrictSmokeCommandOptions(options),
     env: publicNpmEnvironment({ home: options.cwd ?? process.cwd(), extra: options.env }),
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_OUTPUT_BYTES,
