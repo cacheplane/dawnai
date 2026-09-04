@@ -393,7 +393,10 @@ jobs:
       - hydrate
       - tag
     if: >-
+      always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
       github.ref == format('refs/tags/v{0}', inputs.version) &&
       github.sha == needs.detect.outputs.candidate_sha &&
@@ -470,7 +473,11 @@ jobs:
       - hydrate
       - tag
     if: >-
+      always() &&
       needs.attest.result == 'success' &&
+      needs.detect.result == 'success' &&
+      needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
       github.ref == format('refs/tags/v{0}', inputs.version) &&
       github.sha == needs.detect.outputs.candidate_sha &&
@@ -527,6 +534,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -618,6 +626,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -680,6 +689,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -744,6 +754,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -805,6 +816,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -866,6 +878,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -927,6 +940,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -994,6 +1008,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -1074,6 +1089,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -1127,8 +1143,11 @@ jobs:
       - hydrate
       - tag
     if: >-
+      always() &&
+      needs.detect.result == 'success' &&
       needs.dispatch-audit.result == 'success' &&
       needs.hydrate.result == 'success' &&
+      needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
       github.ref == format('refs/tags/v{0}', inputs.version) &&
       github.sha == needs.detect.outputs.candidate_sha &&
@@ -1179,6 +1198,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&
@@ -1255,6 +1275,7 @@ jobs:
       - tag
     if: >-
       always() &&
+      needs.detect.result == 'success' &&
       needs.hydrate.result == 'success' &&
       needs.tag.result == 'success' &&
       needs.tag.outputs.continue == 'true' &&

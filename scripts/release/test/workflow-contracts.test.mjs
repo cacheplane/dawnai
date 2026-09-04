@@ -1083,6 +1083,80 @@ test("prepare, attestation, and ATTACHING-to-45-base escrow have one ordered aut
   assert.doesNotMatch(source, /gh\s+release\s+(?:create|upload|edit)|target_commitish/iu)
 })
 
+// A job condition without always() gets an implicit success() prepended, and success()
+// is false whenever any job in the transitive needs chain was skipped. Every recovery
+// route skips some upstream job (prepare on attest-artifacts, escrow on publish-npm-
+// packages, ...), so each ladder job after tag must opt out with always() and then
+// name, explicitly, every direct need it requires to have run. Run 33891297677
+// (v0.8.24) reported success with attest and escrow skipped because attest lacked this.
+const LADDER_TOLERATED_SKIPPED_NEEDS = Object.freeze({
+  hydrate: ["prepare"],
+  attest: [],
+  escrow: [],
+  "publish-npm": ["escrow"],
+  "reconcile-npm": ["publish-npm"],
+  ...Object.fromEntries(Object.values(SMOKE_JOB_BY_LANE).map((id) => [id, ["reconcile-npm"]])),
+  "reconcile-smokes": ["publish-npm", "reconcile-npm"],
+  "dispatch-audit": ["reconcile-smokes"],
+  "record-audit-dispatch": [],
+  "correlate-audit": ["record-audit-dispatch"],
+  "publish-release": ["correlate-audit"],
+})
+
+test("every exact-tag ladder job after tag opts out of the implicit success() and names each required need", async () => {
+  const ladder = NORMAL_EXACT_TAG_JOBS.filter((id) => id !== "prepare")
+  assert.deepEqual([...Object.keys(LADDER_TOLERATED_SKIPPED_NEEDS)].sort(), [...ladder].sort())
+  const variants = [
+    ["release.yml", (await readRequiredWorkflow("release.yml")).workflow],
+    ...(await Promise.all(
+      ["release-workflow-disabled.yml", "release-workflow-protected.yml"].map(async (file) => [
+        file,
+        parse(
+          await readBoundedFixture(path.join(ROOT, "scripts/release/test/fixtures", file), {
+            root: ROOT,
+          }),
+        ),
+      ]),
+    )),
+  ]
+  for (const [file, workflow] of variants) {
+    for (const id of ladder) {
+      const job = requiredJob(workflow, id)
+      const needs = normalizeNeeds(job.needs)
+      const tolerated = LADDER_TOLERATED_SKIPPED_NEEDS[id]
+      assert.ok(
+        tolerated.every((dependency) => needs.includes(dependency)),
+        `${file}#${id}: tolerated needs must be direct needs`,
+      )
+      assert.equal(typeof job.if, "string", `${file}#${id} must declare a job condition`)
+      assert.ok(
+        job.if.startsWith("always() &&"),
+        `${file}#${id} must start with always() so a skipped upstream job cannot veto it`,
+      )
+      for (const dependency of needs) {
+        const topLevelSuccess = new RegExp(
+          `(?:^|&& )needs\\.${escapeRegExp(dependency)}\\.result == 'success'(?: &&|$)`,
+          "u",
+        )
+        if (tolerated.includes(dependency)) {
+          assert.doesNotMatch(
+            job.if,
+            topLevelSuccess,
+            `${file}#${id} tolerates ${dependency} being skipped on some route`,
+          )
+        } else {
+          assert.match(
+            job.if,
+            topLevelSuccess,
+            `${file}#${id} must require needs.${dependency}.result == 'success' explicitly`,
+          )
+        }
+      }
+      assert.match(job.if, /needs\.tag\.outputs\.continue == 'true'/u)
+    }
+  }
+})
+
 test("publish-npm is exact-tag, sparse, dependency-free, and schema-bound", async () => {
   const { workflow } = await readRequiredWorkflow("release.yml")
   const schema = JSON.parse(await readBoundedFixture(CONTROLLER_SCHEMA_PATH, { root: ROOT }))
