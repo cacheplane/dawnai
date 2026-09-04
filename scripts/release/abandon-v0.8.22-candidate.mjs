@@ -7,29 +7,56 @@
 // draft to match a record that a reviewed pull request has already merged.
 // Delete this file in the cleanup pull request after v0.8.23 is terminal.
 
-import { createHash } from "node:crypto"
+import * as defaultFileSystem from "node:fs/promises"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 import { canonicalAbandonmentReleaseBody } from "./abandonment.mjs"
 import {
   assetSetSha256,
   baseAssetNamespaceFromMarker,
   DUPLICATE_DRAFT_RECOVERY_POLICY,
+  recoveryReceiptAssetName,
   sameAssetSet,
 } from "./duplicate-draft-recovery.mjs"
-import { createDuplicateDraftRecoveryReader } from "./duplicate-draft-recovery-adapters.mjs"
+import {
+  createDuplicateDraftRecoveryReader,
+  parseCanonicalRecoveryReceipt,
+  sha256,
+} from "./duplicate-draft-recovery-adapters.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
-import { abandonmentReleaseMarker, parseReleaseMarker, releaseBodySha256 } from "./metadata.mjs"
+import {
+  abandonmentReleaseMarker,
+  canonicalReleaseBody,
+  parseReleaseMarker,
+  releaseBodySha256,
+} from "./metadata.mjs"
 import {
   ACKNOWLEDGEMENT_FLAG,
+  assertPrivatePathBoundary,
+  assertReviewedIgnorePolicy,
+  assertUnusedOutput,
+  createNormalProductionRecoveryObserver,
+  diagnosticCodeSuffix,
+  environmentToken,
   normalizePrivatePath,
+  normalizeRuntime,
   RecoveryInputError,
+  RecoveryOutputCleanupUncertainError,
+  readBoundedPrivateFile,
+  reserveExclusiveOutput,
+  resolvePrivatePath,
+  writeSuccessBestEffort,
 } from "./recover-v0.8.22-duplicate-drafts.mjs"
 import {
   canonicalTerminalRecordBytes,
+  MAX_TERMINAL_RECORD_BYTES,
   parseOperatorRecoveryRecord,
   terminalRecordPath,
 } from "./terminal-record-store.mjs"
 import { createTerminalRecoveryWriter } from "./terminal-recovery-adapters.mjs"
+
+export { sha256 }
 
 export const TERMINAL_RECOVERY_POLICY = Object.freeze({
   repository: DUPLICATE_DRAFT_RECOVERY_POLICY.repository,
@@ -53,12 +80,20 @@ export const FINAL_AUTHORIZATION_RECEIPT_SHA256 =
   "6bc224470f1240193b3bb65cb3d21d340d548d9279556e360b611f7a1f3c0875"
 
 const TOMBSTONE_ASSET_NAME = "abandonment.json"
+const CANONICAL_DRAFT_TAG_NAME = "untagged-be0ff4bee4ba43b521a9"
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const MAX_REASON_BYTES = 4_096
 const MAX_ARGUMENT_BYTES = 4_096
 const MAX_ARGUMENTS = 8
 const NPM_SWEEP_GAP_MS = 60_000
+/**
+ * Waiting exactly the minimum gap loses a capture to a clock edge: the record
+ * store rejects two sweeps whose recorded times round to less than sixty
+ * seconds apart. The margin is small enough that the fifteen-minute evidence
+ * span the store also enforces is never at risk.
+ */
+export const NPM_SWEEP_MARGIN_MS = 5_000
 const PACKAGE_NAMES = Object.freeze([...CANONICAL_RELEASE_PACKAGE_ORDER].sort())
 const READER_METHODS = Object.freeze([
   "readReviewedMergeAuthority",
@@ -191,10 +226,16 @@ export async function captureTerminalRecord({
   }
   if (
     snapshot.draft !== true ||
+    snapshot.prerelease !== false ||
     snapshot.immutable !== false ||
     snapshot.targetCommitish !== "main"
   ) {
     throw new Error("Canonical draft is not a mutable draft on main")
+  }
+  // The writer's normalizer pins the tag name too, but a capture that trusted
+  // it could not tell a substituted reader from the real boundary.
+  if (snapshot.tagName !== CANONICAL_DRAFT_TAG_NAME) {
+    throw new Error("Canonical draft tag name is not the pinned tag name")
   }
   const marker = parseMarkerOrThrow(snapshot.body)
   if (
@@ -228,7 +269,7 @@ export async function captureTerminalRecord({
   }
 
   const firstSweep = normalizeSweep(await reader.readNpmSweep(), policy.version)
-  await wait(NPM_SWEEP_GAP_MS)
+  await wait(NPM_SWEEP_GAP_MS + NPM_SWEEP_MARGIN_MS)
   const secondSweep = normalizeSweep(await reader.readNpmSweep(), policy.version)
   if (Date.parse(secondSweep.observedAt) - Date.parse(firstSweep.observedAt) < NPM_SWEEP_GAP_MS) {
     throw new Error("npm sweeps are not sixty seconds apart")
@@ -306,7 +347,14 @@ export function classifyAbandonmentState({ record, recordSha256, snapshot }) {
   }
   if (tombstoneExact && snapshot.name === policy.abandonedTitle) {
     const marker = parseMarkerOrThrow(snapshot.body)
-    if (marker.phase === "ABANDONED_PREPUBLICATION" && marker.abandonmentSha256 === recordSha256) {
+    // The marker and digest alone would accept a body with trailing operator
+    // prose appended after the stamp; the abandoned state means exactly the
+    // bytes this command writes and nothing else.
+    if (
+      marker.phase === "ABANDONED_PREPUBLICATION" &&
+      marker.abandonmentSha256 === recordSha256 &&
+      snapshot.body === abandonedReleaseBody(record, recordSha256)
+    ) {
       return "abandoned"
     }
   }
@@ -443,6 +491,10 @@ export function createTerminalRecoveryReader({
       if (typeof expectedOriginalBody !== "string" || expectedOriginalBody.length === 0) {
         throw new Error("Duplicate recovery receipts require the archived original body")
       }
+      // The archived body IS the escrow marker body, so it carries the exact
+      // base-asset digest each receipt must have been derived from.
+      const expectedMarker = parseReleaseMarker(expectedOriginalBody)
+      const expectedBodySha256 = releaseBodySha256(expectedOriginalBody)
       const duplicates = []
       for (const duplicate of TERMINAL_RECOVERY_POLICY.duplicates) {
         const snapshot = await base.readReleaseSnapshot(duplicate.releaseId, {
@@ -457,10 +509,32 @@ export function createTerminalRecoveryReader({
             `Duplicate ${duplicate.releaseId} does not carry exactly its archive and receipt`,
           )
         }
-        const receipt =
-          snapshot.assets[snapshot.assets.length - kinds.length + kinds.indexOf("receipt")]
-        if (receipt === undefined) {
+        // Evidence assets are appended in `EVIDENCE_KIND_ORDER`, and the kinds
+        // are now pinned to exactly ["body", "receipt"], so the receipt is the
+        // last asset by construction.
+        const receipt = snapshot.assets.at(-1)
+        if (
+          receipt === undefined ||
+          receipt.name !== recoveryReceiptAssetName(duplicate.releaseId)
+        ) {
           throw new Error(`Duplicate ${duplicate.releaseId} has no recovery receipt asset`)
+        }
+        // The reader proves the receipt's bytes hash to its listed digest, but
+        // not what those bytes SAY. Parse them and bind the receipt to this
+        // candidate and this duplicate: a valid receipt written for the other
+        // quarantined draft would otherwise pass every digest check.
+        const parsed = parseCanonicalRecoveryReceipt(Buffer.from(receipt.bytes ?? "", "utf8"))
+        if (
+          parsed.duplicateReleaseId !== duplicate.releaseId ||
+          parsed.canonicalReleaseId !== TERMINAL_RECOVERY_POLICY.canonicalReleaseId ||
+          parsed.candidateSha !== TERMINAL_RECOVERY_POLICY.candidateSha ||
+          parsed.version !== TERMINAL_RECOVERY_POLICY.version ||
+          parsed.originalBodySha256 !== expectedBodySha256 ||
+          parsed.baseAssetSetSha256 !== expectedMarker.baseAssetSetSha256
+        ) {
+          throw new Error(
+            `Duplicate ${duplicate.releaseId} recovery receipt is not bound to this candidate`,
+          )
         }
         duplicates.push({
           releaseId: duplicate.releaseId,
@@ -500,6 +574,8 @@ function parseMarkerOrThrow(body) {
 
 function normalizeAssets(value) {
   if (!Array.isArray(value)) throw new Error("Release asset inventory is invalid")
+  const names = new Set()
+  const ids = new Set()
   return value.map((asset) => {
     if (
       !Number.isSafeInteger(asset?.id) ||
@@ -508,6 +584,14 @@ function normalizeAssets(value) {
     ) {
       throw new Error("Release asset is invalid")
     }
+    // Names and IDs identify an asset everywhere downstream — the tombstone
+    // partition, the base-asset set comparison, the ladder classification — so
+    // a listing that repeats either is ambiguous, not merely redundant.
+    if (names.has(asset.name) || ids.has(asset.id)) {
+      throw new Error("Release asset inventory repeats an asset")
+    }
+    names.add(asset.name)
+    ids.add(asset.id)
     return { id: asset.id, name: asset.name, sha256: asset.sha256 }
   })
 }
@@ -592,6 +676,453 @@ function defaultWait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export function sha256(bytes) {
-  return createHash("sha256").update(bytes).digest("hex")
+/**
+ * Apply the merged record to the canonical draft with compare-before-write.
+ *
+ * Fresh evidence is re-captured and must equal the record on everything but
+ * time and the operator identity; only then does the ladder perform the
+ * transitions the live draft is actually missing. After the writes the draft is
+ * re-read and re-classified, and the normal production observer must report the
+ * candidate terminal — the receipt is never written on a guess.
+ */
+export async function applyTerminalRecord({
+  recordBytes,
+  reviewedCommit,
+  reader,
+  createWriter,
+  observer,
+  now = Date.now,
+  wait = defaultWait,
+}) {
+  if (!SHA_PATTERN.test(reviewedCommit)) throw new TypeError("Reviewed commit is invalid")
+  if (typeof createWriter !== "function" || typeof observer !== "function") {
+    throw new TypeError("Apply dependencies are invalid")
+  }
+  assertReader(reader)
+  const record = parseOperatorRecoveryRecord(recordBytes)
+  const recordSha256 = record.sha256
+  const policy = TERMINAL_RECOVERY_POLICY
+  const startedAt = new Date(now()).toISOString()
+
+  const authority = await reader.readReviewedMergeAuthority(reviewedCommit)
+  if (authority?.mergeCommitSha !== reviewedCommit) {
+    throw new Error("Reviewed merge authority is not exact")
+  }
+
+  // Fresh evidence must agree with the record on everything but time. The
+  // capture path only knows how to read an escrowed draft, so a rerun after a
+  // successful stamp presents it the escrow identity the record describes.
+  const fresh = parseOperatorRecoveryRecord(
+    await captureTerminalRecord({
+      reviewedCommit: record.authority.reviewedCommit,
+      reason: record.reason,
+      reader: {
+        ...readerMethods(reader),
+        async readCanonicalSnapshot() {
+          return escrowedViewOfSnapshot(await reader.readCanonicalSnapshot(), record, recordSha256)
+        },
+      },
+      now,
+      wait,
+    }),
+  )
+  assertSameEvidence(fresh, record)
+
+  const snapshot = await reader.readCanonicalSnapshot()
+  let state = classifyAbandonmentState({ record, recordSha256, snapshot })
+  if (state === "abandoned") {
+    const finalObservation = await requireTerminal(observer, policy)
+    return receipt({
+      record,
+      outcome: "preexisting-abandoned",
+      transitions: [],
+      startedAt,
+      now,
+      finalObservation,
+    })
+  }
+
+  const writer = createWriter()
+  const transitions = []
+  const expectedSnapshot = expectedWriterSnapshot(snapshot, policy)
+  if (state === "escrowed") {
+    const upload = await writer.uploadTombstoneIfAbsentAndEqual({
+      expectedSnapshot,
+      expectedTagObjectSha: record.tag.objectSha,
+      bytes: recordBytes,
+      sha256: recordSha256,
+    })
+    transitions.push({ name: "upload-tombstone", result: upload })
+    expectedSnapshot.assets = [
+      ...expectedSnapshot.assets,
+      {
+        id: upload.assetId,
+        name: TOMBSTONE_ASSET_NAME,
+        sha256: recordSha256,
+        size: recordBytes.byteLength,
+      },
+    ]
+    state = "asset-uploaded"
+  }
+  if (state === "asset-uploaded") {
+    const patch = await writer.abandonCandidateIfCurrent({
+      expectedSnapshot,
+      expectedTagObjectSha: record.tag.objectSha,
+      expectedBodySha256: record.predecessor.bodySha256,
+      expectedTombstoneSha256: recordSha256,
+      expectedName: policy.abandonedTitle,
+      expectedBody: abandonedReleaseBody(record, recordSha256),
+    })
+    transitions.push({ name: "stamp-body", result: patch })
+  }
+  const after = await reader.readCanonicalSnapshot()
+  if (classifyAbandonmentState({ record, recordSha256, snapshot: after }) !== "abandoned") {
+    throw new Error("Terminal recovery conflict: draft is not abandoned after apply")
+  }
+  const finalObservation = await requireTerminal(observer, policy)
+  return receipt({ record, outcome: "performed", transitions, startedAt, now, finalObservation })
+}
+
+/** Bind the reader's own methods so the evidence wrapper cannot lose `this`. */
+function readerMethods(reader) {
+  return Object.fromEntries(READER_METHODS.map((name) => [name, reader[name].bind(reader)]))
+}
+
+/**
+ * Present the live draft as the escrowed draft the record describes, so a rerun
+ * against an already-stamped draft still re-captures comparable evidence. Only
+ * a draft this command has already proven abandoned is rewritten this way; any
+ * other drift is a conflict raised by the classification itself.
+ */
+function escrowedViewOfSnapshot(snapshot, record, recordSha256) {
+  const state = classifyAbandonmentState({ record, recordSha256, snapshot })
+  if (state === "escrowed") return snapshot
+  // Past the first rung the draft carries the tombstone the record itself
+  // seals, and past the second it carries the abandonment stamp. Both are this
+  // command's own writes, already proven exact by the classification, so the
+  // evidence view sees the escrowed draft the record describes underneath them.
+  const escrowed = {
+    ...snapshot,
+    assets: normalizeAssets(snapshot.assets).filter(({ name }) => name !== TOMBSTONE_ASSET_NAME),
+  }
+  if (state === "asset-uploaded") return escrowed
+  return {
+    ...escrowed,
+    name: TERMINAL_RECOVERY_POLICY.escrowTitle,
+    body: escrowBodyFromRecord(record),
+  }
+}
+
+/**
+ * The escrow body is not stored in the record, only its digest and its marker.
+ * Rebuild it canonically and prove the rebuild is the very body the record
+ * sealed — otherwise the evidence comparison would be against a body nobody
+ * ever published.
+ */
+function escrowBodyFromRecord(record) {
+  const body = canonicalReleaseBody({ marker: record.predecessor.marker, manifest: null })
+  if (releaseBodySha256(body) !== record.predecessor.bodySha256) {
+    throw new Error("Terminal recovery conflict: recorded escrow body is not reproducible")
+  }
+  return body
+}
+
+/** Exactly the nine fields the terminal writer fences on, and nothing else. */
+function expectedWriterSnapshot(snapshot, policy) {
+  if (snapshot?.releaseId !== policy.canonicalReleaseId) {
+    throw new Error("Canonical draft identity is not exact")
+  }
+  return {
+    releaseId: snapshot.releaseId,
+    tagName: snapshot.tagName,
+    name: snapshot.name,
+    targetCommitish: snapshot.targetCommitish,
+    draft: snapshot.draft,
+    prerelease: snapshot.prerelease,
+    immutable: snapshot.immutable,
+    body: snapshot.body,
+    assets: snapshot.assets.map((asset) => ({
+      id: asset.id,
+      name: asset.name,
+      sha256: asset.sha256,
+      size: asset.size,
+    })),
+  }
+}
+
+/**
+ * Fresh evidence equals the record except for the two things that MUST differ
+ * on a later run: the capture authority (its operator, clock, and reviewed
+ * commit) and the npm sweeps' own observation times. Everything else — the
+ * escrow assets, the Release runs, the duplicate receipts, the predecessor, the
+ * tag — is compared byte for byte in canonical form.
+ */
+function assertSameEvidence(fresh, record) {
+  const strip = ({ authority: _authority, sha256: _digest, evidence, ...rest }) => ({
+    ...rest,
+    evidence: {
+      ...evidence,
+      npm: { observations: evidence.npm.observations.map(({ packages }) => ({ packages })) },
+    },
+  })
+  if (JSON.stringify(strip(fresh)) !== JSON.stringify(strip(record))) {
+    throw new Error("Terminal recovery conflict: fresh evidence does not match the record")
+  }
+}
+
+/** The normal production observer must call the candidate terminal, with nothing outstanding. */
+async function requireTerminal(observer, policy) {
+  const observed = await observer({
+    candidate: { version: policy.version, commitSha: policy.candidateSha },
+  })
+  // Terminal states plan as disposition "noop" in planner.mjs, not "audit-only".
+  if (
+    observed?.state !== "ABANDONED_PREPUBLICATION" ||
+    observed?.disposition !== "noop" ||
+    !Array.isArray(observed?.conflicts) ||
+    observed.conflicts.length !== 0 ||
+    !Array.isArray(observed?.diagnostics) ||
+    observed.diagnostics.length !== 0
+  ) {
+    throw new Error("Final observation is not terminal for the candidate")
+  }
+  return {
+    state: observed.state,
+    disposition: observed.disposition,
+    nextTransition: observed.nextTransition ?? null,
+    conflicts: [],
+    diagnostics: [],
+  }
+}
+
+function receipt({ record, outcome, transitions, startedAt, now, finalObservation }) {
+  return {
+    schemaVersion: 1,
+    atomic: false,
+    startedAt,
+    appliedAt: new Date(now()).toISOString(),
+    record: {
+      path: terminalRecordPath(record.version),
+      sha256: record.sha256,
+      reviewedCommit: record.authority.reviewedCommit,
+    },
+    candidate: {
+      version: record.version,
+      commitSha: record.commitSha,
+      releaseId: record.predecessor.releaseId,
+    },
+    outcome,
+    transitions,
+    finalObservation,
+  }
+}
+
+export const ABANDON_DEPENDENCY_FIELDS = Object.freeze([
+  "applyTerminalRecord",
+  "captureTerminalRecord",
+  "createObserver",
+  "createReader",
+  "createWriter",
+  "fileSystem",
+  "randomUUID",
+  "resolveRepositoryRoot",
+  "runGit",
+])
+
+/**
+ * The operator entry point. `capture` is read-only and writes the candidate
+ * terminal record to a private path; `apply` stamps the canonical draft to
+ * match a record a reviewed pull request has already merged, and writes the
+ * write-once final receipt. Exit codes mirror the duplicate-draft recovery
+ * command: 0 success, 2 invalid input, 3 output cleanup uncertain, 1 otherwise.
+ */
+export async function runAbandonCli({
+  argv = process.argv.slice(2),
+  cwd = process.cwd(),
+  environment = process.env,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  dependencies = {},
+} = {}) {
+  let reservation = null
+  try {
+    const options = parseAbandonCliArguments(argv)
+    const runtime = normalizeRuntime({
+      cwd,
+      environment,
+      stdout,
+      stderr,
+      dependencies,
+      allowedDependencies: ABANDON_DEPENDENCY_FIELDS,
+    })
+    const root = await runtime.resolveRepositoryRoot(runtime.cwd, runtime.runGit)
+    const output = resolvePrivatePath(root, options.output)
+    await assertPrivatePathBoundary(runtime.fileSystem, root, output)
+    await assertReviewedIgnorePolicy({
+      fileSystem: runtime.fileSystem,
+      root,
+      reviewedCommit: options.reviewedCommit,
+      relativePaths: [output.relative],
+      runGit: runtime.runGit,
+    })
+    await assertUnusedOutput(runtime.fileSystem, output.absolute)
+    reservation = await reserveExclusiveOutput(runtime, output.absolute)
+    const token = environmentToken(runtime.environment)
+    const reader = runtime.createReader({ root, token, run: runtime.runGit })
+
+    if (options.command === "capture") {
+      const bytes = await runtime.captureTerminalRecord({
+        reviewedCommit: options.reviewedCommit,
+        reason: options.reason,
+        reader,
+      })
+      assertCredentialFreeBytes(bytes, token, "Terminal record")
+      await reassertOutputPolicy(runtime, root, output, options.reviewedCommit)
+      await reservation.commit(bytes, MAX_TERMINAL_RECORD_BYTES)
+      reservation = null
+      writeSuccessBestEffort(runtime.stdout, "Terminal record captured.\n")
+      return 0
+    }
+
+    // The apply run happens from a clean clone checked out at the record pull
+    // request's merge commit, so the record on disk, the record in git, and the
+    // ref the observer reads the record at are provably one and the same tree.
+    const head = await gitText(runtime, root, ["rev-parse", "HEAD"])
+    if (head.trim() !== options.reviewedCommit) {
+      throw new Error("Terminal recovery checkout is not the reviewed commit")
+    }
+    const merge = await reader.readReviewedMergeAuthority(options.reviewedCommit)
+    if (merge?.mergeCommitSha !== options.reviewedCommit) {
+      throw new Error("Reviewed merge authority is not exact")
+    }
+    const recordBytes = await readBoundedPrivateFile(
+      runtime.fileSystem,
+      path.join(root, options.record),
+      MAX_TERMINAL_RECORD_BYTES,
+      { requirePrivateMode: false },
+    )
+    const committed = await gitBytes(runtime, root, [
+      "show",
+      `${options.reviewedCommit}:${options.record}`,
+    ])
+    if (!committed.equals(recordBytes)) {
+      throw new Error("Terminal record on disk differs from the reviewed commit")
+    }
+    const observer = runtime.createObserver({
+      root,
+      token,
+      fileSystem: runtime.fileSystem,
+      runGit: runtime.runGit,
+      terminalRecordRef: options.reviewedCommit,
+    })
+    const result = await runtime.applyTerminalRecord({
+      recordBytes,
+      reviewedCommit: options.reviewedCommit,
+      reader,
+      createWriter: () => runtime.createWriter({ token }),
+      observer,
+    })
+    const receiptBytes = Buffer.from(`${JSON.stringify(canonicalizeJson(result))}\n`, "utf8")
+    assertCredentialFreeBytes(receiptBytes, token, "Terminal recovery receipt")
+    await reassertOutputPolicy(runtime, root, output, options.reviewedCommit)
+    await reservation.commit(receiptBytes, MAX_TERMINAL_RECORD_BYTES)
+    reservation = null
+    writeSuccessBestEffort(runtime.stdout, "Terminal recovery applied.\n")
+    return 0
+  } catch (error) {
+    let cleanupUncertain = error instanceof RecoveryOutputCleanupUncertainError
+    if (reservation !== null) {
+      try {
+        await reservation.abort()
+      } catch (cleanupError) {
+        if (cleanupError instanceof RecoveryOutputCleanupUncertainError) cleanupUncertain = true
+      }
+    }
+    const input = error instanceof RecoveryInputError
+    try {
+      stderr.write(
+        cleanupUncertain
+          ? "Terminal recovery output cleanup uncertain.\n"
+          : input
+            ? "Invalid terminal recovery input.\n"
+            : `Terminal recovery failed.${diagnosticCodeSuffix(error)}\n`,
+      )
+    } catch {}
+    return cleanupUncertain ? 3 : input ? 2 : 1
+  }
+}
+
+/**
+ * TOCTOU guard: every await since the first boundary check is a window for the
+ * output path or the reviewed ignore policy to change underneath the process,
+ * so both are re-proven immediately before the commit.
+ */
+async function reassertOutputPolicy(runtime, root, output, reviewedCommit) {
+  await assertPrivatePathBoundary(runtime.fileSystem, root, output)
+  await assertReviewedIgnorePolicy({
+    fileSystem: runtime.fileSystem,
+    root,
+    reviewedCommit,
+    relativePaths: [output.relative],
+    runGit: runtime.runGit,
+  })
+}
+
+function assertCredentialFreeBytes(bytes, token, label) {
+  if (!Buffer.isBuffer(bytes) || bytes.byteLength === 0) {
+    throw new Error(`${label} bytes are invalid`)
+  }
+  if (bytes.includes(Buffer.from(token, "utf8"))) {
+    throw new Error(`${label} contains the configured credential`)
+  }
+}
+
+async function gitText(runtime, root, args) {
+  const output = await runtime.runGit("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 8 * 1024,
+    windowsHide: true,
+  })
+  if (typeof output !== "string") throw new Error("Recovery Git output is invalid")
+  return output
+}
+
+async function gitBytes(runtime, root, args) {
+  const output = await runtime.runGit("git", ["-C", root, ...args], {
+    encoding: "buffer",
+    timeout: 10_000,
+    maxBuffer: MAX_TERMINAL_RECORD_BYTES,
+    windowsHide: true,
+  })
+  if (Buffer.isBuffer(output)) return output
+  if (typeof output === "string") return Buffer.from(output, "utf8")
+  throw new Error("Recovery Git output is invalid")
+}
+
+function canonicalizeJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeJson)
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+        .map((key) => [key, canonicalizeJson(value[key])]),
+    )
+  }
+  return value
+}
+
+const executedPath =
+  process.argv[1] === undefined ? null : pathToFileURL(path.resolve(process.argv[1])).href
+if (executedPath === import.meta.url) {
+  process.exitCode = await runAbandonCli({
+    dependencies: {
+      applyTerminalRecord,
+      captureTerminalRecord,
+      createObserver: createNormalProductionRecoveryObserver,
+      createReader: createTerminalRecoveryReader,
+      createWriter: createTerminalRecoveryWriter,
+      fileSystem: defaultFileSystem,
+    },
+  })
 }

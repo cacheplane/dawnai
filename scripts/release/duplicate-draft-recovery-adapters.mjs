@@ -242,7 +242,12 @@ export function createDuplicateDraftRecoveryReader({
         "AUTHENTICATED_USER_UNAVAILABLE",
         "Authenticated operator identity could not be verified",
       )
-      if (!isObject(user) || !isBoundedText(user.login, 39)) {
+      // Defense in depth: the shared GitHub adapter already validates `login`
+      // against this pattern, so this branch is unreachable today. It re-checks
+      // it here rather than dropping the check, because this reader must not
+      // depend on a sibling module's validator staying strict — and the login
+      // it returns is written verbatim into the terminal record's authority.
+      if (!isObject(user) || !LOGIN_PATTERN.test(user.login)) {
         fail("AUTHENTICATED_USER_MALFORMED", "Authenticated operator identity is malformed")
       }
       return user.login
@@ -980,7 +985,12 @@ function validateEscrowedSnapshot(snapshot) {
   }
 }
 
-function parseCanonicalRecoveryReceipt(bytes) {
+/**
+ * Parse exact canonical recovery-receipt bytes. Exported so the one-time
+ * terminal recovery command can bind each quarantined duplicate's receipt to
+ * the candidate rather than trusting its digest alone.
+ */
+export function parseCanonicalRecoveryReceipt(bytes) {
   let parsed
   try {
     parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
@@ -2702,6 +2712,8 @@ function isTimestamp(value) {
 function isNullableTimestamp(value) {
   return value === null || isTimestamp(value)
 }
+
+const LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/u
 
 export function isBoundedText(value, maximumBytes, allowEmpty = false) {
   return (

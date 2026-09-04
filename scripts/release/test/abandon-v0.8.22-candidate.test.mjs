@@ -1,27 +1,46 @@
 import assert from "node:assert/strict"
+import { execFile as execFileCallback } from "node:child_process"
 import { createHash } from "node:crypto"
+import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
+import { promisify } from "node:util"
 
 import {
+  abandonedReleaseBody,
+  applyTerminalRecord,
   captureTerminalRecord,
   classifyAbandonmentState,
   createTerminalRecoveryReader,
   FINAL_AUTHORIZATION_RECEIPT_SHA256,
+  NPM_SWEEP_MARGIN_MS,
   parseAbandonCliArguments,
+  runAbandonCli,
+  sha256,
   TERMINAL_RECOVERY_POLICY,
 } from "../abandon-v0.8.22-candidate.mjs"
 import {
   canonicalRecoveryNotice,
+  canonicalRecoveryReceipt,
   originalBodyAssetName,
   recoveryReceiptAssetName,
 } from "../duplicate-draft-recovery.mjs"
-import { createDuplicateDraftRecoveryReader } from "../duplicate-draft-recovery-adapters.mjs"
+import {
+  sha256 as adapterSha256,
+  createDuplicateDraftRecoveryReader,
+} from "../duplicate-draft-recovery-adapters.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
-import { canonicalReleaseBody, releaseBodySha256 } from "../metadata.mjs"
-import { RecoveryInputError } from "../recover-v0.8.22-duplicate-drafts.mjs"
+import { canonicalReleaseBody, parseReleaseMarker, releaseBodySha256 } from "../metadata.mjs"
+import {
+  RecoveryInputError,
+  RecoveryOutputCleanupUncertainError,
+} from "../recover-v0.8.22-duplicate-drafts.mjs"
 import {
   canonicalTerminalRecordBytes,
+  MAX_TERMINAL_RECORD_BYTES,
   parseOperatorRecoveryRecord,
+  terminalRecordPath,
 } from "../terminal-record-store.mjs"
 import {
   attestationSet,
@@ -132,8 +151,10 @@ function fakeReader({
   releaseBody = escrowBody(),
   name = "Dawn v0.8.22",
   assets = boundRecord().evidence.escrowAssets,
+  prerelease = false,
+  tagName = CANONICAL_TAG_NAME,
+  observedAt = ["2026-09-03T18:00:00.000Z", "2026-09-03T18:01:05.000Z"],
 } = {}) {
-  const observedAt = ["2026-09-03T18:00:00.000Z", "2026-09-03T18:01:05.000Z"]
   let sweep = 0
   return {
     async readReviewedMergeAuthority(reviewedCommit) {
@@ -157,9 +178,9 @@ function fakeReader({
         body: releaseBody,
         draft: true,
         immutable: false,
-        prerelease: false,
+        prerelease,
         targetCommitish: "main",
-        tagName: CANONICAL_TAG_NAME,
+        tagName,
         assets,
       }
     },
@@ -548,12 +569,32 @@ const SIGNED_HOST = "https://objects.githubusercontent.com/recovery"
  * notice as its live body, the 45 base assets, the archived original body
  * (the canonical escrow body), and the recovery receipt.
  */
-function duplicateFixture(releaseId, tagName, { receiptDigestDrift = false } = {}) {
+function duplicateFixture(
+  releaseId,
+  tagName,
+  { receiptDigestDrift = false, receiptBoundTo = releaseId } = {},
+) {
   const originalBody = escrowBody()
   const originalBodySha256 = sha256Hex(Buffer.from(originalBody, "utf8"))
   const archiveName = originalBodyAssetName(releaseId, originalBodySha256)
   const receiptName = recoveryReceiptAssetName(releaseId)
-  const receiptBytes = Buffer.from(`{"releaseId":${releaseId}}\n`, "utf8")
+  // The real duplicate-draft recovery wrote a canonical receipt onto each
+  // quarantined draft; `receiptBoundTo` lets a test serve a well-formed receipt
+  // that names the OTHER duplicate, which only a binding check can catch.
+  const receiptBytes = canonicalRecoveryReceipt({
+    repository: TERMINAL_RECOVERY_POLICY.repository,
+    version: TERMINAL_RECOVERY_POLICY.version,
+    candidateSha: TERMINAL_RECOVERY_POLICY.candidateSha,
+    recoveryCommit: REVIEWED,
+    canonicalReleaseId: TERMINAL_RECOVERY_POLICY.canonicalReleaseId,
+    duplicateReleaseId: receiptBoundTo,
+    originalBodySha256,
+    baseAssetSetSha256: predecessorMarker().baseAssetSetSha256,
+    archiveAsset: {
+      name: originalBodyAssetName(receiptBoundTo, originalBodySha256),
+      sha256: originalBodySha256,
+    },
+  })
   const receiptSha256 = sha256Hex(receiptBytes)
   const body = canonicalRecoveryNotice({
     repository: "cacheplane/dawnai",
@@ -705,4 +746,825 @@ test("the live reader refuses to read the duplicates without the archived origin
   })
 
   await assert.rejects(reader.readDuplicateRecoveryReceipts({}), /original body/iu)
+})
+
+test("the live reader binds each duplicate's receipt to this candidate", async () => {
+  // A well-formed canonical receipt that names the OTHER quarantined duplicate
+  // is only caught by parsing the receipt and binding it to the draft it sits
+  // on; digest and byte checks alone accept it.
+  const [first, second] = TERMINAL_RECOVERY_POLICY.duplicates
+  const fixtures = [
+    duplicateFixture(first.releaseId, first.tagName, { receiptBoundTo: second.releaseId }),
+    duplicateFixture(second.releaseId, second.tagName),
+  ]
+  const reader = createTerminalRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED}\n`,
+    dependencies: {
+      createDuplicateReader: () => duplicateRoutingReader(fixtures, []),
+      createTerminalWriter: () => ({ async readCanonicalSnapshot() {} }),
+    },
+  })
+
+  await assert.rejects(
+    reader.readDuplicateRecoveryReceipts({ expectedOriginalBody: escrowBody() }),
+    /receipt is not bound to this candidate/iu,
+  )
+})
+
+test("capture refuses a prereleased draft and a foreign tag name", async () => {
+  const now = () => Date.parse("2026-09-03T18:02:00.000Z")
+  await assert.rejects(
+    captureTerminalRecord({
+      reviewedCommit: REVIEWED,
+      reason: REASON,
+      reader: fakeReader({ prerelease: true }),
+      now,
+      wait: async () => {},
+    }),
+    /mutable draft/iu,
+  )
+  await assert.rejects(
+    captureTerminalRecord({
+      reviewedCommit: REVIEWED,
+      reason: REASON,
+      reader: fakeReader({ tagName: "v0.8.22" }),
+      now,
+      wait: async () => {},
+    }),
+    /tag name/iu,
+  )
+})
+
+test("capture waits a margin above the sixty second sweep gap", async () => {
+  const waits = []
+  await captureTerminalRecord({
+    reviewedCommit: REVIEWED,
+    reason: REASON,
+    reader: fakeReader(),
+    now: () => Date.parse("2026-09-03T18:02:00.000Z"),
+    wait: async (ms) => {
+      waits.push(ms)
+    },
+  })
+  assert.deepEqual(waits, [60_000 + NPM_SWEEP_MARGIN_MS])
+  assert.ok(NPM_SWEEP_MARGIN_MS > 0)
+})
+
+test("classifyAbandonmentState refuses duplicate asset names", () => {
+  const value = boundRecord()
+  const digest = sha256(canonicalTerminalRecordBytes(value))
+  const base = value.evidence.escrowAssets
+  // Forty-five entries, one of them listed twice: every per-asset check still
+  // passes and the count is exact, so only a uniqueness check catches it.
+  const repeated = [...base.slice(0, TERMINAL_RECOVERY_POLICY.baseAssetCount - 1), base[0]]
+  assert.equal(repeated.length, TERMINAL_RECOVERY_POLICY.baseAssetCount)
+  assert.throws(
+    () =>
+      classifyAbandonmentState({
+        record: value,
+        recordSha256: digest,
+        snapshot: { name: "Dawn v0.8.22", body: escrowBody(), assets: repeated },
+      }),
+    /repeats an asset/iu,
+  )
+})
+
+test("abandonedReleaseBody carries the record as its tombstone and classifies as abandoned", () => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const digest = sha256(bytes)
+  const record = parseOperatorRecoveryRecord(bytes)
+  const body = abandonedReleaseBody(record, digest)
+  const marker = parseReleaseMarker(body)
+  assert.equal(marker.phase, "ABANDONED_PREPUBLICATION")
+  assert.equal(marker.abandonmentSha256, digest)
+  assert.equal(marker.revision, record.predecessor.marker.revision + 1)
+  assert.equal(
+    classifyAbandonmentState({
+      record,
+      recordSha256: digest,
+      snapshot: {
+        name: TERMINAL_RECOVERY_POLICY.abandonedTitle,
+        body,
+        assets: [
+          ...record.evidence.escrowAssets,
+          { id: 777, name: "abandonment.json", sha256: digest },
+        ],
+      },
+    }),
+    "abandoned",
+  )
+})
+
+test("the abandoned state requires the exact abandonment body, not merely its marker", () => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const digest = sha256(bytes)
+  const record = parseOperatorRecoveryRecord(bytes)
+  // A body whose marker and tombstone digest still parse correctly but whose
+  // bytes carry appended text must never be accepted as the stamp Dawn wrote.
+  const tampered = `${abandonedReleaseBody(record, digest)}trailing operator note\n`
+  assert.equal(parseReleaseMarker(tampered).abandonmentSha256, digest)
+  assert.throws(
+    () =>
+      classifyAbandonmentState({
+        record,
+        recordSha256: digest,
+        snapshot: {
+          name: TERMINAL_RECOVERY_POLICY.abandonedTitle,
+          body: tampered,
+          assets: [
+            ...record.evidence.escrowAssets,
+            { id: 777, name: "abandonment.json", sha256: digest },
+          ],
+        },
+      }),
+    /conflict/iu,
+  )
+})
+
+test("the command's sha256 is the recovery adapters' own digest helper", () => {
+  assert.equal(sha256, adapterSha256)
+})
+
+const APPLY_NOW = Date.parse("2026-09-03T19:00:05.000Z")
+const APPLY_SWEEPS = ["2026-09-03T18:59:00.000Z", "2026-09-03T19:00:05.000Z"]
+
+function terminalObservation() {
+  return {
+    state: "ABANDONED_PREPUBLICATION",
+    disposition: "noop",
+    nextTransition: null,
+    conflicts: [],
+    diagnostics: [],
+  }
+}
+
+function stampingWriter(calls, snapshotRef) {
+  return {
+    async uploadTombstoneIfAbsentAndEqual(input) {
+      calls.push(["upload", input.sha256, input.expectedSnapshot.assets.length])
+      snapshotRef.assets = [
+        ...snapshotRef.assets,
+        { id: 777, name: "abandonment.json", sha256: input.sha256, size: input.bytes.byteLength },
+      ]
+      return {
+        releaseId: TERMINAL_RECOVERY_POLICY.canonicalReleaseId,
+        assetId: 777,
+        name: "abandonment.json",
+        status: "uploaded",
+        sha256: input.sha256,
+      }
+    },
+    async abandonCandidateIfCurrent(input) {
+      calls.push(["patch", input.expectedName, input.expectedSnapshot.assets.at(-1).name])
+      snapshotRef.name = input.expectedName
+      snapshotRef.body = input.expectedBody
+      return {
+        atomic: false,
+        releaseId: TERMINAL_RECOVERY_POLICY.canonicalReleaseId,
+        outcome: "performed",
+        preWriteFence: { observedAt: "2026-09-03T19:00:00.000Z", projectionSha256: "1".repeat(64) },
+        postWriteFence: {
+          observedAt: "2026-09-03T19:00:01.000Z",
+          projectionSha256: "2".repeat(64),
+        },
+      }
+    },
+  }
+}
+
+function applyFixture({ state = "escrowed", record: overrides = {} } = {}) {
+  const value = { ...boundRecord(), ...overrides }
+  const bytes = canonicalTerminalRecordBytes(value)
+  const digest = sha256(bytes)
+  const record = parseOperatorRecoveryRecord(bytes)
+  const snapshot = {
+    releaseId: TERMINAL_RECOVERY_POLICY.canonicalReleaseId,
+    tagName: CANONICAL_TAG_NAME,
+    name: "Dawn v0.8.22",
+    targetCommitish: "main",
+    draft: true,
+    prerelease: false,
+    immutable: false,
+    body: escrowBody(),
+    assets: record.evidence.escrowAssets.map((asset, index) => ({ ...asset, size: index + 1 })),
+  }
+  if (state !== "escrowed") {
+    snapshot.assets = [
+      ...snapshot.assets,
+      { id: 777, name: "abandonment.json", sha256: digest, size: bytes.byteLength },
+    ]
+  }
+  if (state === "abandoned") {
+    snapshot.name = TERMINAL_RECOVERY_POLICY.abandonedTitle
+    snapshot.body = abandonedReleaseBody(record, digest)
+  }
+  const reader = {
+    ...fakeReader({ observedAt: APPLY_SWEEPS }),
+    async readCanonicalSnapshot() {
+      return snapshot
+    },
+  }
+  return { record, bytes, digest, snapshot, reader }
+}
+
+test("apply walks escrowed to abandoned with compare-before-write and a terminal observer", async () => {
+  const { record, bytes, digest, snapshot, reader } = applyFixture()
+  const calls = []
+  const receipt = await applyTerminalRecord({
+    recordBytes: bytes,
+    reviewedCommit: REVIEWED,
+    reader,
+    createWriter: () => stampingWriter(calls, snapshot),
+    observer: async ({ candidate }) => {
+      assert.deepEqual(candidate, {
+        version: TERMINAL_RECOVERY_POLICY.version,
+        commitSha: TERMINAL_RECOVERY_POLICY.candidateSha,
+      })
+      return terminalObservation()
+    },
+    now: () => APPLY_NOW,
+    wait: async () => {},
+  })
+  assert.deepEqual(calls, [
+    ["upload", digest, TERMINAL_RECOVERY_POLICY.baseAssetCount],
+    ["patch", TERMINAL_RECOVERY_POLICY.abandonedTitle, "abandonment.json"],
+  ])
+  assert.equal(receipt.outcome, "performed")
+  assert.equal(receipt.atomic, false)
+  assert.equal(receipt.record.sha256, record.sha256)
+  assert.equal(receipt.record.path, terminalRecordPath("0.8.22"))
+  assert.equal(receipt.record.reviewedCommit, REVIEWED)
+  assert.deepEqual(
+    receipt.transitions.map(({ name }) => name),
+    ["upload-tombstone", "stamp-body"],
+  )
+  assert.equal(receipt.finalObservation.state, "ABANDONED_PREPUBLICATION")
+  assert.equal(snapshot.name, TERMINAL_RECOVERY_POLICY.abandonedTitle)
+  assert.equal(snapshot.body, abandonedReleaseBody(record, digest))
+})
+
+test("apply resumes from asset-uploaded and performs only the stamp", async () => {
+  const { bytes, snapshot, reader } = applyFixture({ state: "asset-uploaded" })
+  const calls = []
+  const receipt = await applyTerminalRecord({
+    recordBytes: bytes,
+    reviewedCommit: REVIEWED,
+    reader,
+    createWriter: () => stampingWriter(calls, snapshot),
+    observer: async () => terminalObservation(),
+    now: () => APPLY_NOW,
+    wait: async () => {},
+  })
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["patch"],
+  )
+  assert.equal(receipt.outcome, "performed")
+})
+
+test("apply on an already abandoned draft performs nothing and reports preexisting", async () => {
+  const { bytes, snapshot, reader } = applyFixture({ state: "abandoned" })
+  const calls = []
+  const receipt = await applyTerminalRecord({
+    recordBytes: bytes,
+    reviewedCommit: REVIEWED,
+    reader,
+    createWriter: () => stampingWriter(calls, snapshot),
+    observer: async () => terminalObservation(),
+    now: () => APPLY_NOW,
+    wait: async () => {},
+  })
+  assert.deepEqual(calls, [])
+  assert.equal(receipt.outcome, "preexisting-abandoned")
+  assert.deepEqual(receipt.transitions, [])
+})
+
+test("apply refuses evidence drift, a foreign authority, and a non-terminal observation", async () => {
+  const drifted = applyFixture()
+  drifted.reader.readNpmSweep = async () => ({
+    observedAt: APPLY_SWEEPS[0],
+    packages: boundRecord().evidence.npm.observations[0].packages.map((pkg, index) =>
+      index === 0 ? { ...pkg, status: "PRESENT", httpStatus: 200, code: null } : pkg,
+    ),
+  })
+  await assert.rejects(
+    applyTerminalRecord({
+      recordBytes: drifted.bytes,
+      reviewedCommit: REVIEWED,
+      reader: drifted.reader,
+      createWriter: () => stampingWriter([], drifted.snapshot),
+      observer: async () => ({}),
+      now: () => APPLY_NOW,
+      wait: async () => {},
+    }),
+    /absent/iu,
+  )
+
+  const runs = applyFixture()
+  runs.reader.readReleaseRuns = async () => [
+    { workflowRunId: 99, runAttempt: 1, status: "completed", publishJobStarted: false },
+  ]
+  await assert.rejects(
+    applyTerminalRecord({
+      recordBytes: runs.bytes,
+      reviewedCommit: REVIEWED,
+      reader: runs.reader,
+      createWriter: () => stampingWriter([], runs.snapshot),
+      observer: async () => ({}),
+      now: () => APPLY_NOW,
+      wait: async () => {},
+    }),
+    /fresh evidence does not match/iu,
+  )
+
+  const foreign = applyFixture()
+  foreign.reader.readReviewedMergeAuthority = async () => ({ mergeCommitSha: "9".repeat(40) })
+  await assert.rejects(
+    applyTerminalRecord({
+      recordBytes: foreign.bytes,
+      reviewedCommit: REVIEWED,
+      reader: foreign.reader,
+      createWriter: () => stampingWriter([], foreign.snapshot),
+      observer: async () => ({}),
+      now: () => APPLY_NOW,
+      wait: async () => {},
+    }),
+    /merge authority/iu,
+  )
+
+  for (const observation of [
+    { ...terminalObservation(), state: "CANDIDATE_ESCROWED", disposition: "would-transition" },
+    { ...terminalObservation(), disposition: "audit-only" },
+    { ...terminalObservation(), conflicts: [{ code: "X" }] },
+    { ...terminalObservation(), diagnostics: ["x"] },
+  ]) {
+    const fixture = applyFixture({ state: "abandoned" })
+    await assert.rejects(
+      applyTerminalRecord({
+        recordBytes: fixture.bytes,
+        reviewedCommit: REVIEWED,
+        reader: fixture.reader,
+        createWriter: () => stampingWriter([], fixture.snapshot),
+        observer: async () => observation,
+        now: () => APPLY_NOW,
+        wait: async () => {},
+      }),
+      /not terminal/iu,
+    )
+  }
+})
+
+test("apply refuses a record whose escrow body cannot be reconstructed from its marker", async () => {
+  // The escrow body is not stored, only its digest. A rerun against an already
+  // stamped draft rebuilds that body from the record's predecessor marker, so
+  // the rebuild must be proven to hash to the recorded digest.
+  const fixture = applyFixture({
+    state: "abandoned",
+    record: { predecessor: { ...boundRecord().predecessor, bodySha256: "e".repeat(64) } },
+  })
+  await assert.rejects(
+    applyTerminalRecord({
+      recordBytes: fixture.bytes,
+      reviewedCommit: REVIEWED,
+      reader: fixture.reader,
+      createWriter: () => stampingWriter([], fixture.snapshot),
+      observer: async () => terminalObservation(),
+      now: () => APPLY_NOW,
+      wait: async () => {},
+    }),
+    /escrow body/iu,
+  )
+})
+
+test("apply refuses a draft that is not abandoned after its own writes", async () => {
+  const { bytes, snapshot, reader } = applyFixture()
+  const inertWriter = {
+    async uploadTombstoneIfAbsentAndEqual(input) {
+      snapshot.assets = [
+        ...snapshot.assets,
+        { id: 777, name: "abandonment.json", sha256: input.sha256, size: input.bytes.byteLength },
+      ]
+      return { assetId: 777, name: "abandonment.json", status: "uploaded", sha256: input.sha256 }
+    },
+    // A writer that reports success without stamping must not be believed.
+    async abandonCandidateIfCurrent() {
+      return { atomic: false, outcome: "performed" }
+    },
+  }
+  await assert.rejects(
+    applyTerminalRecord({
+      recordBytes: bytes,
+      reviewedCommit: REVIEWED,
+      reader,
+      createWriter: () => inertWriter,
+      observer: async () => terminalObservation(),
+      now: () => APPLY_NOW,
+      wait: async () => {},
+    }),
+    /not abandoned after apply/iu,
+  )
+})
+
+const execFile = promisify(execFileCallback)
+const REVIEWED_COMMITS = new Map()
+
+function sink() {
+  return {
+    text: "",
+    write(value) {
+      this.text += value
+      return true
+    },
+  }
+}
+
+function headCommit(root) {
+  const commit = REVIEWED_COMMITS.get(root)
+  assert.match(commit, /^[0-9a-f]{40}$/u)
+  return commit
+}
+
+async function createPrivateRepository(t, { ignored = true, recordBytes = null } = {}) {
+  const created = await mkdtemp(path.join(os.tmpdir(), "dawn-terminal-cli-"))
+  const root = await realpath(created)
+  t.after(async () => {
+    const { rm } = await import("node:fs/promises")
+    await rm(root, { recursive: true, force: true })
+  })
+  await execFile("git", ["init", "--quiet", root])
+  await writeFile(path.join(root, ".gitignore"), ignored ? ".dawn/\n" : "elsewhere/\n")
+  await mkdir(path.join(root, ".dawn/release-recovery"), { recursive: true, mode: 0o700 })
+  await execFile("git", ["-C", root, "add", ".gitignore"])
+  if (recordBytes !== null) {
+    await mkdir(path.dirname(path.join(root, RECORD_PATH)), { recursive: true })
+    await writeFile(path.join(root, RECORD_PATH), recordBytes)
+    await execFile("git", ["-C", root, "add", RECORD_PATH])
+  }
+  await execFile("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Recovery Test",
+    "-c",
+    "user.email=recovery@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "fixture",
+  ])
+  const { stdout } = await execFile("git", ["-C", root, "rev-parse", "HEAD"])
+  REVIEWED_COMMITS.set(root, stdout.trim())
+  return root
+}
+
+/** The apply path proves its own authority, so the CLI's reader must answer it. */
+function cliReader({ mergeCommitSha = null } = {}) {
+  return Object.freeze({
+    kind: "reader",
+    async readReviewedMergeAuthority(sha) {
+      return {
+        mergeCommitSha: mergeCommitSha ?? sha,
+        reviewedHeadSha: "5".repeat(40),
+        pullRequestNumber: 600,
+      }
+    },
+  })
+}
+
+function captureArgv(root) {
+  return [
+    "capture",
+    "--reviewed-commit",
+    headCommit(root),
+    "--reason",
+    REASON,
+    "--output",
+    CAPTURE_PATH,
+  ]
+}
+
+function applyArgv(root) {
+  return [
+    "apply",
+    "--record",
+    RECORD_PATH,
+    "--reviewed-commit",
+    headCommit(root),
+    FLAG,
+    "--output",
+    APPLY_PATH,
+  ]
+}
+
+test("the runner captures a record durably at mode 0600 and only after validation", async (t) => {
+  const root = await createPrivateRepository(t)
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const calls = []
+  const stdout = sink()
+  const stderr = sink()
+  const result = await runAbandonCli({
+    argv: captureArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "capture-token" },
+    stdout,
+    stderr,
+    dependencies: {
+      randomUUID: () => "12345678-1234-1234-9234-123456789abc",
+      createReader(input) {
+        calls.push(["reader", input.root, input.token])
+        return Object.freeze({ kind: "reader" })
+      },
+      async captureTerminalRecord(input) {
+        calls.push(["capture", input.reviewedCommit, input.reason, input.reader.kind])
+        return bytes
+      },
+    },
+  })
+
+  assert.equal(result, 0)
+  assert.equal(stdout.text, "Terminal record captured.\n")
+  assert.equal(stderr.text, "")
+  assert.deepEqual(calls, [
+    ["reader", root, "capture-token"],
+    ["capture", headCommit(root), REASON, "reader"],
+  ])
+  const output = path.join(root, CAPTURE_PATH)
+  assert.deepEqual(await readFile(output), bytes)
+  assert.equal((await lstat(output)).mode & 0o777, 0o600)
+})
+
+test("the runner refuses an unignored private path and a foreign output path", async (t) => {
+  const root = await createPrivateRepository(t, { ignored: false })
+  const stderr = sink()
+  const result = await runAbandonCli({
+    argv: captureArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "capture-token" },
+    stdout: sink(),
+    stderr,
+    dependencies: {
+      createReader: () => Object.freeze({ kind: "reader" }),
+      captureTerminalRecord: async () => canonicalTerminalRecordBytes(boundRecord()),
+    },
+  })
+  assert.equal(result, 1)
+  assert.equal(stderr.text, "Terminal recovery failed.\n")
+  await assert.rejects(readFile(path.join(root, CAPTURE_PATH)))
+
+  const outside = await createPrivateRepository(t)
+  const stderrTwo = sink()
+  assert.equal(
+    await runAbandonCli({
+      argv: [
+        "capture",
+        "--reviewed-commit",
+        headCommit(outside),
+        "--reason",
+        REASON,
+        "--output",
+        "scripts/x.json",
+      ],
+      cwd: outside,
+      environment: { GITHUB_TOKEN: "capture-token" },
+      stdout: sink(),
+      stderr: stderrTwo,
+      dependencies: {},
+    }),
+    2,
+  )
+  assert.equal(stderrTwo.text, "Invalid terminal recovery input.\n")
+})
+
+test("the runner refuses to write a record carrying the configured credential", async (t) => {
+  const root = await createPrivateRepository(t)
+  const leaked = Buffer.from(
+    `${JSON.stringify({ leaked: "capture-token", schemaVersion: 1 })}\n`,
+    "utf8",
+  )
+  const result = await runAbandonCli({
+    argv: captureArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "capture-token" },
+    stdout: sink(),
+    stderr: sink(),
+    dependencies: {
+      createReader: () => Object.freeze({ kind: "reader" }),
+      captureTerminalRecord: async () => leaked,
+    },
+  })
+  assert.equal(result, 1)
+  await assert.rejects(readFile(path.join(root, CAPTURE_PATH)))
+})
+
+test("the runner maps an uncertain cleanup onto exit 3", async (t) => {
+  const root = await createPrivateRepository(t)
+  const stderr = sink()
+  const result = await runAbandonCli({
+    argv: captureArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "capture-token" },
+    stdout: sink(),
+    stderr,
+    dependencies: {
+      createReader: () => Object.freeze({ kind: "reader" }),
+      captureTerminalRecord: async () => {
+        throw new RecoveryOutputCleanupUncertainError()
+      },
+    },
+  })
+  assert.equal(result, 3)
+  assert.equal(stderr.text, "Terminal recovery output cleanup uncertain.\n")
+})
+
+test("the runner applies the reviewed record and writes a canonical receipt", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const calls = []
+  const stdout = sink()
+  const receiptValue = {
+    schemaVersion: 1,
+    outcome: "performed",
+    atomic: false,
+    record: { path: RECORD_PATH, sha256: sha256(bytes), reviewedCommit: headCommit(root) },
+  }
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout,
+    stderr: sink(),
+    dependencies: {
+      randomUUID: () => "12345678-1234-1234-9234-123456789abc",
+      createReader: () => cliReader(),
+      createWriter: (input) => {
+        calls.push(["writer", input.token])
+        return Object.freeze({ kind: "writer" })
+      },
+      createObserver: (input) => {
+        calls.push(["observer", input.root, input.terminalRecordRef])
+        return async () => terminalObservation()
+      },
+      async applyTerminalRecord(input) {
+        calls.push([
+          "apply",
+          input.reviewedCommit,
+          input.reader.kind,
+          input.recordBytes.equals(bytes),
+        ])
+        assert.equal(input.createWriter().kind, "writer")
+        return receiptValue
+      },
+    },
+  })
+
+  assert.equal(result, 0)
+  assert.equal(stdout.text, "Terminal recovery applied.\n")
+  assert.deepEqual(calls, [
+    ["observer", root, headCommit(root)],
+    ["apply", headCommit(root), "reader", true],
+    ["writer", "apply-token"],
+  ])
+  const written = await readFile(path.join(root, APPLY_PATH))
+  assert.equal(
+    written.toString("utf8"),
+    `${JSON.stringify({
+      atomic: false,
+      outcome: "performed",
+      record: {
+        path: RECORD_PATH,
+        reviewedCommit: headCommit(root),
+        sha256: sha256(bytes),
+      },
+      schemaVersion: 1,
+    })}\n`,
+  )
+  assert.equal((await lstat(path.join(root, APPLY_PATH))).mode & 0o777, 0o600)
+})
+
+test("the runner refuses a record that differs from the reviewed commit", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  await writeFile(
+    path.join(root, RECORD_PATH),
+    canonicalTerminalRecordBytes({ ...boundRecord(), reason: "other" }),
+  )
+  const stderr = sink()
+  const applied = []
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: sink(),
+    stderr,
+    dependencies: {
+      createReader: () => cliReader(),
+      createWriter: () => Object.freeze({ kind: "writer" }),
+      createObserver: () => async () => terminalObservation(),
+      applyTerminalRecord: async () => {
+        applied.push("apply")
+        return { schemaVersion: 1, outcome: "performed" }
+      },
+    },
+  })
+  assert.equal(result, 1)
+  assert.deepEqual(applied, [], "the drifted record is never applied")
+  assert.equal(stderr.text, "Terminal recovery failed.\n")
+  await assert.rejects(readFile(path.join(root, APPLY_PATH)))
+})
+
+test("the runner refuses to apply when the reviewed commit is not HEAD", async (t) => {
+  // The reviewed commit is a real ancestor that still carries the identical
+  // record, so every other apply check passes: only the HEAD fence refuses.
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const reviewed = headCommit(root)
+  await execFile("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Recovery Test",
+    "-c",
+    "user.email=recovery@example.invalid",
+    "commit",
+    "--quiet",
+    "--allow-empty",
+    "-m",
+    "later work",
+  ])
+  const applied = []
+  const result = await runAbandonCli({
+    argv: [
+      "apply",
+      "--record",
+      RECORD_PATH,
+      "--reviewed-commit",
+      reviewed,
+      FLAG,
+      "--output",
+      APPLY_PATH,
+    ],
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: sink(),
+    stderr: sink(),
+    dependencies: {
+      createReader: () => cliReader(),
+      createWriter: () => Object.freeze({ kind: "writer" }),
+      createObserver: () => async () => terminalObservation(),
+      applyTerminalRecord: async () => {
+        applied.push("apply")
+        return { schemaVersion: 1, outcome: "performed" }
+      },
+    },
+  })
+  assert.equal(result, 1)
+  assert.deepEqual(applied, [], "apply never runs off the reviewed commit")
+  await assert.rejects(readFile(path.join(root, APPLY_PATH)))
+})
+
+test("the runner refuses a receipt carrying the configured credential", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: sink(),
+    stderr: sink(),
+    dependencies: {
+      createReader: () => cliReader(),
+      createWriter: () => Object.freeze({ kind: "writer" }),
+      createObserver: () => async () => terminalObservation(),
+      applyTerminalRecord: async () => ({ schemaVersion: 1, note: "apply-token" }),
+    },
+  })
+  assert.equal(result, 1)
+  await assert.rejects(readFile(path.join(root, APPLY_PATH)))
+  assert.ok(MAX_TERMINAL_RECORD_BYTES > 0)
+})
+
+test("the runner refuses to apply against a foreign reviewed merge authority", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const applied = []
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: sink(),
+    stderr: sink(),
+    dependencies: {
+      createReader: () => cliReader({ mergeCommitSha: "c".repeat(40) }),
+      createWriter: () => Object.freeze({ kind: "writer" }),
+      createObserver: () => async () => terminalObservation(),
+      applyTerminalRecord: async () => {
+        applied.push("apply")
+        return { schemaVersion: 1, outcome: "performed" }
+      },
+    },
+  })
+  assert.equal(result, 1)
+  assert.deepEqual(applied, [], "apply never runs without proven merge authority")
+  await assert.rejects(readFile(path.join(root, APPLY_PATH)))
 })
