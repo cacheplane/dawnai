@@ -32,6 +32,7 @@ import {
   parsePublisherArguments,
   publishManifestSerially,
   runPublisherCli,
+  TARBALL_CONVERGENCE_DEADLINE_MS,
 } from "../publisher.mjs"
 import { canonicalReleaseRecordBytes } from "../release-record.mjs"
 import { EXACT_NPM_PROVENANCE_CERTIFICATE } from "./fixtures/npm-audit-certificates.mjs"
@@ -115,6 +116,93 @@ test("polls delayed exact metadata, signature, provenance, and latest before adv
   assert.deepEqual(fixture.publishCalls, [CANONICAL_RELEASE_PACKAGE_ORDER[0]])
   assert.ok(fixture.pollCalls.length >= 4)
   assert.ok(fixture.pollCalls.every(({ name }) => name === CANONICAL_RELEASE_PACKAGE_ORDER[0]))
+})
+
+test("a published tarball that 404s during propagation is polled at 2 s then 10 s until it arrives", async () => {
+  const first = CANONICAL_RELEASE_PACKAGE_ORDER[0]
+  const pendingReads = 12
+  const fixture = publisherFixture({ tarballPending: { index: 0, reads: pendingReads } })
+  const started = Date.now()
+
+  const result = await publishManifestSerially(fixture.inputs)
+
+  assert.equal(result.status, "NPM_COMPLETE")
+  assert.deepEqual(fixture.publishCalls, CANONICAL_RELEASE_PACKAGE_ORDER)
+  const convergenceDownloads = fixture.downloadCalls.filter((name) => name === first)
+  // pendingReads 404s, one 200 during convergence, and one 200 in the final sweep.
+  assert.equal(convergenceDownloads.length, pendingReads + 2)
+  const pending = fixture.logs.filter(({ event }) => event === "registry-tarball-pending")
+  assert.equal(pending.length, pendingReads)
+  assert.deepEqual(
+    pending.map(({ name, attempt, elapsedMs, delayMs }) => ({ name, attempt, elapsedMs, delayMs })),
+    Array.from({ length: pendingReads }, (_value, index) => ({
+      name: first,
+      attempt: index + 1,
+      elapsedMs: index < 10 ? index * 2_000 : 20_000 + (index - 10) * 10_000,
+      delayMs: index < 10 ? 2_000 : 10_000,
+    })),
+  )
+  assert.ok(pending.every((event) => event.deadlineMs === TARBALL_CONVERGENCE_DEADLINE_MS))
+  assert.deepEqual(
+    fixture.pollCalls.map(({ delayMs }) => delayMs),
+    [...Array(10).fill(2_000), 10_000, 10_000],
+  )
+  assert.ok(
+    fixture.logs.some(({ event, name }) => event === "package-publish-accepted" && name === first),
+  )
+  assert.ok(Date.now() - started < 5_000, "the fake poll must not sleep for real")
+})
+
+test("a tarball that never propagates fails after the ten-minute convergence deadline", async () => {
+  const first = CANONICAL_RELEASE_PACKAGE_ORDER[0]
+  const fixture = publisherFixture({ tarballPending: { index: 0, reads: Infinity } })
+  const started = Date.now()
+
+  await assert.rejects(
+    publishManifestSerially(fixture.inputs),
+    new RegExp(`npm registry tarball could not be verified for ${first}`, "u"),
+  )
+
+  assert.deepEqual(fixture.publishCalls, [first])
+  // 10 × 2 s + 58 × 10 s = 600 s: the 69th observation sees the deadline elapsed.
+  assert.equal(TARBALL_CONVERGENCE_DEADLINE_MS, 10 * 60_000)
+  assert.equal(fixture.downloadCalls.filter((name) => name === first).length, 69)
+  const pending = fixture.logs.filter(({ event }) => event === "registry-tarball-pending")
+  assert.equal(pending.length, 69)
+  assert.equal(pending.at(-1).attempt, 69)
+  assert.equal(pending.at(-1).elapsedMs, TARBALL_CONVERGENCE_DEADLINE_MS)
+  assert.equal(fixture.pollCalls.length, 68)
+  assert.ok(fixture.pollCalls.every(({ name }) => name === first))
+  assert.ok(Date.now() - started < 5_000, "the fake poll must not sleep for real")
+})
+
+test("a fetched tarball with mismatched bytes fails on the first download without polling", async () => {
+  const first = CANONICAL_RELEASE_PACKAGE_ORDER[0]
+  const fixture = publisherFixture({ corruptRegistryIndex: 0 })
+
+  await assert.rejects(
+    publishManifestSerially(fixture.inputs),
+    /registry tarball|digest|bytes.*match/iu,
+  )
+
+  assert.deepEqual(fixture.publishCalls, [first])
+  assert.deepEqual(fixture.downloadCalls, [first])
+  assert.deepEqual(fixture.pollCalls, [])
+  assert.ok(!fixture.logs.some(({ event }) => event === "registry-tarball-pending"))
+})
+
+test("an integrity mismatch fails immediately before any tarball download or poll", async () => {
+  const first = CANONICAL_RELEASE_PACKAGE_ORDER[0]
+  const fixture = publisherFixture({ integrityMismatchIndex: 0 })
+
+  await assert.rejects(
+    publishManifestSerially(fixture.inputs),
+    new RegExp(`identity or integrity conflicts for ${first}`, "u"),
+  )
+
+  assert.deepEqual(fixture.publishCalls, [first])
+  assert.deepEqual(fixture.downloadCalls, [])
+  assert.deepEqual(fixture.pollCalls, [])
 })
 
 test("raw npm signature records never satisfy publication verification", async () => {
@@ -1361,9 +1449,13 @@ function publisherFixture(overrides = {}) {
   const observeCalls = []
   const pollCalls = []
   const verifyCalls = []
+  const downloadCalls = []
+  const logs = []
   const events = []
   const metadataReads = new Map()
   const versionReads = new Map()
+  const tarballReads = new Map()
+  const clock = { now: 0 }
   const newerAfterVersionRecheck = new Set()
   let failureEnabled = true
   let activePublishes = 0
@@ -1435,12 +1527,30 @@ function publisherFixture(overrides = {}) {
       state.ready,
       overrides.corruptRegistryIndex === index,
       overrides.rawSignatureIndex === index,
+      overrides.integrityMismatchIndex === index,
     )
   }
   const downloadRegistryTarball = async ({ tarballUrl }) => {
     const entry = manifest.packages.find((candidate) => registryUrl(candidate) === tarballUrl)
     if (entry === undefined) throw new Error("unknown fixture tarball URL")
     const index = manifest.packages.indexOf(entry)
+    downloadCalls.push(entry.name)
+    const reads = (tarballReads.get(entry.name) ?? 0) + 1
+    tarballReads.set(entry.name, reads)
+    if (
+      overrides.tarballPending !== undefined &&
+      overrides.tarballPending.index === index &&
+      reads <= overrides.tarballPending.reads
+    ) {
+      // The production npm adapter classifies a tarball 404 (binary body, no registry
+      // code) as AMBIGUOUS/HTTP_404, never ABSENT (run 33896070181).
+      return {
+        status: "AMBIGUOUS",
+        operation: "package-tarball",
+        httpStatus: 404,
+        code: "HTTP_404",
+      }
+    }
     const bytes =
       overrides.corruptRegistryIndex === index ? Buffer.from("corrupt") : tarballBytes(entry.name)
     return tarballDownload(entry, bytes)
@@ -1460,8 +1570,9 @@ function publisherFixture(overrides = {}) {
       activePublishes -= 1
     }
   }
-  const poll = async ({ name, attempt }) => {
-    pollCalls.push({ name, attempt })
+  const poll = async ({ name, attempt, delayMs }) => {
+    pollCalls.push({ name, attempt, delayMs })
+    clock.now += delayMs
     const state = present.get(name)
     if (state !== undefined && state.ready < 4) state.ready += 1
   }
@@ -1488,13 +1599,18 @@ function publisherFixture(overrides = {}) {
       verifyPackage,
       publishTarball,
       poll,
-      log() {},
+      now: () => clock.now,
+      log(event) {
+        logs.push(event)
+      },
     },
     npmReader,
     publishCalls,
     observeCalls,
     pollCalls,
     verifyCalls,
+    downloadCalls,
+    logs,
     events,
     concurrentPublishes,
     disableFailure() {
@@ -1700,7 +1816,7 @@ function publisherProvenanceEnvironment() {
   }
 }
 
-function registryObservation(entry, ready, corrupt, rawSignature) {
+function registryObservation(entry, ready, corrupt, rawSignature, integrityMismatch = false) {
   const bytes = corrupt ? Buffer.from("corrupt") : tarballBytes(entry.name)
   return {
     status: "PRESENT",
@@ -1712,7 +1828,9 @@ function registryObservation(entry, ready, corrupt, rawSignature) {
       version: entry.version,
       tarballUrl: registryUrl(entry),
       shasum: createHash("sha1").update(bytes).digest("hex"),
-      integrity: entry.npmIntegrity,
+      integrity: integrityMismatch
+        ? `sha512-${Buffer.alloc(64, 1).toString("base64")}`
+        : entry.npmIntegrity,
       signatures: ready >= 2 ? [{ keyid: "SHA256:key", sig: "signature" }] : [],
       ...(rawSignature
         ? {}

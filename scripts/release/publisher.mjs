@@ -45,6 +45,24 @@ const POLL_DELAY_MS = 2_000
 const PUBLISH_COMMAND_TIMEOUT_MS = 5 * 60_000
 const EXPECTED_REPOSITORY = "https://github.com/cacheplane/dawnai"
 
+// Registry tarball propagation budget. npm can accept a publish, expose the exact
+// version metadata (integrity, dist-tags, provenance) and still serve 404 for the
+// tarball URL for minutes: run 33896070181 accepted @dawn-ai/ag-ui@0.8.24 at 16:40:52Z
+// and the tarball stayed 404 until ~16:46Z, which the former fixed 20 × 2 s window
+// turned into an NPM_PARTIAL stop. Only the "metadata present, tarball 404" class waits
+// on this budget: the first TARBALL_FAST_POLL_ATTEMPTS polls keep the 2 s cadence, later
+// polls back off to TARBALL_SLOW_POLL_DELAY_MS, and the wait ends with the existing
+// "could not be verified" failure once TARBALL_CONVERGENCE_DEADLINE_MS has elapsed for
+// that package. Every definitive conflict (identity, integrity, dist-tag, fetched bytes)
+// and every non-404 tarball outcome still fails on the first observation. The
+// per-package budget is deliberately larger than PUBLISHER_OVERALL_TIMEOUT_MS / 21: the
+// overall deadline (which release.yml's 30-minute publish-npm job encloses) stays the
+// binding bound, so a run absorbs one or two full-length lags and otherwise stops
+// resumably rather than serializing 21 worst cases.
+const TARBALL_FAST_POLL_ATTEMPTS = 10
+const TARBALL_SLOW_POLL_DELAY_MS = 10_000
+export const TARBALL_CONVERGENCE_DEADLINE_MS = 10 * 60_000
+
 export const PUBLISHER_OVERALL_TIMEOUT_MS = 25 * 60_000
 
 export const PUBLISHER_SPARSE_FILES = Object.freeze([
@@ -83,6 +101,7 @@ export async function publishManifestSerially({
   publishTarball,
   poll,
   log,
+  now = Date.now,
 }) {
   const identity = validateCandidate(candidate)
   const sealedManifest = validateSealedReleaseManifest(manifest, { candidate: identity })
@@ -92,6 +111,7 @@ export async function publishManifestSerially({
   assertFunction(publishTarball, "publishTarball")
   assertFunction(poll, "poll")
   assertFunction(log, "log")
+  assertFunction(now, "now")
 
   const initial = []
   let candidateStarted = false
@@ -105,7 +125,7 @@ export async function publishManifestSerially({
       candidate: identity,
       downloadRegistryTarball,
     })
-    candidateStarted ||= analyzed.status === "present"
+    candidateStarted ||= isPublished(analyzed)
     initial.push(analyzed)
   }
   const initialLatest = newerLatest(initial, identity.version)
@@ -118,7 +138,7 @@ export async function publishManifestSerially({
   for (let index = 0; index < sealedManifest.packages.length; index += 1) {
     const entry = sealedManifest.packages[index]
     let state = initial[index]
-    if (state.status === "present") {
+    if (isPublished(state)) {
       candidateStarted = true
       await waitUntilVerified({
         entry,
@@ -127,6 +147,8 @@ export async function publishManifestSerially({
         downloadRegistryTarball,
         verifyPackage,
         poll,
+        log,
+        now,
       })
       log({ event: "package-verified", name: entry.name })
       continue
@@ -140,7 +162,7 @@ export async function publishManifestSerially({
       candidate: identity,
       downloadRegistryTarball,
     })
-    if (state.status === "present") {
+    if (isPublished(state)) {
       candidateStarted = true
       await waitUntilVerified({
         entry,
@@ -149,6 +171,8 @@ export async function publishManifestSerially({
         downloadRegistryTarball,
         verifyPackage,
         poll,
+        log,
+        now,
       })
       log({ event: "package-recovered", name: entry.name })
       continue
@@ -170,6 +194,8 @@ export async function publishManifestSerially({
         downloadRegistryTarball,
         verifyPackage,
         poll,
+        log,
+        now,
       })
       log({ event: "package-recovered", name: entry.name })
       continue
@@ -185,6 +211,8 @@ export async function publishManifestSerially({
       downloadRegistryTarball,
       verifyPackage,
       poll,
+      log,
+      now,
     })
   }
 
@@ -292,6 +320,7 @@ export async function runPublisherCli(argv, options = {}) {
         auditVerifierFactory,
         poll: options.poll ?? productionPoll,
         log: options.log ?? productionLog,
+        now: options.now ?? Date.now,
         environment,
         deadline,
       }),
@@ -308,7 +337,7 @@ export async function runPublisherCli(argv, options = {}) {
 
 async function runPublisherCliWithinDeadline(
   argv,
-  { fileSystem, npmReader, runNpm, auditVerifierFactory, poll, log, environment, deadline },
+  { fileSystem, npmReader, runNpm, auditVerifierFactory, poll, log, now, environment, deadline },
 ) {
   const input = parsePublisherArguments(argv)
   const paths = Object.fromEntries(
@@ -391,6 +420,7 @@ async function runPublisherCliWithinDeadline(
       publishTarball,
       poll: (request) => deadline.race(poll({ ...request, signal: deadline.signal })),
       log,
+      now,
     })
     await writeCanonicalReport({
       fileSystem,
@@ -417,8 +447,14 @@ async function waitUntilVerified({
   downloadRegistryTarball,
   verifyPackage,
   poll,
+  log,
+  now,
 }) {
-  for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt += 1) {
+  let attempt = 0
+  let convergenceAttempts = 0
+  let tarballPending = null
+  for (;;) {
+    attempt += 1
     const metadata = await observeMetadata(observeRegistry, entry.name)
     const latest = metadata.metadata.latest
     if (latest !== null && compareSemver(latest, candidate.version) > 0) {
@@ -432,14 +468,42 @@ async function waitUntilVerified({
       candidate,
       downloadRegistryTarball,
     })
+    if (analyzed.status === "tarball-pending") {
+      tarballPending ??= { startedAt: now(), attempts: 0 }
+      tarballPending.attempts += 1
+      const elapsedMs = Math.max(0, now() - tarballPending.startedAt)
+      const delayMs =
+        tarballPending.attempts <= TARBALL_FAST_POLL_ATTEMPTS
+          ? POLL_DELAY_MS
+          : TARBALL_SLOW_POLL_DELAY_MS
+      log({
+        event: "registry-tarball-pending",
+        name: entry.name,
+        attempt: tarballPending.attempts,
+        elapsedMs,
+        delayMs,
+        deadlineMs: TARBALL_CONVERGENCE_DEADLINE_MS,
+        httpStatus: analyzed.download.httpStatus,
+      })
+      if (elapsedMs >= TARBALL_CONVERGENCE_DEADLINE_MS) {
+        throw new Error(`npm registry tarball could not be verified for ${entry.name}`)
+      }
+      await poll({ name: entry.name, attempt, delayMs })
+      continue
+    }
     if (analyzed.status === "present" && registryReady(analyzed, candidate)) {
       const audit = await observeNpmAudit(verifyPackage, entry, candidate)
       if (audit.status === "verified") return { ...analyzed, audit, ready: true }
     }
-    if (attempt < MAX_POLL_ATTEMPTS)
-      await poll({ name: entry.name, attempt, delayMs: POLL_DELAY_MS })
+    convergenceAttempts += 1
+    if (convergenceAttempts >= MAX_POLL_ATTEMPTS) break
+    await poll({ name: entry.name, attempt, delayMs: POLL_DELAY_MS })
   }
   throw new Error(`npm registry did not converge for ${entry.name}`)
+}
+
+function isPublished(analyzed) {
+  return analyzed.status === "present" || analyzed.status === "tarball-pending"
 }
 
 async function sweepLatest({ manifest, observeRegistry }) {
@@ -500,6 +564,9 @@ async function analyzeVersion({ entry, metadata, version, downloadRegistryTarbal
     throw new Error(`npm package identity or integrity conflicts for ${entry.name}`)
   }
   const download = await downloadRegistryTarball({ tarballUrl: packageRecord.tarballUrl })
+  if (isTarballPending(download)) {
+    return { status: "tarball-pending", entry, metadata, package: packageRecord, download }
+  }
   if (
     download?.status !== "PRESENT" ||
     download.operation !== "package-tarball" ||
@@ -518,6 +585,18 @@ async function analyzeVersion({ entry, metadata, version, downloadRegistryTarbal
     package: packageRecord,
     tarball,
   }
+}
+
+// The npm adapter classifies a tarball 404 as AMBIGUOUS/HTTP_404 (a binary body carries
+// no registry error code) rather than ABSENT; both shapes mean "not propagated yet".
+function isTarballPending(download) {
+  return (
+    download !== null &&
+    typeof download === "object" &&
+    download.operation === "package-tarball" &&
+    download.httpStatus === 404 &&
+    (download.status === "ABSENT" || download.status === "AMBIGUOUS")
+  )
 }
 
 function registryReady(analyzed, candidate) {

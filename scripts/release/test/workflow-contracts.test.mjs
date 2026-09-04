@@ -65,8 +65,13 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // headroom; diagnostic run 33894039805 measured ~3 s per call) and proves the other 21
 // subjects locally instead of 22 sequential calls; INVALID results now carry a sanitized
 // reason that reaches the thrown escrow error.
+// Repinned for the registry tarball convergence window (scripts/release/publisher.mjs):
+// a published package whose exact metadata is present but whose tarball URL still 404s
+// is polled at 2 s × 10 then 10 s up to a ten-minute per-package deadline instead of the
+// former 20 × 2 s window (run 33896070181: @dawn-ai/ag-ui@0.8.24 accepted 16:40:52Z,
+// tarball 404 until ~16:46Z); every definitive conflict still fails on first sight.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "d707a6bc94fcfd0b050b46f1c5a9b5c829b342929556d51481aeece66434aaee"
+  "cbc0007d9543cbff2e2f0c0de384842a1a4c4e8a483436975cb1b21ad55aa6a9"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
