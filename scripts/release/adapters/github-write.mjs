@@ -39,6 +39,20 @@ const MAX_TIMEOUT_MS = 300_000
 const DEFAULT_TIMEOUT_MS = 15_000
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 const MAX_JSON_REQUEST_BYTES = 4 * 1024 * 1024
+// Failure detail carried on a writer Error: the HTTP status plus a short sanitized snippet of
+// the response body. Two v0.8.24 escrow failures at the draft POST were undiagnosable because
+// the status was discarded. Never the headers, never the token. The redaction set mirrors
+// `safeDetail` in ../cli.mjs (which must not be imported here: cli.mjs imports this adapter).
+const FAILURE_SNIPPET_MAX_LENGTH = 200
+const FAILURE_SNIPPET_MAX_INPUT_LENGTH = 4096
+const FAILURE_SNIPPET_REDACTIONS = Object.freeze([
+  /gh[pous]_[A-Za-z0-9]{20,}/gu,
+  /github_pat_[A-Za-z0-9_]{20,}/gu,
+  /npm_[A-Za-z0-9]{20,}/gu,
+  /Bearer\s+\S+/giu,
+  /authorization:\s*\S+(?:\s+\S+)?/giu,
+  /(?<![A-Za-z0-9_.-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
+])
 
 export function composeGitHubEffects({ reader, writer }) {
   if (
@@ -160,7 +174,7 @@ export function createGitHubWriter({
         },
       })
       if (![201, 422].includes(response.httpStatus)) {
-        throw new Error("GitHub draft creation did not return HTTP 201")
+        throw new Error(writeFailureMessage("GitHub draft creation", response))
       }
       let releaseId
       let status
@@ -169,7 +183,14 @@ export function createGitHubWriter({
         status = "created"
       } else {
         const raced = await findReleaseByTag(context, args)
-        if (raced === null) throw new Error("GitHub draft creation race could not be reconciled")
+        if (raced === null) {
+          throw new Error(
+            writeFailureMessage(
+              "GitHub draft creation race could not be reconciled: no Release matches the tag and the POST",
+              response,
+            ),
+          )
+        }
         releaseId = raced.id
         status = "existing"
       }
@@ -214,8 +235,9 @@ export function createGitHubWriter({
         apiVersion: RELEASE_API_VERSION,
         body: { name: args.title, body: args.body },
       })
-      if (response.httpStatus !== 200)
-        throw new Error("GitHub draft update did not return HTTP 200")
+      if (response.httpStatus !== 200) {
+        throw new Error(writeFailureMessage("GitHub draft update", response))
+      }
       const updated = await readRelease(context, releaseId)
       assertDraftIdentity(updated, args, { title: args.title, body: args.body })
       await verifyAnnotatedTag(context, args.tag, args.targetSha)
@@ -251,7 +273,7 @@ export function createGitHubWriter({
         maxRequestBytes: args.maximumBytes,
       })
       if (![201, 422].includes(response.httpStatus)) {
-        throw new Error("GitHub Release asset upload did not return HTTP 201")
+        throw new Error(writeFailureMessage("GitHub Release asset upload", response))
       }
       assets = await readAssets(context, releaseId)
       existing = findOneAsset(assets, args.name)
@@ -295,8 +317,9 @@ export function createGitHubWriter({
         apiVersion: RELEASE_API_VERSION,
         body: { tag_name: args.tag, draft: false },
       })
-      if (response.httpStatus !== 200)
-        throw new Error("Release publication did not return HTTP 200")
+      if (response.httpStatus !== 200) {
+        throw new Error(writeFailureMessage("Release publication", response))
+      }
       const published = await readRelease(context, releaseId)
       assertPublishedIdentity(published, args)
       if (published.body !== current.body || published.name !== current.name) {
@@ -322,7 +345,12 @@ export function createGitHubWriter({
         body: requestBody,
       })
       if (response.httpStatus !== 200) {
-        throw new Error("GitHub workflow dispatch requires the direct HTTP 200 run receipt")
+        throw new Error(
+          writeFailureMessage(
+            "GitHub workflow dispatch requires the direct HTTP 200 run receipt but",
+            response,
+          ),
+        )
       }
       const receipt = snapshotJson(response.body)
       if (
@@ -701,7 +729,9 @@ async function requestJson(
       })
     } catch (error) {
       throw new Error(
-        controller.signal.aborted ? "GitHub write timed out" : "GitHub write failed",
+        controller.signal.aborted
+          ? `GitHub write timed out after ${context.timeoutMs} ms (${method})`
+          : `GitHub write failed (${method})`,
         {
           cause: error,
         },
@@ -724,11 +754,25 @@ async function requestJson(
         controller.signal,
       )
     } catch (error) {
-      if (controller.signal.aborted) throw new Error("GitHub write timed out", { cause: error })
+      if (controller.signal.aborted) {
+        throw new Error(
+          `GitHub write timed out after ${context.timeoutMs} ms reading the ${method} response`,
+          { cause: error },
+        )
+      }
       throw error
     }
-    if (responseBytes.length === 0) return { httpStatus: status, body: null }
     const responseContentType = response.headers?.get?.("content-type")
+    if (status < 200 || status >= 300) {
+      // A failed write's body is never consumed as data; it is only summarized for the operator,
+      // so the JSON content-type contract below does not apply to it.
+      return {
+        httpStatus: status,
+        body: null,
+        detail: describeFailureBody(responseBytes, responseContentType),
+      }
+    }
+    if (responseBytes.length === 0) return { httpStatus: status, body: null, detail: null }
     if (
       typeof responseContentType !== "string" ||
       !/^application\/(?:[A-Za-z0-9!#$&^_.+-]+\+)?json(?:\s*;|\s*$)/iu.test(responseContentType)
@@ -741,10 +785,61 @@ async function requestJson(
     } catch (error) {
       throw new Error("GitHub write response JSON is malformed", { cause: error })
     }
-    return { httpStatus: status, body: snapshotJson(parsed) }
+    return { httpStatus: status, body: snapshotJson(parsed), detail: null }
   } finally {
     clearTimeout(timeout)
   }
+}
+
+function writeFailureMessage(prefix, response) {
+  const head = `${prefix} returned HTTP ${response.httpStatus}`
+  return response.detail === null ? head : `${head}: ${response.detail}`
+}
+
+function describeFailureBody(bytes, contentType) {
+  if (bytes.length === 0) return null
+  // The body is already bounded by maxResponseBytes; decode leniently so a truncated or
+  // non-UTF-8 error page still yields a glimpse instead of a second failure.
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes)
+  let raw = text
+  if (typeof contentType === "string" && /json/iu.test(contentType)) {
+    try {
+      const parsed = JSON.parse(text)
+      const parts = []
+      if (isRecord(parsed)) {
+        if (typeof parsed.message === "string") parts.push(parsed.message)
+        if (parsed.errors !== undefined) parts.push(`errors=${JSON.stringify(parsed.errors)}`)
+      }
+      if (parts.length > 0) raw = parts.join(" ")
+    } catch {
+      // Fall through to the text snippet: a malformed error body is still worth a glimpse.
+    }
+  }
+  return sanitizeFailureSnippet(raw)
+}
+
+function sanitizeFailureSnippet(value) {
+  let snippet = Array.from(value.slice(0, FAILURE_SNIPPET_MAX_INPUT_LENGTH), (character) => {
+    const codePoint = character.codePointAt(0)
+    return codePoint < 0x20 ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      codePoint === 0x2028 ||
+      codePoint === 0x2029
+      ? " "
+      : character
+  }).join("")
+  snippet = snippet.replace(/https?:\/\/[^\s?#]*\?\S*/gu, (token) =>
+    token.slice(0, token.indexOf("?")),
+  )
+  for (const pattern of FAILURE_SNIPPET_REDACTIONS) {
+    snippet = snippet.replace(pattern, "[redacted]")
+  }
+  snippet = snippet.replace(/\s+/gu, " ").trim()
+  if (snippet.length === 0) return null
+  if (snippet.length > FAILURE_SNIPPET_MAX_LENGTH) {
+    snippet = `${snippet.slice(0, FAILURE_SNIPPET_MAX_LENGTH - 1)}\u2026`
+  }
+  return snippet
 }
 
 async function readBoundedResponse(stream, maximum, signal) {
