@@ -57,8 +57,11 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // the v0.8.22 terminal recovery record names the operator login its token acts as.
 // Repinned for the observe CI wait (scripts/release/cli.mjs): detect now waits the full
 // ci.yml validate budget (100 x 30 s) instead of timing out after 10 minutes.
+// Repinned for the sanitized failure detail line (scripts/release/cli.mjs): the entrypoint
+// now prints `release CLI failure detail: ...` after the unchanged code line (run
+// 33889526426 failed in escrow with only the masked INVALID_RELEASE_COMMAND).
 const STARTING_SCRIPT_PIN_SHA256 =
-  "f81e46ace20c56b9a0c988006507e705e28d9fb5300d0a90b75fff66252023ec"
+  "3607d3ce78dd5da379599deffc30e95aa05bb1931367c0e2874e2a1067fa447f"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
