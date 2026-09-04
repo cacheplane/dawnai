@@ -1427,12 +1427,32 @@ test("delegated npm and attestation results reject hostile mutable evidence", as
   await assert.rejects(adapters.attestations.verify({}), /attestation|evidence|malformed/iu)
   assert.equal(invoked, 0)
 
+  for (const invalid of [
+    { status: "INVALID", subjects: [] },
+    { status: "INVALID", subjects: [], reason: "gh attestation verify manifest.json: exit code 1" },
+  ]) {
+    const invalidWithReason = await createDuplicateDraftConsolidationAdapters({
+      cwd: "/workspace",
+      token: TOKEN,
+      dependencies: {
+        fetchImpl: assert.fail,
+        run: commandRunner([]),
+        createCliAttestationVerifier: () => ({ verify: async () => invalid }),
+      },
+    })
+    assert.deepEqual(await invalidWithReason.attestations.verify({}), invalid)
+  }
+
   for (const result of [
     { status: "VERIFIED", subjects: [], extra: true },
     {
       status: "VERIFIED",
       subjects: [{ name: "manifest.json", sha256: "A".repeat(64) }],
     },
+    { status: "VERIFIED", subjects: [], reason: "verified results carry no reason" },
+    { status: "INVALID", subjects: [], reason: { nested: true } },
+    { status: "INVALID", subjects: [], reason: "x".repeat(4_097) },
+    { status: "INVALID", subjects: [], reason: "control\u0007character" },
     new Proxy({ status: "INVALID", subjects: [] }, {}),
   ]) {
     const hostile = await createDuplicateDraftConsolidationAdapters({

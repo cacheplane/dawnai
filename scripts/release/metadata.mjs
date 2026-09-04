@@ -1859,11 +1859,21 @@ async function verifyAttestationBundles({
       }),
     )
   } catch (error) {
-    throw new Error("Attestation bundle verification failed", { cause: error })
+    throw new Error(
+      `Attestation bundle verification failed: ${attestationFailureReason(error?.message)}`,
+      { cause: error },
+    )
+  }
+  if (!isRecord(result) || result.status !== "VERIFIED") {
+    // The verifier reports why gh (or the local membership proof) rejected the escrow:
+    // exit code, signal/timeout, and redacted stderr. Run 33889526426 failed here with only
+    // the bare "Attestation bundle verification failed" line.
+    throw new Error(
+      `Attestation bundle verification failed: ${attestationFailureReason(result?.reason)}`,
+    )
   }
   if (
     !hasExactFields(result, ["status", "subjects"]) ||
-    result.status !== "VERIFIED" ||
     !Array.isArray(result.subjects) ||
     result.subjects.length !== subjects.length ||
     result.subjects.some(
@@ -1875,6 +1885,33 @@ async function verifyAttestationBundles({
   ) {
     throw new Error("Attestation bundle verification did not prove all 22 subjects")
   }
+}
+
+const ATTESTATION_FAILURE_REASON_MAX_LENGTH = 2 * 1024 + 128
+const ATTESTATION_FAILURE_REASON_REDACTIONS = Object.freeze([
+  /gh[pous]_[A-Za-z0-9]{20,}/gu,
+  /github_pat_[A-Za-z0-9_]{20,}/gu,
+  /npm_[A-Za-z0-9]{20,}/gu,
+  /Bearer\s+\S+/gu,
+  /authorization:\s*\S+(?:\s+\S+)?/giu,
+  /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
+])
+
+/** Bounds and re-redacts a verifier-supplied reason before it reaches an Error message. */
+function attestationFailureReason(value) {
+  if (typeof value !== "string") return "(no reason)"
+  let text = Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0)
+    return codePoint < 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character
+  }).join("")
+  for (const pattern of ATTESTATION_FAILURE_REASON_REDACTIONS) {
+    text = text.replace(pattern, "[redacted]")
+  }
+  text = text.replace(/\s+/gu, " ").trim()
+  if (text.length > ATTESTATION_FAILURE_REASON_MAX_LENGTH) {
+    text = `${text.slice(0, ATTESTATION_FAILURE_REASON_MAX_LENGTH - 1)}…`
+  }
+  return text.length === 0 ? "(no reason)" : text
 }
 
 function validateMultiSubjectAttestationBundle(bytes, { manifest, attestationSet = null }) {

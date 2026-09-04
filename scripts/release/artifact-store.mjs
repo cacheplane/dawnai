@@ -32,6 +32,32 @@ const ZIP_LOCAL_SIGNATURE = 0x04034b50
 const ZIP_CENTRAL_SIGNATURE = 0x02014b50
 const ZIP_END_SIGNATURE = 0x06054b50
 const execFileAsync = promisify(execFile)
+/**
+ * Every `gh attestation verify` child gets this budget. A runner diagnostic (run 33894039805)
+ * measured ~3 s per call under GITHUB_TOKEN, so 180 s is headroom, not a fix: the v0.8.24
+ * attest (63 s) and escrow (71 s) job times were 22 sequential calls, and the escrow failures
+ * on runs 33889526426 and 33892398216 were not this timeout. Escrow now makes one call.
+ */
+const ATTESTATION_VERIFY_TIMEOUT_MS = 180_000
+const ATTESTATION_REASON_STDERR_BYTES = 2 * 1024
+const ATTESTATION_REASON_MAX_LENGTH = 2 * 1024 + 128
+const ATTESTATION_REASON_REDACTIONS = Object.freeze([
+  /gh[pous]_[A-Za-z0-9]{20,}/gu,
+  /github_pat_[A-Za-z0-9_]{20,}/gu,
+  /npm_[A-Za-z0-9]{20,}/gu,
+  /Bearer\s+\S+/gu,
+  /authorization:\s*\S+(?:\s+\S+)?/giu,
+  /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
+])
+
+// Declared before the CLI entrypoint below: this module runs `runArtifactStoreCli` during its
+// own evaluation when executed directly, so anything the verifier needs must already exist.
+class AttestationVerificationFailure extends Error {
+  constructor(reason) {
+    super(reason)
+    this.name = "AttestationVerificationFailure"
+  }
+}
 const VERIFIED_MATERIALIZATIONS = new WeakMap()
 
 export const ARTIFACT_STORE_SPARSE_FILES = Object.freeze([
@@ -491,7 +517,11 @@ function validateActionsMetadata(value, record) {
 
 function validateAttestationResult(value, subjects) {
   if (value?.status !== "VERIFIED" || !Array.isArray(value.subjects)) {
-    throw new Error("GitHub attestation verification did not succeed")
+    const reason =
+      typeof value?.reason === "string" && value.reason.length > 0
+        ? `: ${sanitizeReasonText(value.reason)}`
+        : ""
+    throw new Error(`GitHub attestation verification did not succeed${reason}`)
   }
   const normalized = value.subjects.map((subject) => {
     if (
@@ -801,6 +831,20 @@ function isAllowedLaterReceipt(name, size) {
   }
 }
 
+/**
+ * Verifies release attestations with the gh CLI.
+ *
+ * Escrow mode runs `gh attestation verify --bundle` ONCE, for the first file (the anchor),
+ * which proves the signature, the Sigstore chain, the signer workflow, and the source
+ * ref/digest of the multi-subject bundle. Every other file is then proved a member of that
+ * verified statement locally: its sha256 and name must appear among the statement subjects,
+ * the statement must carry exactly as many subjects as the input, and every per-file bundle
+ * must be byte-identical to the anchor (the escrow set replicates one bundle 22 times). This
+ * turns 22 network verifications into 1.
+ *
+ * Actions mode has no bundle to prove membership against (gh fetches each subject's
+ * attestation from the API by digest), so it stays online per file with the same budget.
+ */
 export function createCliAttestationVerifier({
   repository,
   token,
@@ -809,21 +853,20 @@ export function createCliAttestationVerifier({
 }) {
   return {
     async verify({ source, record, subjects, files, bundles }) {
-      if (!Array.isArray(files) || files.length !== subjects.length) {
-        return { status: "INVALID", subjects: [] }
+      if (!Array.isArray(subjects) || !Array.isArray(files) || files.length !== subjects.length) {
+        return invalidAttestationResult("attestation subject and file counts differ")
       }
+      if (files.length === 0) return invalidAttestationResult("no attestation subjects to verify")
       const bundlesByName = new Map(
         Array.isArray(bundles) ? bundles.map((bundle) => [bundle.name, bundle]) : [],
       )
       const directory = await fileSystem.mkdtemp(path.join(os.tmpdir(), "dawn-attest-"))
       try {
-        for (const file of files) {
+        const verifyOnline = async (file, bundle) => {
           const target = path.join(directory, file.name)
           await fileSystem.writeFile(target, file.bytes, { flag: "wx" })
           let bundlePath
-          if (source === "escrow") {
-            const bundle = bundlesByName.get(`${file.name}.intoto.jsonl`)
-            if (bundle === undefined) return { status: "INVALID", subjects: [] }
+          if (bundle !== undefined) {
             bundlePath = path.join(directory, bundle.name)
             await fileSystem.writeFile(bundlePath, bundle.bytes, { flag: "wx" })
           }
@@ -834,20 +877,177 @@ export function createCliAttestationVerifier({
             record,
             ...(bundlePath === undefined ? {} : { bundlePath }),
           })
-          await runGh(args, {
-            env: { ...process.env, GH_TOKEN: token },
-            timeout: 60_000,
-            killSignal: "SIGKILL",
-          })
+          try {
+            await runGh(args, {
+              env: { ...process.env, GH_TOKEN: token },
+              timeout: ATTESTATION_VERIFY_TIMEOUT_MS,
+              killSignal: "SIGKILL",
+            })
+          } catch (error) {
+            throw new AttestationVerificationFailure(describeGhFailure(file.name, error))
+          }
         }
-      } catch {
-        return { status: "INVALID", subjects: [] }
+        if (source === "escrow") {
+          const anchorFile = files[0]
+          const anchorBundle = bundlesByName.get(`${anchorFile.name}.intoto.jsonl`)
+          if (anchorBundle === undefined) {
+            throw new AttestationVerificationFailure(
+              `attestation bundle for ${anchorFile.name} is missing`,
+            )
+          }
+          await verifyOnline(anchorFile, anchorBundle)
+          proveSubjectMembership({ anchorBundle, bundlesByName, subjects, files })
+        } else {
+          for (const file of files) await verifyOnline(file, undefined)
+        }
+      } catch (error) {
+        return invalidAttestationResult(
+          error instanceof AttestationVerificationFailure
+            ? error.message
+            : `attestation verification threw: ${sanitizeReasonText(String(error?.message ?? error))}`,
+        )
       } finally {
         await fileSystem.rm(directory, { recursive: true, force: true })
       }
       return { status: "VERIFIED", subjects }
     },
   }
+}
+
+function invalidAttestationResult(reason) {
+  return { status: "INVALID", subjects: [], reason: sanitizeReasonText(reason) }
+}
+
+/**
+ * Proves every input file is a subject of the gh-verified anchor statement. The anchor
+ * bundle is one JSON line whose DSSE payload is a base64 in-toto statement with
+ * `subject[] = { name, digest: { sha256 } }`.
+ */
+function proveSubjectMembership({ anchorBundle, bundlesByName, subjects, files }) {
+  const anchorBytes = Buffer.from(anchorBundle.bytes)
+  const statementSubjects = parseAnchorStatementSubjects(anchorBytes)
+  if (statementSubjects.length !== subjects.length) {
+    throw new AttestationVerificationFailure(
+      `anchor attestation lists ${statementSubjects.length} subjects but ${subjects.length} were expected`,
+    )
+  }
+  const attested = new Set(statementSubjects.map(({ name, sha256 }) => `${name}:${sha256}`))
+  for (const [index, file] of files.entries()) {
+    const bundle = bundlesByName.get(`${file.name}.intoto.jsonl`)
+    if (bundle === undefined) {
+      throw new AttestationVerificationFailure(`attestation bundle for ${file.name} is missing`)
+    }
+    if (!Buffer.from(bundle.bytes).equals(anchorBytes)) {
+      throw new AttestationVerificationFailure(
+        `attestation bundle for ${file.name} is not byte-identical to the verified anchor`,
+      )
+    }
+    const sha256 = createHash("sha256").update(file.bytes).digest("hex")
+    const subject = subjects[index]
+    if (subject?.name !== file.name || subject.sha256 !== sha256) {
+      throw new AttestationVerificationFailure(
+        `subject ${index} does not describe file ${file.name} (${sha256})`,
+      )
+    }
+    if (!attested.has(`${file.name}:${sha256}`)) {
+      throw new AttestationVerificationFailure(
+        `${file.name} (${sha256}) is not attested by the verified anchor`,
+      )
+    }
+  }
+}
+
+function parseAnchorStatementSubjects(bytes) {
+  let statement
+  try {
+    const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    const bundle = JSON.parse(source)
+    const envelope = bundle?.dsseEnvelope
+    if (
+      envelope === null ||
+      typeof envelope !== "object" ||
+      envelope.payloadType !== "application/vnd.in-toto+json" ||
+      typeof envelope.payload !== "string"
+    ) {
+      throw new Error("bundle is not one DSSE in-toto envelope")
+    }
+    const payload = Buffer.from(envelope.payload, "base64")
+    if (payload.length === 0 || payload.toString("base64") !== envelope.payload) {
+      throw new Error("bundle payload is not canonical base64")
+    }
+    statement = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload))
+  } catch (error) {
+    throw new AttestationVerificationFailure(
+      `anchor attestation bundle is unreadable: ${sanitizeReasonText(String(error?.message ?? error))}`,
+    )
+  }
+  if (!Array.isArray(statement?.subject)) {
+    throw new AttestationVerificationFailure("anchor attestation statement has no subject list")
+  }
+  return statement.subject.map((subject, index) => {
+    const name = subject?.name
+    const sha256 = subject?.digest?.sha256
+    if (typeof name !== "string" || !SHA256_PATTERN.test(sha256)) {
+      throw new AttestationVerificationFailure(
+        `anchor attestation subject ${index} is missing a name or sha256 digest`,
+      )
+    }
+    return { name, sha256 }
+  })
+}
+
+function describeGhFailure(fileName, error) {
+  const parts = [`gh attestation verify ${fileName}:`]
+  const signal = typeof error?.signal === "string" ? error.signal : null
+  const code = error?.code
+  if (signal !== null) {
+    parts.push(
+      `signal ${signal}${
+        signal === "SIGKILL" || error?.killed === true
+          ? ` (timed out after ${ATTESTATION_VERIFY_TIMEOUT_MS}ms)`
+          : ""
+      }`,
+    )
+  } else if (Number.isInteger(code)) {
+    parts.push(`exit code ${code}`)
+  } else if (typeof code === "string") {
+    parts.push(`error ${code}`)
+  } else {
+    parts.push("failed without an exit code")
+  }
+  const stderr = error?.stderr
+  const stderrBytes =
+    typeof stderr === "string"
+      ? Buffer.from(stderr, "utf8")
+      : Buffer.isBuffer(stderr)
+        ? stderr
+        : null
+  if (stderrBytes !== null && stderrBytes.length > 0) {
+    parts.push(
+      `stderr: ${stderrBytes.subarray(0, ATTESTATION_REASON_STDERR_BYTES).toString("utf8")}`,
+    )
+  } else if (typeof error?.message === "string" && error.message.length > 0) {
+    parts.push(error.message)
+  }
+  return parts.join(" ")
+}
+
+/** Redacts credential shapes, strips control characters, collapses whitespace, and bounds length. */
+function sanitizeReasonText(value) {
+  let text = typeof value === "string" ? value : String(value)
+  text = Array.from(text, (character) => {
+    const codePoint = character.codePointAt(0)
+    return codePoint < 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character
+  }).join("")
+  text = text.replace(/https?:\/\/[^\s?#]*\?\S*/gu, (token) => token.slice(0, token.indexOf("?")))
+  for (const pattern of ATTESTATION_REASON_REDACTIONS) {
+    text = text.replace(pattern, "[redacted]")
+  }
+  text = text.replace(/\s+/gu, " ").trim()
+  if (text.length > ATTESTATION_REASON_MAX_LENGTH) {
+    text = `${text.slice(0, ATTESTATION_REASON_MAX_LENGTH - 1)}…`
+  }
+  return text.length === 0 ? "(no reason)" : text
 }
 
 export function buildAttestationVerificationArguments({

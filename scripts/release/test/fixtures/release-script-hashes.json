@@ -17,7 +17,7 @@
       "sha256": "3e171b1bc9aa79080d58087327ea2014b856ba5e6329f33de1a0a5f1b18c05d1"
     },
     "scripts/release/artifact-store.mjs": {
-      "sha256": "1b1e17298068211d5e47ac6adfe74e996b1faee91a567385d694704e3ba2de54"
+      "sha256": "69b3cd1a6c1314dbafe8fb1905bd95a4b7cafb834e40ae258b1fd981fcbe2e4a"
     },
     "scripts/release/cli.mjs": {
       "sha256": "7c7efc77a4d8269e607b09596a148519e50a6d9a51412f43013880a00d9c9329"
@@ -35,7 +35,7 @@
       "sha256": "1a931c3056826e489894f67474287b81d6518c9076abbc779ad387697b61b4a9"
     },
     "scripts/release/metadata.mjs": {
-      "sha256": "15e739bbe95a683e0254d79e7a3dfefdb5bbd7f7e18cf96545c38a09ee132be1"
+      "sha256": "1b3e9cc2e5eb187309565e46bd5ecdc2cb2d6578288a9c05a58a120dfef2020e"
     },
     "scripts/release/npm-audit.mjs": {
       "sha256": "308b723105b9549a2740456eaedf2f272c0885fdc5c530f9bfb3aa0e49314111"

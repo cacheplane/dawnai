@@ -302,6 +302,72 @@ test("escrow invokes the bounded verifier for all 22 bundles before any Release 
   assert.equal(alternateRepository.uploadCount + alternateRepository.updateCount, 0)
 })
 
+test("escrow surfaces the verifier's sanitized reason when attestation verification fails", async () => {
+  const fixture = releaseFixture()
+  const reason = "gh attestation verify manifest.json: signal SIGKILL (timed out after 180000ms)"
+  const invalid = Object.freeze({
+    async verify() {
+      return { status: "INVALID", subjects: [], reason }
+    },
+  })
+  await assert.rejects(
+    escrowCandidate({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      artifact: fixture.artifact,
+      attestationSet: fixture.attestationSet,
+      bundles: fixture.bundles,
+      publicationState: publicationState(fixture),
+      attestations: invalid,
+      github: inMemoryGitHub().github,
+    }),
+    (error) =>
+      error instanceof Error &&
+      error.message === `Attestation bundle verification failed: ${reason}`,
+  )
+
+  const throwing = Object.freeze({
+    async verify() {
+      throw new Error("gh binary is missing")
+    },
+  })
+  await assert.rejects(
+    escrowCandidate({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      artifact: fixture.artifact,
+      attestationSet: fixture.attestationSet,
+      bundles: fixture.bundles,
+      publicationState: publicationState(fixture),
+      attestations: throwing,
+      github: inMemoryGitHub().github,
+    }),
+    (error) =>
+      error instanceof Error &&
+      error.message === "Attestation bundle verification failed: gh binary is missing" &&
+      error.cause instanceof Error,
+  )
+
+  const malformedReason = Object.freeze({
+    async verify() {
+      return { status: "INVALID", subjects: [], reason: { nested: true } }
+    },
+  })
+  await assert.rejects(
+    escrowCandidate({
+      candidate: CANDIDATE,
+      record: fixture.record,
+      artifact: fixture.artifact,
+      attestationSet: fixture.attestationSet,
+      bundles: fixture.bundles,
+      publicationState: publicationState(fixture),
+      attestations: malformedReason,
+      github: inMemoryGitHub().github,
+    }),
+    /Attestation bundle verification failed: \(no reason\)/u,
+  )
+})
+
 test("publication state proves all job attempts and exact package absence before escrow", () => {
   const fixture = releaseFixture()
   const state = publicationState(fixture)
