@@ -60,8 +60,13 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for the sanitized failure detail line (scripts/release/cli.mjs): the entrypoint
 // now prints `release CLI failure detail: ...` after the unchanged code line (run
 // 33889526426 failed in escrow with only the masked INVALID_RELEASE_COMMAND).
+// Repinned for the verify-once attestation verifier (scripts/release/artifact-store.mjs and
+// metadata.mjs): escrow runs `gh attestation verify --bundle` once for the anchor (180 s
+// headroom; diagnostic run 33894039805 measured ~3 s per call) and proves the other 21
+// subjects locally instead of 22 sequential calls; INVALID results now carry a sanitized
+// reason that reaches the thrown escrow error.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "3607d3ce78dd5da379599deffc30e95aa05bb1931367c0e2874e2a1067fa447f"
+  "d707a6bc94fcfd0b050b46f1c5a9b5c829b342929556d51481aeece66434aaee"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

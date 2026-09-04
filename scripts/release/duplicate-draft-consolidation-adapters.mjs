@@ -2351,13 +2351,20 @@ function normalizeAttestationResult(value) {
   } catch {
     throw new TypeError("Attestation evidence is malformed")
   }
+  // An INVALID result may carry the verifier's sanitized `reason` (gh exit code, signal, and
+  // redacted stderr); VERIFIED results never do.
+  const hasReason = isPlainRecord(snapshot) && Object.hasOwn(snapshot, "reason")
   if (
     !isPlainRecord(snapshot) ||
-    !hasExactKeys(snapshot, ["status", "subjects"]) ||
+    !hasExactKeys(
+      snapshot,
+      hasReason ? ["status", "subjects", "reason"] : ["status", "subjects"],
+    ) ||
     !["VERIFIED", "INVALID"].includes(snapshot.status) ||
     !Array.isArray(snapshot.subjects) ||
     snapshot.subjects.length > 22 ||
-    (snapshot.status === "INVALID" && snapshot.subjects.length !== 0)
+    (snapshot.status === "INVALID" && snapshot.subjects.length !== 0) ||
+    (hasReason && (snapshot.status !== "INVALID" || !safeBoundedString(snapshot.reason, 4_096)))
   ) {
     throw new TypeError("Attestation evidence is malformed")
   }
@@ -2375,7 +2382,11 @@ function normalizeAttestationResult(value) {
     names.add(subject.name)
     return { name: subject.name, sha256: subject.sha256 }
   })
-  return deepFreeze({ status: snapshot.status, subjects })
+  return deepFreeze({
+    status: snapshot.status,
+    subjects,
+    ...(hasReason ? { reason: snapshot.reason } : {}),
+  })
 }
 
 function containsProxy(value, seen = new Set()) {

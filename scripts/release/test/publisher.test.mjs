@@ -758,7 +758,9 @@ test("the exact sparse production sequence resolves Actions and expired escrow i
       ),
     )
     const ghCalls = commands.filter(({ command }) => command === "gh")
-    assert.equal(ghCalls.length, 22)
+    // Actions mode stays online per file; escrow verifies the anchor bundle once and proves
+    // the remaining 21 subjects locally against that verified statement.
+    assert.equal(ghCalls.length, scenario === "escrow" ? 1 : 22)
     assert.ok(
       ghCalls.every(
         ({ args }) =>
@@ -913,9 +915,11 @@ async function sparseProductionFixture(t) {
   for (const file of [
     { name: "release-record.json", bytes: canonicalReleaseRecordBytes(record) },
     ...artifactFiles,
+    // The escrow replicates one multi-subject bundle per file; the verifier proves every
+    // file's membership in this statement locally after gh verifies the anchor once.
     ...artifactFiles.map((file) => ({
       name: `${file.name}.intoto.jsonl`,
-      bytes: Buffer.from(`bundle:${file.name}`),
+      bytes: multiSubjectBundleBytes(artifactFiles),
     })),
   ]) {
     escrowAssets.push({
@@ -1771,4 +1775,34 @@ function tarballBytes(name) {
 
 function tarballStem(name) {
   return name.startsWith("@") ? name.slice(1).replaceAll("/", "-") : name
+}
+
+function multiSubjectBundleBytes(files) {
+  const statement = {
+    _type: "https://in-toto.io/Statement/v1",
+    subject: files.map((file) => ({
+      name: file.name,
+      digest: { sha256: createHash("sha256").update(file.bytes).digest("hex") },
+    })),
+    predicateType: "https://slsa.dev/provenance/v1",
+    predicate: {
+      runDetails: {
+        metadata: {
+          invocationId: "https://github.com/cacheplane/dawnai/actions/runs/1/attempts/1",
+        },
+      },
+    },
+  }
+  return Buffer.from(
+    `${JSON.stringify({
+      mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+      dsseEnvelope: {
+        payloadType: "application/vnd.in-toto+json",
+        payload: Buffer.from(JSON.stringify(statement), "utf8").toString("base64"),
+        signatures: [{ sig: Buffer.from("signature", "utf8").toString("base64") }],
+      },
+      verificationMaterial: {},
+    })}\n`,
+    "utf8",
+  )
 }
