@@ -228,3 +228,86 @@ jobs:
           echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v4.out"
           echo "===== STDERR ====="; cat "$RUNNER_TEMP/v4.err"
           echo "=================="
+
+  # Reproduces the escrow job up to its FIRST write under the Actions token.
+  # Every GitHub writer method is replaced by a sentinel that throws, so the
+  # run can never create/modify a Release; reads, the 22 attestation
+  # verifications, and the publication-state capture all run for real.
+  escrow-sentinel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    steps:
+      - name: Checkout main (scripts/release with PR #556 failure detail)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Install release CLI runtime dependency (mirrors release.yml)
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+
+      - name: Download runtime artifact by name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-runtime-${{ inputs.run_id || '33892398216' }}-1
+          run-id: ${{ inputs.run_id || '33892398216' }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/runtime
+
+      - name: Download attestation artifact by name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.attestation_artifact || 'release-attestation-33892398216-1' }}
+          run-id: ${{ inputs.run_id || '33892398216' }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/attestation
+
+      - name: Show inputs
+        run: |
+          echo "workspace HEAD: $GITHUB_SHA (checked out ref main)"
+          ls -la "$RUNNER_TEMP/runtime" "$RUNNER_TEMP/attestation"
+          ls "$RUNNER_TEMP/runtime/payload" | wc -l
+          ls "$RUNNER_TEMP/attestation/bundles" | wc -l
+          cat "$RUNNER_TEMP/runtime/candidate.json"; echo
+          cat "$RUNNER_TEMP/runtime/release-record.json"; echo
+
+      - name: Run escrow with sentinel writer (read-only)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY_ID: "1210070282"
+          ART: ${{ runner.temp }}
+        run: |
+          cat > "$GITHUB_WORKSPACE/diag-escrow-sentinel.mjs" <<'JS'
+          import { runReleaseCli } from "./scripts/release/cli.mjs"
+          import { createGitHubReader } from "./scripts/release/adapters/github.mjs"
+          const a = process.env.ART
+          const reader = createGitHubReader({ owner: "cacheplane", repo: "dawnai", repositoryId: process.env.GITHUB_REPOSITORY_ID, token: process.env.GITHUB_TOKEN })
+          const block = (k) => Object.freeze(async function blocked() { const e = new Error(`SENTINEL WRITE BLOCKED: ${k}`); e.code = "SENTINEL_WRITE"; throw e })
+          const writer = Object.freeze({ createDraftRelease: block("createDraftRelease"), updateDraftReleaseIfCurrent: block("updateDraftReleaseIfCurrent"), uploadAssetIfAbsentAndEqual: block("uploadAssetIfAbsentAndEqual"), publishReleaseIfCurrent: block("publishReleaseIfCurrent") })
+          const started = Date.now()
+          const redact = (s) => String(s).replace(/gh[pous]_[A-Za-z0-9]{20,}/g, "[redacted]")
+          try {
+            await runReleaseCli(["escrow","--candidate",`${a}/runtime/candidate.json`,"--record",`${a}/runtime/release-record.json`,"--artifact-dir",`${a}/runtime/payload`,"--attestation-set",`${a}/attestation/attestation-set.json`,"--attestation-bundles-dir",`${a}/attestation/bundles`], { github: { reader, writer } })
+            console.log("ESCROW RETURNED WITHOUT ERROR (unexpected)")
+          } catch (e) {
+            const show = (x, d=0) => { if (!x || d>4) return; console.log("  ".repeat(d) + (x.name||"Error") + ": " + redact(x.message) + (x.code?` [code=${x.code}]`:"")); show(x.cause, d+1) }
+            show(e); console.log(redact(e.stack||"").split("\n").slice(1,6).join("\n"))
+          } finally {
+            console.log(`elapsed_ms=${Date.now() - started}`)
+          }
+          JS
+          time node "$GITHUB_WORKSPACE/diag-escrow-sentinel.mjs"
