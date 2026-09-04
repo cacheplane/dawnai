@@ -63,7 +63,8 @@ jobs:
 
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A fully green validate run takes ~26 minutes; 30 left no margin for slow runners.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
