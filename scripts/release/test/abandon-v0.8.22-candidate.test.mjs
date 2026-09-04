@@ -31,6 +31,7 @@ import {
 import {
   sha256 as adapterSha256,
   createDuplicateDraftRecoveryReader,
+  RECOVERY_MAX_ASSET_BYTES,
 } from "../duplicate-draft-recovery-adapters.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
 import { canonicalReleaseBody, parseReleaseMarker, releaseBodySha256 } from "../metadata.mjs"
@@ -1688,6 +1689,10 @@ test("the live reader addresses the manifest asset by the record's id and digest
   assert.equal(downloads.length, 1)
   assert.equal(downloads[0].assetId, manifest.id)
   assert.equal(downloads[0].expectedSha256, manifest.sha256)
+  // The real download boundary refuses any requested maximum above its own
+  // asset cap, so a reader that asks for more can never read the manifest.
+  assert.ok(downloads[0].maximumBytes <= RECOVERY_MAX_ASSET_BYTES)
+  assert.ok(downloads[0].maximumBytes >= sealedManifestBytes().byteLength)
 
   for (const assets of [
     escrowAssets.filter(({ name }) => name !== "manifest.json"),

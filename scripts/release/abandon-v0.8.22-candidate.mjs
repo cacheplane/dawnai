@@ -22,6 +22,7 @@ import {
 import {
   createDuplicateDraftRecoveryReader,
   parseCanonicalRecoveryReceipt,
+  RECOVERY_MAX_ASSET_BYTES,
   sha256,
 } from "./duplicate-draft-recovery-adapters.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
@@ -101,7 +102,16 @@ export const FINAL_AUTHORIZATION_RECEIPT_SHA256 =
 const TOMBSTONE_ASSET_NAME = "abandonment.json"
 const CANONICAL_DRAFT_TAG_NAME = "untagged-be0ff4bee4ba43b521a9"
 const MANIFEST_ASSET_NAME = "manifest.json"
-const MAX_MANIFEST_ASSET_BYTES = 1024 * 1024
+/**
+ * The sealed manifest is downloaded through the terminal writer's canonical
+ * asset boundary, which refuses any requested maximum above its OWN asset cap
+ * — so this bound is derived from that cap rather than chosen independently. An
+ * independent number is not merely redundant: the first production rerun asked
+ * for 1 MiB and was refused with "Canonical asset download request is invalid"
+ * before any read. The real `manifest.json` asset is 11,928 bytes, so the
+ * boundary's 64 KiB cap leaves better than five times headroom.
+ */
+const MAX_MANIFEST_ASSET_BYTES = RECOVERY_MAX_ASSET_BYTES
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const MAX_REASON_BYTES = 4_096

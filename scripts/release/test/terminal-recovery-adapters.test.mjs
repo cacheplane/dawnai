@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
+import { createTerminalRecoveryReader } from "../abandon-v0.8.22-candidate.mjs"
 import {
   createDuplicateRecoveryWriterContext,
+  RECOVERY_MAX_ASSET_BYTES,
   readCurrentWriterObservation,
   requestRecoveryJson,
 } from "../duplicate-draft-recovery-adapters.mjs"
@@ -18,6 +20,7 @@ import {
   normalizeTerminalReleaseSnapshot,
   TOMBSTONE_ASSET_NAME,
 } from "../terminal-recovery-adapters.mjs"
+import { sealedManifestBytes } from "./support/terminal-record-fixture.mjs"
 import {
   binaryResponse,
   canonicalizeForTest,
@@ -1009,4 +1012,127 @@ test("the writer refuses a download bounded below the listed asset size", async 
       writer.downloadCanonicalAsset({ assetId, expectedSha256: sha256(bytes), maximumBytes: 1 }),
     { code: "CANONICAL_ASSET_CONFLICT" },
   )
+})
+
+/**
+ * The production canonical draft's `manifest.json` asset is 11,928 bytes. The
+ * fixture's sealed manifest is 11,845 — the same order, built the same way — so
+ * these tests exercise the real payload size rather than a toy one.
+ */
+function manifestSizedFixture(bytes) {
+  const fixture = terminalFixture()
+  const rawAssets = fixture.rawAssets.map((asset, index) =>
+    index === 0
+      ? {
+          ...asset,
+          name: "manifest.json",
+          digest: `sha256:${sha256(bytes)}`,
+          size: bytes.byteLength,
+        }
+      : asset,
+  )
+  return { fixture: { ...fixture, rawAssets }, assetId: rawAssets[0].id, bytes }
+}
+
+test("the writer downloads a realistically sized sealed manifest and one exactly at its cap", async (t) => {
+  const cases = [
+    ["a production-sized sealed manifest", sealedManifestBytes()],
+    ["an asset of exactly the canonical asset cap", Buffer.alloc(RECOVERY_MAX_ASSET_BYTES, 0x61)],
+  ]
+  for (const [name, bytes] of cases) {
+    await t.test(name, async () => {
+      const { fixture, assetId } = manifestSizedFixture(bytes)
+      const writer = createTerminalRecoveryWriter({
+        token: TOKEN,
+        fetchImpl: routingFetch([], downloadRoute(fixture, new Map([[assetId, bytes]]))),
+      })
+
+      const downloaded = await writer.downloadCanonicalAsset({
+        assetId,
+        expectedSha256: sha256(bytes),
+        // Exactly what the reader may ask for: the boundary's own asset cap.
+        maximumBytes: RECOVERY_MAX_ASSET_BYTES,
+      })
+
+      assert.equal(downloaded.byteLength, bytes.byteLength)
+      assert.equal(sha256(downloaded), sha256(bytes))
+    })
+  }
+})
+
+test("the writer refuses a requested maximum above its own canonical asset cap", async () => {
+  // The defect the first production rerun hit: the caller asked for a maximum
+  // the transport can never serve, so the request was invalid before any read.
+  const bytes = sealedManifestBytes()
+  const { fixture, assetId } = manifestSizedFixture(bytes)
+  const calls = []
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch(calls, downloadRoute(fixture, new Map([[assetId, bytes]]))),
+  })
+
+  await assert.rejects(
+    () =>
+      writer.downloadCanonicalAsset({
+        assetId,
+        expectedSha256: sha256(bytes),
+        maximumBytes: RECOVERY_MAX_ASSET_BYTES + 1,
+      }),
+    /download request is invalid/iu,
+  )
+  assert.deepEqual(calls, [], "an unservable request never reaches the network")
+})
+
+test("the writer refuses a listed asset larger than the canonical asset cap", async () => {
+  const bytes = Buffer.alloc(RECOVERY_MAX_ASSET_BYTES + 1, 0x62)
+  const { fixture, assetId } = manifestSizedFixture(bytes)
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch([], downloadRoute(fixture, new Map([[assetId, bytes]]))),
+  })
+
+  await assert.rejects(
+    () =>
+      writer.downloadCanonicalAsset({
+        assetId,
+        expectedSha256: sha256(bytes),
+        maximumBytes: RECOVERY_MAX_ASSET_BYTES,
+      }),
+    { code: "CANONICAL_ASSET_CONFLICT" },
+  )
+})
+
+test("the terminal reader reads the sealed manifest through the real writer boundary", async () => {
+  // The regression that fakes could not catch: the reader's requested maximum
+  // must be one the real download boundary accepts.
+  const bytes = sealedManifestBytes()
+  const { fixture, assetId } = manifestSizedFixture(bytes)
+  const reader = createTerminalRecoveryReader({
+    root: "/workspace",
+    token: TOKEN,
+    run: async () => "",
+    dependencies: {
+      createDuplicateReader: () => ({}),
+      createTerminalWriter: (options) =>
+        createTerminalRecoveryWriter({
+          ...options,
+          fetchImpl: routingFetch([], downloadRoute(fixture, new Map([[assetId, bytes]]))),
+        }),
+    },
+  })
+
+  const downloaded = await reader.readCanonicalManifest({
+    escrowAssets: [{ id: assetId, name: "manifest.json", sha256: sha256(bytes) }],
+  })
+
+  assert.equal(downloaded.byteLength, bytes.byteLength)
+  assert.equal(sha256(downloaded), sha256(bytes))
+})
+
+test("the shared recovery asset cap stays exactly 64 KiB for the duplicate boundary", () => {
+  // The terminal manifest bound is DERIVED from this constant, so widening it
+  // to make a bigger manifest fit would silently widen the duplicate-draft
+  // archive and evidence caps too. Pin it so that trade is never made by
+  // accident.
+  assert.equal(RECOVERY_MAX_ASSET_BYTES, 64 * 1024)
 })
