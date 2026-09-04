@@ -1518,7 +1518,12 @@ function inventoryFromManifest(inventory, manifest) {
   }
 }
 
-function parseProductionManifest(bytes, { candidate }) {
+/**
+ * Parse the sealed manifest exactly as production observation does. Exported so
+ * the one-time terminal recovery command rebuilds the ESCROWED Release body
+ * through the very same parser the observer renders it with.
+ */
+export function parseProductionManifest(bytes, { candidate }) {
   return parseSealedReleaseManifest(bytes, { candidate })
 }
 

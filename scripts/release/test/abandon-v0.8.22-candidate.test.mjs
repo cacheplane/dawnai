@@ -19,6 +19,7 @@ import {
   runAbandonCli,
   sha256,
   TERMINAL_RECOVERY_POLICY,
+  TerminalRecoveryError,
 } from "../abandon-v0.8.22-candidate.mjs"
 import {
   canonicalRecoveryNotice,
@@ -43,10 +44,12 @@ import {
   terminalRecordPath,
 } from "../terminal-record-store.mjs"
 import {
-  attestationSet,
   predecessorMarker,
+  sealedManifest,
+  sealedManifestBytes,
+  sealedMarker,
+  sealedRecord,
   TAG_OBJECT_SHA,
-  record as terminalRecord,
 } from "./support/terminal-record-fixture.mjs"
 import {
   binaryResponse,
@@ -113,8 +116,14 @@ test("parses only the exact capture and apply grammars", () => {
   }
 })
 
+/**
+ * The real ESCROWED body: rendered WITH the sealed manifest, so its package
+ * table is the three-column form production wrote. Rebuilding it from the
+ * marker alone produces different bytes, which is exactly the defect the apply
+ * path must not have.
+ */
 function escrowBody() {
-  return canonicalReleaseBody({ marker: predecessorMarker(), manifest: null })
+  return canonicalReleaseBody({ marker: sealedMarker(), manifest: sealedManifest() })
 }
 
 function attachingBody() {
@@ -132,7 +141,7 @@ function attachingBody() {
 
 /** The fixture record, bound to the escrow body the fake reader serves. */
 function boundRecord() {
-  const base = terminalRecord()
+  const base = sealedRecord()
   return {
     ...base,
     predecessor: { ...base.predecessor, bodySha256: releaseBodySha256(escrowBody()) },
@@ -208,6 +217,12 @@ function fakeReader({
     async readOperatorLogin() {
       return "blove"
     },
+    async readCanonicalManifest({ escrowAssets } = {}) {
+      const manifest = escrowAssets?.find(({ name }) => name === "manifest.json")
+      assert.ok(manifest, "the manifest asset is addressed from the record's escrow assets")
+      assert.equal(manifest.sha256, sealedMarker().manifestSha256)
+      return sealedManifestBytes()
+    },
   }
 }
 
@@ -230,7 +245,7 @@ test("capture seals a canonical record from fresh reads", async () => {
     parsed.predecessor.bodySha256,
     createHash("sha256").update(escrowBody()).digest("hex"),
   )
-  assert.deepEqual(parsed.predecessor.artifact.attestationSet, attestationSet())
+  assert.deepEqual(parsed.predecessor.artifact.attestationSet, sealedMarker().attestationSet)
   assert.equal(parsed.evidence.escrowAssets.length, TERMINAL_RECOVERY_POLICY.baseAssetCount)
   assert.equal(
     parsed.evidence.duplicateRecovery.finalAuthorizationReceiptSha256,
@@ -572,10 +587,16 @@ const SIGNED_HOST = "https://objects.githubusercontent.com/recovery"
 function duplicateFixture(
   releaseId,
   tagName,
-  { receiptDigestDrift = false, receiptBoundTo = releaseId } = {},
+  {
+    receiptDigestDrift = false,
+    receiptBoundTo = releaseId,
+    receiptBaseAssetSetSha256 = null,
+    receiptOriginalBodySha256 = null,
+  } = {},
 ) {
   const originalBody = escrowBody()
   const originalBodySha256 = sha256Hex(Buffer.from(originalBody, "utf8"))
+  const receiptBodySha256 = receiptOriginalBodySha256 ?? originalBodySha256
   const archiveName = originalBodyAssetName(releaseId, originalBodySha256)
   const receiptName = recoveryReceiptAssetName(releaseId)
   // The real duplicate-draft recovery wrote a canonical receipt onto each
@@ -588,11 +609,11 @@ function duplicateFixture(
     recoveryCommit: REVIEWED,
     canonicalReleaseId: TERMINAL_RECOVERY_POLICY.canonicalReleaseId,
     duplicateReleaseId: receiptBoundTo,
-    originalBodySha256,
-    baseAssetSetSha256: predecessorMarker().baseAssetSetSha256,
+    originalBodySha256: receiptBodySha256,
+    baseAssetSetSha256: receiptBaseAssetSetSha256 ?? sealedMarker().baseAssetSetSha256,
     archiveAsset: {
-      name: originalBodyAssetName(receiptBoundTo, originalBodySha256),
-      sha256: originalBodySha256,
+      name: originalBodyAssetName(receiptBoundTo, receiptBodySha256),
+      sha256: receiptBodySha256,
     },
   })
   const receiptSha256 = sha256Hex(receiptBytes)
@@ -1469,7 +1490,7 @@ test("the runner refuses a record that differs from the reviewed commit", async 
   })
   assert.equal(result, 1)
   assert.deepEqual(applied, [], "the drifted record is never applied")
-  assert.equal(stderr.text, "Terminal recovery failed.\n")
+  assert.equal(stderr.text, "Terminal recovery failed. (code: RECORD_DISK_GIT_MISMATCH)\n")
   await assert.rejects(readFile(path.join(root, APPLY_PATH)))
 })
 
@@ -1567,4 +1588,229 @@ test("the runner refuses to apply against a foreign reviewed merge authority", a
   assert.equal(result, 1)
   assert.deepEqual(applied, [], "apply never runs without proven merge authority")
   await assert.rejects(readFile(path.join(root, APPLY_PATH)))
+})
+
+test("the reconstructed escrow body is the manifest-rendered body, not the marker-only one", () => {
+  // Guards the shape of the fixture itself: if these two ever agreed, the
+  // reconstruction test below would prove nothing.
+  assert.notEqual(escrowBody(), canonicalReleaseBody({ marker: sealedMarker(), manifest: null }))
+  assert.ok(escrowBody().includes("| Package | Tarball | SHA-256 |"))
+})
+
+test("apply reruns against an abandoned draft by rebuilding the body from the manifest asset", async () => {
+  const { bytes, snapshot, reader } = applyFixture({ state: "abandoned" })
+  const manifestReads = []
+  reader.readCanonicalManifest = async ({ escrowAssets }) => {
+    manifestReads.push(escrowAssets.find(({ name }) => name === "manifest.json"))
+    return sealedManifestBytes()
+  }
+  const calls = []
+  const receipt = await applyTerminalRecord({
+    recordBytes: bytes,
+    reviewedCommit: REVIEWED,
+    reader,
+    createWriter: () => stampingWriter(calls, snapshot),
+    observer: async () => terminalObservation(),
+    now: () => APPLY_NOW,
+    wait: async () => {},
+  })
+  assert.equal(receipt.outcome, "preexisting-abandoned")
+  assert.deepEqual(calls, [], "a rerun on an abandoned draft writes nothing")
+  assert.equal(manifestReads.length, 1)
+  assert.equal(manifestReads[0].sha256, sealedMarker().manifestSha256)
+})
+
+test("apply refuses a manifest asset that is not the one the record sealed", async () => {
+  const { bytes, snapshot, reader } = applyFixture({ state: "abandoned" })
+  // Well-formed, parseable, candidate-consistent — but a different manifest, so
+  // the body it renders cannot hash to the recorded escrow body digest.
+  reader.readCanonicalManifest = async () => {
+    const other = sealedManifest()
+    return Buffer.from(
+      `${JSON.stringify({ ...other, packages: other.packages.slice().reverse() })}\n`,
+      "utf8",
+    )
+  }
+  await assert.rejects(
+    applyTerminalRecord({
+      recordBytes: bytes,
+      reviewedCommit: REVIEWED,
+      reader,
+      createWriter: () => stampingWriter([], snapshot),
+      observer: async () => terminalObservation(),
+      now: () => APPLY_NOW,
+      wait: async () => {},
+    }),
+    { name: "TerminalRecoveryError", code: "ESCROW_BODY_IRREPRODUCIBLE" },
+  )
+})
+
+test("the live reader addresses the manifest asset by the record's id and digest", async () => {
+  const downloads = []
+  const reader = createTerminalRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED}\n`,
+    dependencies: {
+      createDuplicateReader: () => ({}),
+      createTerminalWriter: () => ({
+        async readCanonicalSnapshot() {},
+        async downloadCanonicalAsset(input) {
+          downloads.push(input)
+          return sealedManifestBytes()
+        },
+      }),
+    },
+  })
+  const escrowAssets = boundRecord().evidence.escrowAssets
+  const manifest = escrowAssets.find(({ name }) => name === "manifest.json")
+
+  assert.deepEqual(await reader.readCanonicalManifest({ escrowAssets }), sealedManifestBytes())
+  assert.equal(downloads.length, 1)
+  assert.equal(downloads[0].assetId, manifest.id)
+  assert.equal(downloads[0].expectedSha256, manifest.sha256)
+
+  for (const assets of [
+    escrowAssets.filter(({ name }) => name !== "manifest.json"),
+    [...escrowAssets, { id: 1, name: "manifest.json", sha256: "f".repeat(64) }],
+    undefined,
+  ]) {
+    await assert.rejects(reader.readCanonicalManifest({ escrowAssets: assets }), {
+      code: "MANIFEST_ASSET_MISSING",
+    })
+  }
+  assert.equal(downloads.length, 1, "no download is attempted without exactly one manifest asset")
+})
+
+test("the receipt records the apply run's own authority alongside the capture commit", async () => {
+  const APPLY_COMMIT = "7".repeat(40)
+  assert.notEqual(APPLY_COMMIT, REVIEWED)
+  const { record, bytes, snapshot, reader } = applyFixture()
+  const receipt = await applyTerminalRecord({
+    recordBytes: bytes,
+    reviewedCommit: APPLY_COMMIT,
+    reader,
+    createWriter: () => stampingWriter([], snapshot),
+    observer: async () => terminalObservation(),
+    now: () => APPLY_NOW,
+    wait: async () => {},
+  })
+  assert.deepEqual(receipt.authority, { reviewedCommit: APPLY_COMMIT, operator: "blove" })
+  assert.equal(receipt.record.reviewedCommit, record.authority.reviewedCommit)
+  assert.equal(receipt.record.reviewedCommit, REVIEWED)
+})
+
+test("the live reader rejects a receipt foreign in any single bound field", async () => {
+  const [first, second] = TERMINAL_RECOVERY_POLICY.duplicates
+  const cases = [
+    ["duplicateReleaseId", { receiptBoundTo: second.releaseId }],
+    ["originalBodySha256", { receiptOriginalBodySha256: "a".repeat(64) }],
+    ["baseAssetSetSha256", { receiptBaseAssetSetSha256: "b".repeat(64) }],
+  ]
+  for (const [field, overrides] of cases) {
+    const fixtures = [
+      duplicateFixture(first.releaseId, first.tagName, overrides),
+      duplicateFixture(second.releaseId, second.tagName),
+    ]
+    const reader = createTerminalRecoveryReader({
+      root: "/workspace",
+      run: async () => `${REVIEWED}\n`,
+      dependencies: {
+        createDuplicateReader: () => duplicateRoutingReader(fixtures, []),
+        createTerminalWriter: () => ({ async readCanonicalSnapshot() {} }),
+      },
+    })
+    await assert.rejects(
+      reader.readDuplicateRecoveryReceipts({ expectedOriginalBody: escrowBody() }),
+      { code: "DUPLICATE_RECEIPT_UNBOUND" },
+      field,
+    )
+  }
+})
+
+test("the runner names a failure that left production changed", async (t) => {
+  const bytes = canonicalTerminalRecordBytes(boundRecord())
+  const root = await createPrivateRepository(t, { recordBytes: bytes })
+  const stderr = sink()
+  const failure = new TerminalRecoveryError(
+    "NOT_ABANDONED_AFTER_APPLY",
+    "Terminal recovery conflict: draft is not abandoned after apply",
+  )
+  Object.defineProperty(failure, "mutated", { value: true, enumerable: false })
+  const result = await runAbandonCli({
+    argv: applyArgv(root),
+    cwd: root,
+    environment: { GITHUB_TOKEN: "apply-token" },
+    stdout: sink(),
+    stderr,
+    dependencies: {
+      createReader: () => cliReader(),
+      createWriter: () => Object.freeze({ kind: "writer" }),
+      createObserver: () => async () => terminalObservation(),
+      applyTerminalRecord: async () => {
+        throw failure
+      },
+    },
+  })
+  assert.equal(result, 1)
+  assert.equal(
+    stderr.text,
+    "Terminal recovery failed after mutation; re-run apply to classify and finish. (code: NOT_ABANDONED_AFTER_APPLY)\n",
+  )
+})
+
+test("apply marks a post-write failure as mutated and an ambiguous first write too", async () => {
+  const inert = applyFixture()
+  await assert.rejects(
+    applyTerminalRecord({
+      recordBytes: inert.bytes,
+      reviewedCommit: REVIEWED,
+      reader: inert.reader,
+      createWriter: () => ({
+        async uploadTombstoneIfAbsentAndEqual(input) {
+          inert.snapshot.assets = [
+            ...inert.snapshot.assets,
+            {
+              id: 777,
+              name: "abandonment.json",
+              sha256: input.sha256,
+              size: input.bytes.byteLength,
+            },
+          ]
+          return {
+            assetId: 777,
+            name: "abandonment.json",
+            status: "uploaded",
+            sha256: input.sha256,
+          }
+        },
+        async abandonCandidateIfCurrent() {
+          return { atomic: false, outcome: "performed" }
+        },
+      }),
+      observer: async () => terminalObservation(),
+      now: () => APPLY_NOW,
+      wait: async () => {},
+    }),
+    (error) => error.mutated === true && error.code === "NOT_ABANDONED_AFTER_APPLY",
+  )
+
+  const ambiguous = applyFixture()
+  await assert.rejects(
+    applyTerminalRecord({
+      recordBytes: ambiguous.bytes,
+      reviewedCommit: REVIEWED,
+      reader: ambiguous.reader,
+      createWriter: () => ({
+        async uploadTombstoneIfAbsentAndEqual() {
+          throw Object.assign(new Error("ambiguous"), { code: "MUTATION_OUTCOME_AMBIGUOUS" })
+        },
+      }),
+      observer: async () => terminalObservation(),
+      now: () => APPLY_NOW,
+      wait: async () => {},
+    }),
+    // No transition was recorded, but the request went out: the operator must
+    // still be told production may have changed.
+    (error) => error.mutated === true,
+  )
 })

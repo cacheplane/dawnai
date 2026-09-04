@@ -17,6 +17,7 @@ import {
   observeIssuedRecoveryMutation,
   RECOVERY_API_ORIGIN,
   RECOVERY_ASSET_NAME_PATTERN,
+  RECOVERY_MAX_ASSET_BYTES,
   RECOVERY_OWNER,
   RECOVERY_REPOSITORY,
   RECOVERY_SHA256_PATTERN,
@@ -268,6 +269,78 @@ export function createTerminalRecoveryWriter(options = {}) {
     async readCanonicalSnapshot() {
       const current = await readCurrentWriterObservation(context, CANONICAL_RELEASE_ID, undefined)
       return current.snapshot
+    },
+
+    /**
+     * Download one asset of the canonical draft through this boundary's own
+     * strict-credential context.
+     *
+     * The asset ID is not taken on trust: the current canonical snapshot is
+     * re-read and the ID must be one of the assets that snapshot actually
+     * lists, so this method can never be steered at a Release, or an asset,
+     * outside the single draft the writer is pinned to. The listed digest, the
+     * listed size, and the caller's expected digest must all agree with the
+     * downloaded bytes, and the bytes must not contain the credential.
+     */
+    async downloadCanonicalAsset(input) {
+      const args = snapshotExactWriterInput(
+        input,
+        ["assetId", "expectedSha256", "maximumBytes"],
+        "canonical asset download",
+      )
+      if (
+        !Number.isSafeInteger(args.assetId) ||
+        args.assetId < 1 ||
+        typeof args.expectedSha256 !== "string" ||
+        !RECOVERY_SHA256_PATTERN.test(args.expectedSha256) ||
+        !Number.isSafeInteger(args.maximumBytes) ||
+        args.maximumBytes < 1 ||
+        args.maximumBytes > RECOVERY_MAX_ASSET_BYTES
+      ) {
+        throw new TypeError("Canonical asset download request is invalid")
+      }
+      const current = await readCurrentWriterObservation(context, CANONICAL_RELEASE_ID, undefined)
+      const asset = current.snapshot.assets.find(({ id }) => id === args.assetId) ?? null
+      if (asset === null) {
+        writeFail(
+          "CANONICAL_ASSET_NOT_LISTED",
+          "Requested asset is not listed on the canonical draft",
+        )
+      }
+      if (asset.sha256 !== args.expectedSha256 || asset.size > args.maximumBytes) {
+        writeFail("CANONICAL_ASSET_CONFLICT", "Canonical draft asset digest or size is not exact")
+      }
+      let downloaded
+      try {
+        downloaded = await context.github.downloadReleaseAsset({
+          assetId: args.assetId,
+          maximumBytes: asset.size,
+        })
+      } catch {
+        writeFail("CANONICAL_ASSET_UNAVAILABLE", "Canonical draft asset could not be downloaded")
+      }
+      if (downloaded?.status !== "PRESENT" || downloaded.code !== null) {
+        writeFail("CANONICAL_ASSET_UNAVAILABLE", "Canonical draft asset could not be downloaded")
+      }
+      const encoded = downloaded.contentBase64
+      if (
+        typeof encoded !== "string" ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)
+      ) {
+        writeFail("CANONICAL_ASSET_CONFLICT", "Canonical draft asset bytes are not exact")
+      }
+      const bytes = Buffer.from(encoded, "base64")
+      if (
+        bytes.toString("base64") !== encoded ||
+        bytes.byteLength !== asset.size ||
+        sha256(bytes) !== args.expectedSha256
+      ) {
+        writeFail("CANONICAL_ASSET_CONFLICT", "Canonical draft asset bytes are not exact")
+      }
+      if (bytes.includes(Buffer.from(context.token, "utf8"))) {
+        writeFail("CANONICAL_ASSET_CREDENTIAL_CONFLICT", "Canonical draft asset leaks credentials")
+      }
+      return bytes
     },
 
     async uploadTombstoneIfAbsentAndEqual(input) {
@@ -574,6 +647,7 @@ export function assertTerminalRecoveryWriter(value) {
     !Object.isFrozen(value) ||
     !sameJson(Object.keys(value).sort(), [
       "abandonCandidateIfCurrent",
+      "downloadCanonicalAsset",
       "readCanonicalSnapshot",
       "uploadTombstoneIfAbsentAndEqual",
     ]) ||

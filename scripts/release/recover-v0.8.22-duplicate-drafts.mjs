@@ -249,6 +249,9 @@ const RECOVERY_ERROR_NAMES = new Set([
   "DuplicateDraftRecoveryCaptureError",
   "DuplicateDraftRecoveryReadError",
   "DuplicateDraftRecoveryWriteError",
+  // The one-time terminal recovery command's own conflicts. Its codes are
+  // built from static operation names too, never from remote data.
+  "TerminalRecoveryError",
 ])
 
 export function diagnosticCodeSuffix(error) {

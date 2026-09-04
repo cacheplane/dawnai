@@ -19,6 +19,7 @@ import {
   TOMBSTONE_ASSET_NAME,
 } from "../terminal-recovery-adapters.mjs"
 import {
+  binaryResponse,
   canonicalizeForTest,
   jsonResponse,
   requestBody,
@@ -41,6 +42,7 @@ test("terminal recovery writer exposes only the exact frozen canonical surface",
 
   assert.deepEqual(Object.keys(writer).sort(), [
     "abandonCandidateIfCurrent",
+    "downloadCanonicalAsset",
     "readCanonicalSnapshot",
     "uploadTombstoneIfAbsentAndEqual",
   ])
@@ -852,3 +854,147 @@ function terminalProjectionSha256(fixture, { name, body }) {
     ),
   )
 }
+
+const SIGNED_DOWNLOAD_HOST = "https://objects.githubusercontent.com/terminal"
+
+/**
+ * Serve the canonical draft plus one signed asset download, exactly as GitHub
+ * does: the API asset URL answers 302 to a signed host that carries the bytes.
+ */
+function downloadRoute(fixture, bytesByAssetId) {
+  const canonical = canonicalRoute(fixture, { rawAssets: fixture.rawAssets })
+  return async (url, init) => {
+    const asset =
+      /^https:\/\/api\.github\.com\/repos\/cacheplane\/dawnai\/releases\/assets\/(\d+)$/u.exec(url)
+    if (asset !== null) {
+      return binaryResponse(new Uint8Array(), 302, {
+        location: `${SIGNED_DOWNLOAD_HOST}/${asset[1]}`,
+      })
+    }
+    const signed = new RegExp(`^${SIGNED_DOWNLOAD_HOST}/(\\d+)$`, "u").exec(url)
+    if (signed !== null) {
+      const bytes = bytesByAssetId.get(Number(signed[1]))
+      if (bytes === undefined) assert.fail(`no bytes for asset ${signed[1]}`)
+      return binaryResponse(bytes)
+    }
+    return canonical(url, init)
+  }
+}
+
+/**
+ * A canonical fixture whose first base asset actually serves bytes, so the
+ * download path can be exercised end to end against a listing that agrees.
+ */
+function downloadableFixture() {
+  const fixture = terminalFixture()
+  const bytes = Buffer.from('{"schemaVersion":1,"manifest":true}\n', "utf8")
+  const rawAssets = fixture.rawAssets.map((asset, index) =>
+    index === 0
+      ? {
+          ...asset,
+          name: "manifest.json",
+          digest: `sha256:${sha256(bytes)}`,
+          size: bytes.byteLength,
+        }
+      : asset,
+  )
+  return { fixture: { ...fixture, rawAssets }, assetId: rawAssets[0].id, bytes }
+}
+
+test("the writer downloads a listed canonical asset through one signed redirect", async () => {
+  const { fixture, assetId, bytes } = downloadableFixture()
+  const calls = []
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch(calls, downloadRoute(fixture, new Map([[assetId, bytes]]))),
+  })
+
+  const downloaded = await writer.downloadCanonicalAsset({
+    assetId,
+    expectedSha256: sha256(bytes),
+    maximumBytes: 1024,
+  })
+
+  assert.deepEqual(downloaded, bytes)
+  assert.equal(
+    calls.some(({ url }) => url === `${SIGNED_DOWNLOAD_HOST}/${assetId}`),
+    true,
+    "the signed redirect is followed",
+  )
+})
+
+test("the writer refuses an asset id the canonical draft does not list", async () => {
+  const { fixture, assetId, bytes } = downloadableFixture()
+  const calls = []
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch(calls, downloadRoute(fixture, new Map([[assetId, bytes]]))),
+  })
+
+  await assert.rejects(
+    () =>
+      writer.downloadCanonicalAsset({
+        assetId: 999_001,
+        expectedSha256: sha256(bytes),
+        maximumBytes: 1024,
+      }),
+    { code: "CANONICAL_ASSET_NOT_LISTED" },
+  )
+  assert.deepEqual(
+    calls.filter(({ url }) => url.includes("/releases/assets/")),
+    [],
+    "a foreign asset id is never requested",
+  )
+})
+
+test("the writer refuses a listed asset whose digest is not the expected one", async () => {
+  const { fixture, assetId, bytes } = downloadableFixture()
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch([], downloadRoute(fixture, new Map([[assetId, bytes]]))),
+  })
+
+  await assert.rejects(
+    () =>
+      writer.downloadCanonicalAsset({
+        assetId,
+        expectedSha256: "b".repeat(64),
+        maximumBytes: 1024,
+      }),
+    { code: "CANONICAL_ASSET_CONFLICT" },
+  )
+})
+
+test("the writer refuses downloaded bytes that do not hash to the listing", async () => {
+  const { fixture, assetId, bytes } = downloadableFixture()
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch(
+      [],
+      downloadRoute(
+        fixture,
+        new Map([[assetId, Buffer.from('{"schemaVersion":1,"manifest":0}\n', "utf8")]]),
+      ),
+    ),
+  })
+
+  await assert.rejects(
+    () =>
+      writer.downloadCanonicalAsset({ assetId, expectedSha256: sha256(bytes), maximumBytes: 1024 }),
+    { code: "CANONICAL_ASSET_CONFLICT" },
+  )
+})
+
+test("the writer refuses a download bounded below the listed asset size", async () => {
+  const { fixture, assetId, bytes } = downloadableFixture()
+  const writer = createTerminalRecoveryWriter({
+    token: TOKEN,
+    fetchImpl: routingFetch([], downloadRoute(fixture, new Map([[assetId, bytes]]))),
+  })
+
+  await assert.rejects(
+    () =>
+      writer.downloadCanonicalAsset({ assetId, expectedSha256: sha256(bytes), maximumBytes: 1 }),
+    { code: "CANONICAL_ASSET_CONFLICT" },
+  )
+})
