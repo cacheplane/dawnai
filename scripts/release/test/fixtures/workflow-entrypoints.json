@@ -447,6 +447,102 @@
         },
         {
           "classification": "safe",
+          "id": "harness-verify",
+          "descriptor": {
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 30
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Build",
+                "run": "pnpm build"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Harness Coordinator Self-Test",
+                "run": "pnpm verify:harness:self-test"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Framework Verification",
+                "run": "pnpm verify:harness:framework"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Runtime Contract Verification",
+                "run": "pnpm verify:harness:runtime"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Smoke Harness Verification",
+                "run": "pnpm verify:harness:smoke"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "failure()",
+                "name": "Upload Harness Artifacts",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "name": "harness-artifacts",
+                  "path": "artifacts/testing/",
+                  "retention-days": 7
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
           "id": "inspector-e2e",
           "descriptor": {
             "runs-on": "ubuntu-latest",
@@ -574,6 +670,75 @@
                 "id": "classify",
                 "name": "Classify metadata-only change",
                 "run": "set -eu\nMETADATA_ONLY=\"$(node scripts/ci-scope.mjs --event pull_request --base \"$BASE_SHA\" --head \"$HEAD_SHA\")\"\ncase \"$METADATA_ONLY\" in\n  true|false) ;;\n  *) echo \"Malformed metadata-only scope output\" >&2; exit 1 ;;\nesac\nprintf 'metadata_only=%s\\n' \"$METADATA_ONLY\" >> \"$GITHUB_OUTPUT\"\n"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "pack-smoke",
+          "descriptor": {
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 30
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "cache": "pnpm",
+                  "node-version": "24.17.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Build",
+                "run": "pnpm build"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Pack Check",
+                "run": "pnpm pack:check"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "TypeScript Tooling Pack Smoke",
+                "run": "pnpm verify:typescript-tooling-pack"
               }
             }
           ]
@@ -1340,61 +1505,6 @@
               "descriptor": {
                 "name": "Docs Check",
                 "run": "node scripts/check-docs.mjs"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Pack Check",
-                "run": "pnpm pack:check"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "TypeScript Tooling Pack Smoke",
-                "run": "pnpm verify:typescript-tooling-pack"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Harness Coordinator Self-Test",
-                "run": "pnpm verify:harness:self-test"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Framework Verification",
-                "run": "pnpm verify:harness:framework"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Runtime Contract Verification",
-                "run": "pnpm verify:harness:runtime"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Smoke Harness Verification",
-                "run": "pnpm verify:harness:smoke"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "if": "failure()",
-                "name": "Upload Harness Artifacts",
-                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-                "with": {
-                  "name": "harness-artifacts",
-                  "path": "artifacts/testing/",
-                  "retention-days": 7
-                }
               }
             }
           ]
