@@ -793,7 +793,16 @@ export async function applyTerminalRecord({
   // successful stamp presents it the escrow identity the record describes.
   const fresh = parseOperatorRecoveryRecord(
     await captureTerminalRecord({
-      reviewedCommit: record.authority.reviewedCommit,
+      // The APPLY-time reviewed commit, never the record's capture-time one.
+      // The reader authorizes a merge authority only for local HEAD, and at
+      // apply time HEAD is the record pull request's merge commit — a different
+      // pull request from the one the capture ran at, which no longer exists as
+      // HEAD anywhere. Passing the capture-time commit refuses the whole apply
+      // with REVIEWED_COMMIT_NOT_LOCAL_HEAD. This is safe because
+      // `assertSameEvidence` ignores `authority` entirely: the capture-time
+      // commit stays in the record and is reported in the receipt, while the
+      // live reads are authorized by the commit this run is fenced to.
+      reviewedCommit,
       reason: record.reason,
       reader: {
         ...readerMethods(reader),
