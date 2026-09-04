@@ -332,8 +332,19 @@ test("the live reader reads the canonical draft only through the terminal writer
     async readCandidatePublishJobs(runId, runAttempt) {
       assert.equal(runId, 33418085547)
       assert.equal(runAttempt, 1)
+      // The real v0.8.22 publish-npm jobs are completed/skipped, and GitHub
+      // stamps a started_at on a skipped job.
       return [
-        { id: 1, runId, runAttempt: 1, name: "publish-npm", status: "completed", startedAt: null },
+        {
+          id: 1,
+          runId,
+          runAttempt: 1,
+          name: "publish-npm",
+          status: "completed",
+          conclusion: "skipped",
+          startedAt: "2026-09-01T12:00:00Z",
+          completedAt: "2026-09-01T12:00:00Z",
+        },
       ]
     },
     async readNpmAbsence(name) {
@@ -401,32 +412,33 @@ test("the live reader reads the canonical draft only through the terminal writer
   )
 })
 
-test("the live reader refuses a started publish job and a present package", async () => {
-  const duplicateReader = {
+function publishJobsReader(jobs, { runAttempt = 1 } = {}) {
+  return {
     async readReleaseRuns() {
-      return { runs: [], candidateRuns: [{ id: 7, runAttempt: 2, status: "completed" }] }
+      return { runs: [], candidateRuns: [{ id: 7, runAttempt, status: "completed" }] }
     },
     async readCandidatePublishJobs() {
-      return [
-        {
-          id: 1,
-          runId: 7,
-          runAttempt: 1,
-          name: "publish-npm",
-          status: "completed",
-          startedAt: "2026-09-01T12:00:00Z",
-        },
-        { id: 2, runId: 7, runAttempt: 2, name: "publish-npm", status: "queued", startedAt: null },
-      ]
-    },
-    async readNpmAbsence(name) {
-      if (name === [...CANONICAL_RELEASE_PACKAGE_ORDER].sort()[0]) {
-        return { name, version: "0.8.22", status: "present" }
-      }
-      return { name, version: "0.8.22", status: "absent" }
+      return jobs
     },
   }
-  const reader = createTerminalRecoveryReader({
+}
+
+function publishJob(overrides) {
+  return {
+    id: 1,
+    runId: 7,
+    runAttempt: 1,
+    name: "publish-npm",
+    status: "completed",
+    conclusion: "skipped",
+    startedAt: "2026-09-01T12:00:00Z",
+    completedAt: "2026-09-01T12:05:00Z",
+    ...overrides,
+  }
+}
+
+function readerFor(duplicateReader) {
+  return createTerminalRecoveryReader({
     root: "/repo",
     token: "t",
     run: async () => ({ stdout: "" }),
@@ -435,8 +447,71 @@ test("the live reader refuses a started publish job and a present package", asyn
       createTerminalWriter: () => ({ async readCanonicalSnapshot() {} }),
     },
   })
-  assert.deepEqual(await reader.readReleaseRuns(), [
-    { workflowRunId: 7, runAttempt: 2, status: "completed", publishJobStarted: true },
-  ])
+}
+
+test("publish-npm is never-started only when it is queued-unstarted or skipped", async () => {
+  const cases = [
+    // A skipped job carries a started_at, so a null-started_at test would call it started.
+    [publishJob({}), false, "completed/skipped"],
+    [
+      publishJob({ status: "queued", conclusion: null, startedAt: null, completedAt: null }),
+      false,
+      "queued/null/null",
+    ],
+    [publishJob({ conclusion: "success" }), true, "completed/success"],
+    [
+      publishJob({ status: "in_progress", conclusion: null, completedAt: null }),
+      true,
+      "in_progress",
+    ],
+    [publishJob({ conclusion: "failure" }), true, "completed/failure"],
+  ]
+  for (const [job, publishJobStarted, label] of cases) {
+    const reader = readerFor(publishJobsReader([job]))
+    assert.deepEqual(
+      await reader.readReleaseRuns(),
+      [{ workflowRunId: 7, runAttempt: 1, status: "completed", publishJobStarted }],
+      label,
+    )
+  }
+})
+
+test("every attempt must carry exactly one publish-npm job", async () => {
+  await assert.rejects(
+    readerFor(publishJobsReader([publishJob({}), publishJob({ id: 2 })])).readReleaseRuns(),
+    /publish-npm job coverage is not exact/iu,
+    "two publish jobs for one attempt",
+  )
+  await assert.rejects(
+    readerFor(publishJobsReader([])).readReleaseRuns(),
+    /publish-npm job coverage is not exact/iu,
+    "no publish job at all",
+  )
+  await assert.rejects(
+    readerFor(publishJobsReader([publishJob({})], { runAttempt: 2 })).readReleaseRuns(),
+    /publish-npm job coverage is not exact/iu,
+    "a later attempt with no publish job of its own",
+  )
+  // Both attempts covered, the earlier one skipped and the later one started.
+  assert.deepEqual(
+    await readerFor(
+      publishJobsReader(
+        [publishJob({}), publishJob({ id: 2, runAttempt: 2, conclusion: "success" })],
+        { runAttempt: 2 },
+      ),
+    ).readReleaseRuns(),
+    [{ workflowRunId: 7, runAttempt: 2, status: "completed", publishJobStarted: true }],
+  )
+})
+
+test("the live reader refuses a present package", async () => {
+  const reader = readerFor({
+    async readNpmAbsence(name) {
+      if (name === [...CANONICAL_RELEASE_PACKAGE_ORDER].sort()[0]) {
+        return { name, version: "0.8.22", status: "present" }
+      }
+      return { name, version: "0.8.22", status: "absent" }
+    },
+  })
   await assert.rejects(reader.readNpmSweep(), /absent/iu)
 })

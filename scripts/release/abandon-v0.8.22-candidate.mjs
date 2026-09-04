@@ -379,11 +379,22 @@ export function createTerminalRecoveryReader({
       const runs = []
       for (const candidateRun of candidateRuns) {
         const jobs = await base.readCandidatePublishJobs(candidateRun.id, candidateRun.runAttempt)
-        // Jobs cover every attempt of the run, so a publish job that started on
-        // ANY attempt marks the run as having started publishing.
-        const publishJobStarted = jobs.some(
-          (job) => job.name === "publish-npm" && job.startedAt !== null,
-        )
+        // Jobs cover every attempt of the run, and the runbook's verifier walks
+        // them attempt by attempt: each attempt must carry exactly one
+        // publish-npm job, and the run counts as having started publishing
+        // unless every one of those jobs never started.
+        let publishJobStarted = false
+        for (let attempt = 1; attempt <= candidateRun.runAttempt; attempt += 1) {
+          const publishers = jobs.filter(
+            (job) => job.runAttempt === attempt && job.name === "publish-npm",
+          )
+          if (publishers.length !== 1) {
+            throw new Error(
+              `Candidate run ${candidateRun.id} attempt ${attempt} publish-npm job coverage is not exact`,
+            )
+          }
+          if (!publishJobNeverStarted(publishers[0])) publishJobStarted = true
+        }
         runs.push({
           workflowRunId: candidateRun.id,
           runAttempt: candidateRun.runAttempt,
@@ -415,6 +426,23 @@ export function createTerminalRecoveryReader({
       }
     },
   })
+}
+
+/**
+ * A publish-npm job never ran iff it is still queued and unstarted, or it
+ * completed as skipped. This is the runbook verifier's exact predicate
+ * (docs/superpowers/runbooks/2026-08-09-release-integrity-cutover.md).
+ *
+ * A null `startedAt` is NOT the test: GitHub stamps `started_at` on a skipped
+ * job, and the duplicate reader's own job coherence check requires a
+ * `started_at` on every completed job — so all five real v0.8.22 candidate
+ * runs, whose publish-npm jobs are completed/skipped, would read as started.
+ */
+function publishJobNeverStarted(job) {
+  return (
+    (job.status === "queued" && job.conclusion === null && job.startedAt === null) ||
+    (job.status === "completed" && job.conclusion === "skipped")
+  )
 }
 
 function parseMarkerOrThrow(body) {
