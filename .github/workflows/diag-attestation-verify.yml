@@ -27,6 +27,10 @@ on:
         description: Payload file to verify
         default: dawn-ai-cli-0.8.24.tgz
         type: string
+      perform_escrow:
+        description: Set to "yes" to run the REAL escrow (creates the v0.8.24 draft Release)
+        default: "no"
+        type: string
 
 permissions: {}
 
@@ -311,3 +315,73 @@ jobs:
           }
           JS
           time node "$GITHUB_WORKSPACE/diag-escrow-sentinel.mjs"
+
+  # The REAL escrow write, exactly as release.yml's escrow job performs it
+  # (findManagedRelease -> createDraftRelease -> upload assets -> stamp marker).
+  # Runs ONLY when dispatched with perform_escrow=yes; never on push.
+  escrow-real:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.perform_escrow == 'yes' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    steps:
+      - name: Checkout main scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+
+      - name: Install release CLI runtime dependency (mirrors release.yml)
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+
+      - name: Download runtime artifact by name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-runtime-${{ inputs.run_id || '33892398216' }}-1
+          run-id: ${{ inputs.run_id || '33892398216' }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/runtime
+
+      - name: Download attestation artifact by name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.attestation_artifact || 'release-attestation-33892398216-1' }}
+          run-id: ${{ inputs.run_id || '33892398216' }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/attestation
+
+      - name: Run the real escrow (CLI entry)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY_ID: "1210070282"
+          ART: ${{ runner.temp }}
+        run: |
+          set +e
+          echo "start=$(date -u +%T.%3N)"
+          time node scripts/release/cli.mjs escrow \
+            --candidate "$ART/runtime/candidate.json" \
+            --record "$ART/runtime/release-record.json" \
+            --artifact-dir "$ART/runtime/payload" \
+            --attestation-set "$ART/attestation/attestation-set.json" \
+            --attestation-bundles-dir "$ART/attestation/bundles" \
+            >"$RUNNER_TEMP/escrow.out" 2>"$RUNNER_TEMP/escrow.err"
+          rc=$?
+          echo "end=$(date -u +%T.%3N)"
+          echo "EXIT CODE (real escrow): $rc"
+          echo "===== STDOUT ====="; sed -E 's/gh[pous]_[A-Za-z0-9_]{20,}/[redacted]/g' "$RUNNER_TEMP/escrow.out"
+          echo "===== STDERR ====="; sed -E 's/gh[pous]_[A-Za-z0-9_]{20,}/[redacted]/g' "$RUNNER_TEMP/escrow.err"
+          echo "=================="
+          exit 0
