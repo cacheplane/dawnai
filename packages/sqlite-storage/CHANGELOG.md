@@ -1,5 +1,7 @@
 # @dawn-ai/sqlite-storage
 
+## 0.8.24
+
 ## 0.8.23
 
 ### Patch Changes
