@@ -150,56 +150,136 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
-        "stepIndex": 12,
+        "job": "pack-smoke",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "pack-smoke",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "pack-smoke",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "pack-smoke",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "pack-smoke",
+        "stepIndex": 4,
+        "step": "Build",
+        "kind": "run",
+        "value": "pnpm build"
+      },
+      {
+        "classification": "safe",
+        "job": "pack-smoke",
+        "stepIndex": 5,
         "step": "Pack Check",
         "kind": "run",
         "value": "pnpm pack:check"
       },
       {
         "classification": "safe",
-        "job": "validate",
-        "stepIndex": 13,
+        "job": "pack-smoke",
+        "stepIndex": 6,
         "step": "TypeScript Tooling Pack Smoke",
         "kind": "run",
         "value": "pnpm verify:typescript-tooling-pack"
       },
       {
         "classification": "safe",
-        "job": "validate",
-        "stepIndex": 14,
+        "job": "harness-verify",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "harness-verify",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "harness-verify",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "harness-verify",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "harness-verify",
+        "stepIndex": 4,
+        "step": "Build",
+        "kind": "run",
+        "value": "pnpm build"
+      },
+      {
+        "classification": "safe",
+        "job": "harness-verify",
+        "stepIndex": 5,
         "step": "Harness Coordinator Self-Test",
         "kind": "run",
         "value": "pnpm verify:harness:self-test"
       },
       {
         "classification": "safe",
-        "job": "validate",
-        "stepIndex": 15,
+        "job": "harness-verify",
+        "stepIndex": 6,
         "step": "Framework Verification",
         "kind": "run",
         "value": "pnpm verify:harness:framework"
       },
       {
         "classification": "safe",
-        "job": "validate",
-        "stepIndex": 16,
+        "job": "harness-verify",
+        "stepIndex": 7,
         "step": "Runtime Contract Verification",
         "kind": "run",
         "value": "pnpm verify:harness:runtime"
       },
       {
         "classification": "safe",
-        "job": "validate",
-        "stepIndex": 17,
+        "job": "harness-verify",
+        "stepIndex": 8,
         "step": "Smoke Harness Verification",
         "kind": "run",
         "value": "pnpm verify:harness:smoke"
       },
       {
         "classification": "safe",
-        "job": "validate",
-        "stepIndex": 18,
+        "job": "harness-verify",
+        "stepIndex": 9,
         "step": "Upload Harness Artifacts",
         "kind": "step-uses",
         "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"

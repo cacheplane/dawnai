@@ -63,7 +63,8 @@ jobs:
 
   validate:
     runs-on: ubuntu-latest
-    # A fully green validate run takes ~26 minutes; 30 left no margin for slow runners.
+    # A fully green validate run took ~26 minutes before pack/harness verification
+    # moved to their own jobs; 30 left no margin for slow runners.
     timeout-minutes: 45
 
     steps:
@@ -120,11 +121,73 @@ jobs:
       - name: Docs Check
         run: node scripts/check-docs.mjs
 
+  # Pack and harness verification used to run at the tail of `validate`,
+  # serialising ~16 minutes behind the source tests. They only need a built
+  # tree, so each rebuilds (~1.5 min) and runs in parallel with `validate`,
+  # which stays the release controller's required check.
+  pack-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
       - name: Pack Check
         run: pnpm pack:check
 
       - name: TypeScript Tooling Pack Smoke
         run: pnpm verify:typescript-tooling-pack
+
+  harness-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
 
       - name: Harness Coordinator Self-Test
         run: pnpm verify:harness:self-test

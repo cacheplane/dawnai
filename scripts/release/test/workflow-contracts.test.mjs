@@ -55,8 +55,10 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // post-publication-audit.mjs each now pass the ref their own job checks out).
 // Repinned for getAuthenticatedUser on the GitHub reader (scripts/release/adapters/github.mjs):
 // the v0.8.22 terminal recovery record names the operator login its token acts as.
+// Repinned for the observe CI wait (scripts/release/cli.mjs): detect now waits the full
+// ci.yml validate budget (100 x 30 s) instead of timing out after 10 minutes.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "23b0a9057c4f8051049e4ebd71f40c8844cca4ce9f562b6f40c5d82e066fbdb0"
+  "f81e46ace20c56b9a0c988006507e705e28d9fb5300d0a90b75fff66252023ec"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

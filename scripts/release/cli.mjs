@@ -346,8 +346,9 @@ async function runObserve(options, runtime) {
     const ci = await waitForRequiredCi({
       sha: selection.candidate.commitSha,
       github,
-      attempts: 61,
-      delayMs: 10_000,
+      // 100 x 30 s = 50 min: must exceed ci.yml's 45-minute validate budget plus queueing.
+      attempts: 100,
+      delayMs: 30_000,
       delay: runtime.wait ?? defaultWait,
     })
     if (ci.status !== "success") {
