@@ -46,6 +46,8 @@ jobs:
           gh --version || true
           echo "--- gh auth status ---"
           gh auth status 2>&1 || true
+          echo "--- proxy / env ---"
+          env | grep -i -E '^(https?_proxy|no_proxy|GH_HOST|GH_ENTERPRISE|SIGSTORE|TUF)' || echo "(none)"
 
       - name: Download payload artifact by name
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -92,63 +94,101 @@ jobs:
           echo "--- API attestations for digest via org owner ---"
           time gh api "orgs/cacheplane/attestations/sha256:$DIGEST" --jq '.attestations|length' || true
 
-      - name: Verify with bundle (escrow shape, exact args)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -x
-          TARGET="$RUNNER_TEMP/payload/$FILE"
-          BUNDLE="$RUNNER_TEMP/attestation/bundles/$FILE.intoto.jsonl"
-          rc=0
-          time timeout -s KILL 60 gh attestation verify "$TARGET" \
-            --repo cacheplane/dawnai \
-            --digest-alg sha256 \
-            --signer-workflow "$SIGNER_WORKFLOW" \
-            --deny-self-hosted-runners \
-            --source-digest "$SOURCE_DIGEST" \
-            --source-ref "$SOURCE_REF" \
-            --predicate-type https://slsa.dev/provenance/v1 \
-            --bundle "$BUNDLE" \
-            >"$RUNNER_TEMP/v1.out" 2>"$RUNNER_TEMP/v1.err" || rc=$?
-          set +x
-          echo "EXIT CODE (bundle): $rc"
-          echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v1.out"
-          echo "===== STDERR ====="; cat "$RUNNER_TEMP/v1.err"
-          echo "=================="
-
-      - name: Verify with bundle + GH_DEBUG=api + --format json
+      - name: Baseline timings (rate_limit, trusted-root, raw Sigstore/TUF endpoints)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_DEBUG: api
         run: |
-          set -x
+          stamp() { while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T.%3N)" "$l"; done; }
+          echo "=== gh api /rate_limit ==="
+          time gh api /rate_limit --jq '.resources.core' 2> >(stamp >&2) || true
+          echo "=== gh api /rate_limit (2nd) ==="
+          time gh api /rate_limit --jq '.resources.core' 2> >(stamp >&2) || true
+          echo "=== gh attestation trusted-root (1st) ==="
+          time gh attestation trusted-root 2> >(stamp >&2) | head -c 200 || true
+          echo
+          echo "=== gh attestation trusted-root (2nd) ==="
+          time gh attestation trusted-root 2> >(stamp >&2) | head -c 200 || true
+          echo
+          echo "=== TUF cache dir after trusted-root ==="
+          ls -laR "${XDG_CACHE_HOME:-$HOME/.cache}/gh" 2>/dev/null | head -60 || true
+          for u in \
+            https://tuf-repo-cdn.sigstore.dev/root.json \
+            https://tuf-repo-cdn.sigstore.dev/2.root.json \
+            https://tuf-repo.github.com/root.json \
+            https://tuf-repo.github.com/1.root.json \
+            https://rekor.sigstore.dev/api/v1/log \
+            https://fulcio.sigstore.dev/api/v2/trustBundle \
+            https://timestamp.githubapp.com/api/v1/timestamp \
+            https://api.github.com/rate_limit ; do
+            echo "=== curl $u ==="
+            curl -sS -o /dev/null -w 'http=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s ttfb=%{time_starttransfer}s total=%{time_total}s size=%{size_download}\n' --max-time 30 "$u" || echo "curl failed rc=$?"
+          done
+
+      - name: Verify with bundle (escrow shape, exact args) x2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           TARGET="$RUNNER_TEMP/payload/$FILE"
           BUNDLE="$RUNNER_TEMP/attestation/bundles/$FILE.intoto.jsonl"
-          rc=0
-          time timeout -s KILL 60 gh attestation verify "$TARGET" \
-            --repo cacheplane/dawnai \
-            --digest-alg sha256 \
-            --signer-workflow "$SIGNER_WORKFLOW" \
-            --deny-self-hosted-runners \
-            --source-digest "$SOURCE_DIGEST" \
-            --source-ref "$SOURCE_REF" \
-            --predicate-type https://slsa.dev/provenance/v1 \
-            --bundle "$BUNDLE" \
-            --format json \
-            >"$RUNNER_TEMP/v2.out" 2>"$RUNNER_TEMP/v2.err" || rc=$?
-          set +x
-          echo "EXIT CODE (bundle, debug): $rc"
-          echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v2.out"
-          echo "===== STDERR ====="; cat "$RUNNER_TEMP/v2.err"
-          echo "=================="
+          for n in 1 2; do
+            echo "########## RUN $n (bundle, exact escrow args) start=$(date -u +%T.%3N) ##########"
+            rc=0
+            set -x
+            time timeout -s KILL 60 gh attestation verify "$TARGET" \
+              --repo cacheplane/dawnai \
+              --digest-alg sha256 \
+              --signer-workflow "$SIGNER_WORKFLOW" \
+              --deny-self-hosted-runners \
+              --source-digest "$SOURCE_DIGEST" \
+              --source-ref "$SOURCE_REF" \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --bundle "$BUNDLE" \
+              >"$RUNNER_TEMP/v1-$n.out" 2>"$RUNNER_TEMP/v1-$n.err" || rc=$?
+            set +x
+            echo "EXIT CODE (bundle run $n): $rc end=$(date -u +%T.%3N)"
+            echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v1-$n.out"
+            echo "===== STDERR ====="; cat "$RUNNER_TEMP/v1-$n.err"
+            echo "=================="
+          done
 
-      - name: Verify WITHOUT bundle (actions/online source)
+      - name: Verify with bundle + GH_DEBUG=api (timestamped) + --format json x2
         env:
           GH_TOKEN: ${{ github.token }}
           GH_DEBUG: api
         run: |
-          set -x
+          stamp() { while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T.%3N)" "$l"; done; }
           TARGET="$RUNNER_TEMP/payload/$FILE"
+          BUNDLE="$RUNNER_TEMP/attestation/bundles/$FILE.intoto.jsonl"
+          for n in 1 2; do
+            echo "########## RUN $n (bundle, GH_DEBUG=api) start=$(date -u +%T.%3N) ##########"
+            rc=0
+            time timeout -s KILL 60 gh attestation verify "$TARGET" \
+              --repo cacheplane/dawnai \
+              --digest-alg sha256 \
+              --signer-workflow "$SIGNER_WORKFLOW" \
+              --deny-self-hosted-runners \
+              --source-digest "$SOURCE_DIGEST" \
+              --source-ref "$SOURCE_REF" \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --bundle "$BUNDLE" \
+              --format json \
+              >"$RUNNER_TEMP/v2-$n.out" 2> >(stamp >"$RUNNER_TEMP/v2-$n.err") || rc=$?
+            sleep 1
+            echo "EXIT CODE (bundle debug run $n): $rc end=$(date -u +%T.%3N)"
+            echo "===== STDOUT (first 2000 bytes) ====="; head -c 2000 "$RUNNER_TEMP/v2-$n.out"; echo
+            echo "===== STDERR (timestamped) ====="; cat "$RUNNER_TEMP/v2-$n.err"
+            echo "=================="
+          done
+
+      - name: Verify WITHOUT bundle (actions/online source, timestamped debug)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_DEBUG: api
+        run: |
+          stamp() { while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T.%3N)" "$l"; done; }
+          TARGET="$RUNNER_TEMP/payload/$FILE"
+          echo "########## no-bundle start=$(date -u +%T.%3N) ##########"
           rc=0
           time timeout -s KILL 60 gh attestation verify "$TARGET" \
             --repo cacheplane/dawnai \
@@ -158,27 +198,28 @@ jobs:
             --source-digest "$SOURCE_DIGEST" \
             --source-ref "$SOURCE_REF" \
             --predicate-type https://slsa.dev/provenance/v1 \
-            >"$RUNNER_TEMP/v3.out" 2>"$RUNNER_TEMP/v3.err" || rc=$?
-          set +x
-          echo "EXIT CODE (no bundle): $rc"
+            >"$RUNNER_TEMP/v3.out" 2> >(stamp >"$RUNNER_TEMP/v3.err") || rc=$?
+          sleep 1
+          echo "EXIT CODE (no bundle): $rc end=$(date -u +%T.%3N)"
           echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v3.out"
-          echo "===== STDERR ====="; cat "$RUNNER_TEMP/v3.err"
+          echo "===== STDERR (timestamped) ====="; cat "$RUNNER_TEMP/v3.err"
           echo "=================="
 
       - name: Verify with bundle, minimal flags (isolate which flag matters)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -x
           TARGET="$RUNNER_TEMP/payload/$FILE"
           BUNDLE="$RUNNER_TEMP/attestation/bundles/$FILE.intoto.jsonl"
+          echo "########## minimal start=$(date -u +%T.%3N) ##########"
           rc=0
+          set -x
           time timeout -s KILL 60 gh attestation verify "$TARGET" \
             --repo cacheplane/dawnai \
             --bundle "$BUNDLE" \
             >"$RUNNER_TEMP/v4.out" 2>"$RUNNER_TEMP/v4.err" || rc=$?
           set +x
-          echo "EXIT CODE (bundle, minimal): $rc"
+          echo "EXIT CODE (bundle, minimal): $rc end=$(date -u +%T.%3N)"
           echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v4.out"
           echo "===== STDERR ====="; cat "$RUNNER_TEMP/v4.err"
           echo "=================="
