@@ -1,5 +1,19 @@
 # @dawn-ai/cli
 
+## 0.8.24
+
+### Patch Changes
+
+- 7495d06: Cut a new patch release. The previous version bump was never tagged or published: its merge commit failed CI on a literal chart-version pin in the Kubernetes documentation checks, and the release controller binds a candidate to the commit that introduced its version. The pin is now a floor, so this bump can be released. No runtime behavior changes.
+  - @dawn-ai/ag-ui@0.8.24
+  - @dawn-ai/core@0.8.24
+  - @dawn-ai/langchain@0.8.24
+  - @dawn-ai/langgraph@0.8.24
+  - @dawn-ai/memory@0.8.24
+  - @dawn-ai/permissions@0.8.24
+  - @dawn-ai/sdk@0.8.24
+  - @dawn-ai/sqlite-storage@0.8.24
+
 ## 0.8.23
 
 ### Patch Changes

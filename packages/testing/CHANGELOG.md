@@ -1,5 +1,16 @@
 # @dawn-ai/testing
 
+## 0.8.24
+
+### Patch Changes
+
+- Updated dependencies [7495d06]
+  - @dawn-ai/cli@0.8.24
+  - @dawn-ai/core@0.8.24
+  - @dawn-ai/memory@0.8.24
+  - @dawn-ai/sdk@0.8.24
+  - @dawn-ai/workspace@0.8.24
+
 ## 0.8.23
 
 ### Patch Changes

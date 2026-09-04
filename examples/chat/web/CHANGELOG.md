@@ -1,5 +1,11 @@
 # @dawn-example/chat-web
 
+## 0.0.3
+
+### Patch Changes
+
+- @dawn-ai/ag-ui@0.8.24
+
 ## 0.0.2
 
 ### Patch Changes

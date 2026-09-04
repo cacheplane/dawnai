@@ -1,5 +1,12 @@
 # @dawn-ai/inspector
 
+## 0.8.24
+
+### Patch Changes
+
+- @dawn-ai/core@0.8.24
+- @dawn-ai/memory@0.8.24
+
 ## 0.8.23
 
 ### Patch Changes
