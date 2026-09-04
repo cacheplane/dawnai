@@ -2746,11 +2746,12 @@ describe("run", () => {
     const grandchildLifetimeMs = 3_000
     const source = `
       const { spawn } = require("node:child_process")
-      const { writeFileSync } = require("node:fs")
+      const { renameSync, writeFileSync } = require("node:fs")
       const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, ${grandchildLifetimeMs})"], {
         stdio: ["ignore", "inherit", "inherit"],
       })
-      writeFileSync(process.argv[1], String(grandchild.pid))
+      writeFileSync(process.argv[1] + ".tmp", String(grandchild.pid))
+      renameSync(process.argv[1] + ".tmp", process.argv[1])
       setInterval(() => {}, 1_000)
     `
     const startedAt = Date.now()
@@ -2765,8 +2766,7 @@ describe("run", () => {
         { code: "ETIMEDOUT" },
       )
       const elapsedMs = Date.now() - startedAt
-      grandchildPid = Number.parseInt(await readFile(pidPath, "utf8"), 10)
-      assert.equal(Number.isSafeInteger(grandchildPid), true)
+      grandchildPid = await waitForDescendantPid(pidPath, 750)
       assert.ok(elapsedMs < 1_500, `descendant cleanup took ${elapsedMs}ms`)
       assert.equal(
         await waitForProcessExit(grandchildPid, 750),
@@ -2786,11 +2786,12 @@ describe("run", () => {
     const pidPath = join(root, "grandchild.pid")
     const source = `
       const { spawn } = require("node:child_process")
-      const { writeFileSync } = require("node:fs")
+      const { renameSync, writeFileSync } = require("node:fs")
       const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
         stdio: ["ignore", "inherit", "inherit"],
       })
-      writeFileSync(process.argv[1], String(grandchild.pid))
+      writeFileSync(process.argv[1] + ".tmp", String(grandchild.pid))
+      renameSync(process.argv[1] + ".tmp", process.argv[1])
       setInterval(() => {}, 1_000)
     `
     const controller = new AbortController()
@@ -2803,8 +2804,7 @@ describe("run", () => {
         stdio: "pipe",
         timeoutMs: 5_000,
       })
-      grandchildPid = Number.parseInt(await waitForFile(pidPath, 750), 10)
-      assert.equal(Number.isSafeInteger(grandchildPid), true)
+      grandchildPid = await waitForDescendantPid(pidPath, 750)
       controller.abort()
       await assert.rejects(command, { code: "ABORT_ERR", name: "AbortError" })
       assert.ok(Date.now() - startedAt < 1_500, "aborted child tree must terminate promptly")
@@ -2904,6 +2904,10 @@ describe("run", () => {
 })
 
 function processExists(pid) {
+  // Signal 0 to pid 0 addresses the caller's own process group and NaN throws
+  // ERR_INVALID_ARG_TYPE, which from a finally block masks the assertion that actually
+  // failed. Neither is ever a descendant, so report both as absent.
+  if (!Number.isSafeInteger(pid) || pid < 1) return false
   try {
     process.kill(pid, 0)
     return true
@@ -2914,6 +2918,9 @@ function processExists(pid) {
 }
 
 async function waitForProcessExit(pid, timeoutMs) {
+  if (!Number.isSafeInteger(pid) || pid < 1) {
+    throw new Error(`${pid} is not a recorded descendant pid`)
+  }
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (!processExists(pid)) return true
@@ -2922,17 +2929,38 @@ async function waitForProcessExit(pid, timeoutMs) {
   return !processExists(pid)
 }
 
-async function waitForFile(path, timeoutMs) {
+// Polls until the file holds a complete pid. The writer renames a finished file into
+// place, so a partial read is impossible; this still waits, because the descendant may
+// not have recorded itself yet when the parent is asked for it.
+async function waitForDescendantPid(path, timeoutMs) {
   const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      return await readFile(path, "utf8")
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error
+  let last
+  for (;;) {
+    last = await readDescendantPidSource(path)
+    const pid = parseDescendantPid(last)
+    if (pid !== null) return pid
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `${path} held no complete descendant pid within ${timeoutMs}ms (last read: ${JSON.stringify(last)})`,
+      )
     }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 10))
   }
-  return readFile(path, "utf8")
+}
+
+async function readDescendantPidSource(path) {
+  try {
+    return await readFile(path, "utf8")
+  } catch (error) {
+    if (error?.code === "ENOENT") return null
+    throw error
+  }
+}
+
+function parseDescendantPid(source) {
+  if (typeof source !== "string" || !/^[1-9]\d*$/u.test(source)) return null
+  const pid = Number(source)
+  return Number.isSafeInteger(pid) ? pid : null
 }
 
 describe("public npm file and environment boundaries", () => {
