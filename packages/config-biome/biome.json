@@ -2,7 +2,7 @@
   "$schema": "https://biomejs.dev/schemas/2.4.11/schema.json",
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/.dawn"]
+    "includes": ["**", "!**/.dawn", "!scripts/release/terminal-records/**"]
   },
   "formatter": {
     "enabled": true,
