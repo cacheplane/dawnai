@@ -149,6 +149,10 @@ for (const [label, message] of [
   ["after a colon", `request failed: authorization:${JWT} rejected`],
   ["inside quotes", `request failed: "${JWT}" rejected`],
   ["after a slash", `request failed: https://example.test/${JWT} rejected`],
+  ["after a short dotted prefix", `request failed: v1.${JWT} rejected`],
+  ["after an id. prefix inside JSON", `request failed: {"id.${JWT}":1} rejected`],
+  ["after a hyphenated dotted prefix", `request failed: ab-cd.${JWT} rejected`],
+  ["inside a dotted URL path", `request failed: https://h.test/v1.${JWT} rejected`],
 ]) {
   test(`safeDetail redacts a JWT ${label}`, () => {
     const detail = safeDetail(new Error(message))
@@ -207,6 +211,14 @@ test("safeDetail returns the placeholder when reading the error throws", () => {
     ),
   })
   assert.equal(safeDetail(throwingCause), "(no message)")
+})
+
+test("safeDetail never emits a credential fragment split by the input cap", () => {
+  const detail = safeDetail(new Error(`${" ".repeat(4080)}ghp_${"A".repeat(30)} trailing`))
+  assert.ok(!detail.includes("ghp_"), detail)
+  assert.equal(detail, "(no message)")
+  const kept = safeDetail(new Error(`prefix ${" ".repeat(4070)}ghp_${"A".repeat(30)}`))
+  assert.equal(kept, "prefix")
 })
 
 test("safeDetail substitutes the placeholder for whitespace-only messages", () => {

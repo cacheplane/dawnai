@@ -47,7 +47,7 @@ const ATTESTATION_REASON_REDACTIONS = Object.freeze([
   /npm_[A-Za-z0-9]{20,}/gu,
   /Bearer\s+\S+/gu,
   /authorization:\s*\S+(?:\s+\S+)?/giu,
-  /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
+  /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
 ])
 
 // Declared before the CLI entrypoint below: this module runs `runArtifactStoreCli` during its

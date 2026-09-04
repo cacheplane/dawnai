@@ -73,9 +73,10 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for failure-detail hardening (scripts/release/cli.mjs): safeDetail caps its input
 // at 4096 chars before redaction, anchors the JWT pattern (the unanchored form was quadratic),
 // matches Bearer case-insensitively, and falls back to the placeholder when the error itself
-// throws or its message is whitespace-only.
+// throws or its message is whitespace-only. The same anchored JWT pattern (lookbehind
+// without a dot, so v1.<jwt> still redacts) is applied to artifact-store.mjs for consistency.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "510d9aa41d273458c82f64e7470c18582d7ad04bb1f392078822eafb513986fe"
+  "5a539c58d49ad0b6305de6ca4bcebed48497cf254c833533fc78eca950265072"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

@@ -51,7 +51,7 @@ const FAILURE_SNIPPET_REDACTIONS = Object.freeze([
   /npm_[A-Za-z0-9]{20,}/gu,
   /Bearer\s+\S+/giu,
   /authorization:\s*\S+(?:\s+\S+)?/giu,
-  /(?<![A-Za-z0-9_.-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
+  /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
 ])
 
 export function composeGitHubEffects({ reader, writer }) {

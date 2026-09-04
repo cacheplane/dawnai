@@ -779,6 +779,9 @@ test("writer failure detail redacts credentials and query strings from the respo
     "bearer sk-live-topsecretvalue",
     "authorization: Basic dXNlcjpwYXNz",
     jwt,
+    `v1.${jwt}`,
+    `{"id.${jwt}":1}`,
+    `https://h.test/v1.${jwt}`,
   ]
   const writer = draftWriter(async () =>
     jsonResponse(
@@ -802,8 +805,11 @@ test("writer failure detail redacts credentials and query strings from the respo
   ]) {
     assert.ok(!error.message.includes(leak), `leaked ${leak}: ${error.message}`)
   }
-  assert.equal((error.message.match(/\[redacted\]/gu) ?? []).length, 6, error.message)
-  assert.ok(error.message.includes("https://api.github.com/x"))
+  assert.equal((error.message.match(/\[redacted\]/gu) ?? []).length, 9, error.message)
+  assert.match(
+    error.message,
+    /\| https:\/\/h\.test\/v1\.\[redacted\] see https:\/\/api\.github\.com\/x$/u,
+  )
 })
 
 test("writer failure detail bounds a 10 KB body to a 200-character snippet", async () => {

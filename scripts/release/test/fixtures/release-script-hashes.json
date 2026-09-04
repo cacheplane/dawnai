@@ -17,10 +17,10 @@
       "sha256": "3e171b1bc9aa79080d58087327ea2014b856ba5e6329f33de1a0a5f1b18c05d1"
     },
     "scripts/release/artifact-store.mjs": {
-      "sha256": "69b3cd1a6c1314dbafe8fb1905bd95a4b7cafb834e40ae258b1fd981fcbe2e4a"
+      "sha256": "7626952c3dace863a1cd933b1a6686e3816a6e054e06742c5d5ea8cf57dfc487"
     },
     "scripts/release/cli.mjs": {
-      "sha256": "d64c318ecfec99c21419bb30e2f32ded3247e2c43a6cd2dc19bc79d9f0cc76ab"
+      "sha256": "a532fb5d18d74786a67761fe98626019a9b467f404b9a6c92083d76957bc569f"
     },
     "scripts/release/independent-audit-coordinator.mjs": {
       "sha256": "a72f438f776f9ca26914c2ec51dd75de8f3b6c7d85ae8b11f2cc51c651e10d53"

@@ -2873,7 +2873,9 @@ const FAILURE_DETAIL_REDACTIONS = Object.freeze([
   /authorization:\s*\S+(?:\s+\S+)?/giu,
   // JWT-like: anchored so the match can only start at the beginning of a token run; the
   // unanchored form retried every offset of a long unbroken run (quadratic, 80k chars ~10 s).
-  /(?<![A-Za-z0-9_.-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
+  // The lookbehind deliberately admits a preceding dot: `v1.<jwt>` and `id.<jwt>` are real
+  // shapes and must still redact.
+  /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
 ])
 
 const executedPath =
@@ -2925,7 +2927,12 @@ function unsafeDetail(error) {
     )
     current = current !== null && typeof current === "object" ? current.cause : undefined
   }
-  const joined = messages.join(" <- ").slice(0, FAILURE_DETAIL_MAX_INPUT_LENGTH)
+  let joined = messages.join(" <- ")
+  if (joined.length > FAILURE_DETAIL_MAX_INPUT_LENGTH) {
+    // Drop the token the cut landed inside, so a credential split at the boundary can never
+    // surface as a short fragment the redaction patterns no longer recognize.
+    joined = joined.slice(0, FAILURE_DETAIL_MAX_INPUT_LENGTH).replace(/(?<=\s)\S+$/u, "")
+  }
   let detail = Array.from(joined, (character) =>
     isControlCharacter(character) ? " " : character,
   ).join("")
