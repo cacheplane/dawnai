@@ -1,0 +1,184 @@
+# TEMPORARY read-only diagnostic: capture the real stderr/timing of
+# `gh attestation verify` under the Actions token with the escrow job's
+# exact permission shape. Never writes anything. Delete after use.
+name: diag-attestation-verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Release run id whose artifacts to download
+        default: "33892398216"
+        type: string
+      payload_artifact:
+        description: Payload artifact name
+        default: release-v0.8.24-88c01c4afd59
+        type: string
+      attestation_artifact:
+        description: Attestation evidence artifact name
+        default: release-attestation-33892398216-1
+        type: string
+      file:
+        description: Payload file to verify
+        default: dawn-ai-cli-0.8.24.tgz
+        type: string
+
+permissions: {}
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    env:
+      FILE: ${{ inputs.file }}
+      SIGNER_WORKFLOW: cacheplane/dawnai/.github/workflows/release.yml
+      SOURCE_DIGEST: 88c01c4afd59866fc0ea4c8f3b8444439a01c8ea
+      SOURCE_REF: refs/tags/v0.8.24
+    steps:
+      - name: gh version and auth status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh --version || true
+          echo "--- gh auth status ---"
+          gh auth status 2>&1 || true
+
+      - name: Download payload artifact by name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.payload_artifact }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/payload
+
+      - name: Download attestation artifact by name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.attestation_artifact }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/attestation
+
+      - name: Inspect inputs (file digest, bundle head, bundle subjects, API attestation count)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          ls -la "$RUNNER_TEMP/payload" "$RUNNER_TEMP/attestation" "$RUNNER_TEMP/attestation/bundles" || true
+          TARGET="$RUNNER_TEMP/payload/$FILE"
+          BUNDLE="$RUNNER_TEMP/attestation/bundles/$FILE.intoto.jsonl"
+          sha256sum "$TARGET" || true
+          DIGEST="$(sha256sum "$TARGET" | cut -d' ' -f1)"
+          echo "digest=$DIGEST"
+          echo "--- bundle first 300 bytes ---"
+          head -c 300 "$BUNDLE" || true
+          echo
+          echo "--- bundle line count / size ---"
+          wc -lc "$BUNDLE" || true
+          echo "--- bundle subjects (decoded dsseEnvelope.payload) ---"
+          while IFS= read -r line; do
+            printf '%s' "$line" | jq -r '.dsseEnvelope.payload' | base64 -d | jq -c '.subject' || true
+          done < "$BUNDLE"
+          echo "--- bundle media type / verification material keys ---"
+          head -n1 "$BUNDLE" | jq -c '{mediaType, vm: (.verificationMaterial|keys), payloadType: .dsseEnvelope.payloadType}' || true
+          echo "--- API attestations for digest (Actions token) ---"
+          time gh api "repos/cacheplane/dawnai/attestations/sha256:$DIGEST" --jq '.attestations|length' || true
+          echo "--- API attestations for digest, predicate filter ---"
+          time gh api "repos/cacheplane/dawnai/attestations/sha256:$DIGEST?predicate_type=https://slsa.dev/provenance/v1" --jq '.attestations|length' || true
+          echo "--- API attestations for digest via org owner ---"
+          time gh api "orgs/cacheplane/attestations/sha256:$DIGEST" --jq '.attestations|length' || true
+
+      - name: Verify with bundle (escrow shape, exact args)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          TARGET="$RUNNER_TEMP/payload/$FILE"
+          BUNDLE="$RUNNER_TEMP/attestation/bundles/$FILE.intoto.jsonl"
+          rc=0
+          time timeout -s KILL 60 gh attestation verify "$TARGET" \
+            --repo cacheplane/dawnai \
+            --digest-alg sha256 \
+            --signer-workflow "$SIGNER_WORKFLOW" \
+            --deny-self-hosted-runners \
+            --source-digest "$SOURCE_DIGEST" \
+            --source-ref "$SOURCE_REF" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --bundle "$BUNDLE" \
+            >"$RUNNER_TEMP/v1.out" 2>"$RUNNER_TEMP/v1.err" || rc=$?
+          set +x
+          echo "EXIT CODE (bundle): $rc"
+          echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v1.out"
+          echo "===== STDERR ====="; cat "$RUNNER_TEMP/v1.err"
+          echo "=================="
+
+      - name: Verify with bundle + GH_DEBUG=api + --format json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_DEBUG: api
+        run: |
+          set -x
+          TARGET="$RUNNER_TEMP/payload/$FILE"
+          BUNDLE="$RUNNER_TEMP/attestation/bundles/$FILE.intoto.jsonl"
+          rc=0
+          time timeout -s KILL 60 gh attestation verify "$TARGET" \
+            --repo cacheplane/dawnai \
+            --digest-alg sha256 \
+            --signer-workflow "$SIGNER_WORKFLOW" \
+            --deny-self-hosted-runners \
+            --source-digest "$SOURCE_DIGEST" \
+            --source-ref "$SOURCE_REF" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --bundle "$BUNDLE" \
+            --format json \
+            >"$RUNNER_TEMP/v2.out" 2>"$RUNNER_TEMP/v2.err" || rc=$?
+          set +x
+          echo "EXIT CODE (bundle, debug): $rc"
+          echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v2.out"
+          echo "===== STDERR ====="; cat "$RUNNER_TEMP/v2.err"
+          echo "=================="
+
+      - name: Verify WITHOUT bundle (actions/online source)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_DEBUG: api
+        run: |
+          set -x
+          TARGET="$RUNNER_TEMP/payload/$FILE"
+          rc=0
+          time timeout -s KILL 60 gh attestation verify "$TARGET" \
+            --repo cacheplane/dawnai \
+            --digest-alg sha256 \
+            --signer-workflow "$SIGNER_WORKFLOW" \
+            --deny-self-hosted-runners \
+            --source-digest "$SOURCE_DIGEST" \
+            --source-ref "$SOURCE_REF" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            >"$RUNNER_TEMP/v3.out" 2>"$RUNNER_TEMP/v3.err" || rc=$?
+          set +x
+          echo "EXIT CODE (no bundle): $rc"
+          echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v3.out"
+          echo "===== STDERR ====="; cat "$RUNNER_TEMP/v3.err"
+          echo "=================="
+
+      - name: Verify with bundle, minimal flags (isolate which flag matters)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          TARGET="$RUNNER_TEMP/payload/$FILE"
+          BUNDLE="$RUNNER_TEMP/attestation/bundles/$FILE.intoto.jsonl"
+          rc=0
+          time timeout -s KILL 60 gh attestation verify "$TARGET" \
+            --repo cacheplane/dawnai \
+            --bundle "$BUNDLE" \
+            >"$RUNNER_TEMP/v4.out" 2>"$RUNNER_TEMP/v4.err" || rc=$?
+          set +x
+          echo "EXIT CODE (bundle, minimal): $rc"
+          echo "===== STDOUT ====="; cat "$RUNNER_TEMP/v4.out"
+          echo "===== STDERR ====="; cat "$RUNNER_TEMP/v4.err"
+          echo "=================="
