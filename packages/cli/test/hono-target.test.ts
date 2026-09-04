@@ -485,15 +485,95 @@ describe("hono target — edge capability gating", () => {
     expect(String(error)).toMatch(/runBash|readFile/)
   })
 
-  test("fails the build when a route ships skills", async () => {
+  test("builds a route that ships skills, plan.md and memory.md, and bundles their bodies", async () => {
     const appRoot = await createFixtureApp({
+      "src/app/chat/memory.md": "Prefer short answers.\n",
+      "src/app/chat/plan.md": "- [ ] Restate the question\n",
       "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nDo research.\n",
+    })
+
+    // `dawn check` applies the same (now permissive) gate — asserted BEFORE the
+    // build, because afterwards check's stale-manifest pass tries to IMPORT the
+    // emitted modules.edge.mjs and this fixture has no node_modules for its
+    // `@dawn-ai/cli/fetch` import to resolve through. A throw fails the test.
+    await runCheck(appRoot)
+
+    const { artifacts } = await runBuild(appRoot)
+
+    expect(artifacts).toContain("modules.edge.mjs")
+    const modules = await readBuildFile(appRoot, "modules.edge.mjs")
+    expect(modules).toContain("markerFiles: Object.fromEntries([")
+    expect(modules).toContain('"/src/app/chat/skills/research/SKILL.md"')
+    expect(modules).toContain("Do research.")
+    expect(modules).toContain('skills: ["research"]')
+    expect(modules).toContain('"/src/app/chat/plan.md"')
+    expect(modules).toContain('"/src/app/chat/memory.md"')
+    expect(modules).toContain("Prefer short answers.")
+  })
+
+  test("fails the build, before writing artifacts, when a SKILL.md exceeds 32 KiB", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/chat/skills/big/SKILL.md": `---\ndescription: Big.\n---\n${"x".repeat(32 * 1024)}`,
+    })
+
+    // `dawn check` applies the same limit, asserted BEFORE the build so the
+    // fixture's `.dawn/build` is still empty (check's stale-manifest pass would
+    // otherwise import an emitted modules.edge.mjs this fixture cannot resolve).
+    const checkError = await runCheck(appRoot).catch((e: unknown) => e)
+    expect(String(checkError)).toContain("src/app/chat/skills/big/SKILL.md")
+    expect((checkError as { code?: string }).code).toBe("DAWN_E1005")
+
+    const error = await runBuild(appRoot).catch((e: unknown) => e)
+
+    expect(String(error)).toContain("src/app/chat/skills/big/SKILL.md")
+    expect(String(error)).toContain("32768-byte limit for SKILL.md")
+    expect((error as { code?: string }).code).toBe("DAWN_E1005")
+
+    // A half-built .dawn/build looks deployable. Nothing may reach disk.
+    for (const name of ["modules.edge.mjs", "stores.mjs", "app.mjs", "wrangler.toml"]) {
+      expect(existsSync(buildFile(appRoot, name))).toBe(false)
+    }
+    expect(existsSync(join(appRoot, "wrangler.toml"))).toBe(false)
+  })
+
+  test("names every oversized marker file across all routes in one failed build", async () => {
+    const oversized = `---\ndescription: Big.\n---\n${"x".repeat(32 * 1024 + 1)}`
+    const appRoot = await createFixtureApp({
+      "src/app/chat/skills/big/SKILL.md": oversized,
+      "src/app/support/index.ts": `import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-5-mini",
+  systemPrompt: "Answer questions.",
+})
+`,
+      "src/app/support/skills/big/SKILL.md": oversized,
     })
 
     const error = await runBuild(appRoot).catch((e: unknown) => e)
 
-    expect(String(error)).toMatch(/skills/)
-    expect(String(error)).toContain(join("src", "app", "chat", "skills"))
+    // One rejection, both offenders — a user fixing this app sees every file at
+    // once instead of one route per build.
+    expect(String(error)).toContain("src/app/chat/skills/big/SKILL.md")
+    expect(String(error)).toContain("src/app/support/skills/big/SKILL.md")
+    expect((error as { code?: string }).code).toBe("DAWN_E1005")
+
+    for (const name of ["modules.edge.mjs", "stores.mjs", "app.mjs", "wrangler.toml"]) {
+      expect(existsSync(buildFile(appRoot, name))).toBe(false)
+    }
+    expect(existsSync(join(appRoot, "wrangler.toml"))).toBe(false)
+  })
+
+  test("still fails the build for the workspace directory even when skills are present", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nDo research.\n",
+      "workspace/.gitkeep": "",
+    })
+
+    const error = await runBuild(appRoot).catch((e: unknown) => e)
+
+    expect(String(error)).toContain("workspace/")
+    expect(String(error)).not.toMatch(/skills would vanish/)
   })
 
   test("fails the build when a route has long-term memory", async () => {
@@ -539,17 +619,20 @@ import { z } from "zod"
 
 export default defineMemory({ schema: z.object({ fact: z.string() }) })
 `,
+      // Skills are served on the edge now (their bodies are bundled), so this
+      // directory must contribute NOTHING to the report — it is here to prove
+      // that, alongside the three features that do still fail.
       "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nGo.\n",
       "workspace/notes.md": "# notes\n",
     })
 
     const message = String(await runBuild(appRoot).catch((e: unknown) => e))
 
-    // Fixing four build failures one build at a time is a bad experience.
+    // Fixing three build failures one build at a time is a bad experience.
     expect(message).toContain("`sandbox`")
     expect(message).toContain("workspace/")
-    expect(message).toContain(join("src", "app", "chat", "skills"))
     expect(message).toContain("memory.store")
+    expect(message).not.toContain(join("src", "app", "chat", "skills"))
   })
 
   test("fails BEFORE emitting anything", async () => {
@@ -601,6 +684,8 @@ export default defineMemory({ schema: z.object({ fact: z.string() }) })
   sandbox: { provider: { name: "docker" } },
 }
 `,
+      // Present to prove `dawn check` mirrors the build's PERMISSIVE handling of
+      // skills too: it must name the two real violations and not this directory.
       "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nGo.\n",
       "workspace/notes.md": "# notes\n",
     })
@@ -611,7 +696,7 @@ export default defineMemory({ schema: z.object({ fact: z.string() }) })
     const message = String(error)
     expect(message).toContain("`sandbox`")
     expect(message).toContain("workspace/")
-    expect(message).toContain(join("src", "app", "chat", "skills"))
+    expect(message).not.toContain(join("src", "app", "chat", "skills"))
   })
 
   test("dawn check gates `toolOutput`, whose keys survive the build boundary intact", async () => {

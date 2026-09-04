@@ -9,6 +9,7 @@ import { createSkillsMarker } from "../../src/capabilities/built-in/skills.js"
 import { createWorkspaceMarker } from "../../src/capabilities/built-in/workspace.js"
 import type { CapabilityMarkerContext, MarkerFs } from "../../src/capabilities/types.js"
 import { nodeMarkerFs } from "../../src/node-marker-fs.js"
+import { staticMarkerFs } from "../../src/static-marker-fs.js"
 
 // Copied verbatim from agents-md.ts so the parity test pins the exact output
 // shape across the node:fs -> MarkerFs migration.
@@ -272,5 +273,56 @@ describe("markers read through MarkerFs", () => {
       const names = (contribution.tools ?? []).map((t) => t.name).sort()
       expect(names).toEqual(["listDir", "readFile", "runBash", "writeFile"])
     })
+  })
+})
+
+describe("staticMarkerFs is indistinguishable from nodeMarkerFs for the bundled markers", () => {
+  const ROUTE_DIR = "/ns/src/app/chat"
+  const PLAN = "- [ ] Restate the question\n- [x] Search the corpus\n"
+  const MEMORY = "Prefer short answers."
+  const SKILL = "---\ndescription: How to cite.\n---\n\nAlways cite [path]."
+
+  const files = {
+    [`${ROUTE_DIR}/memory.md`]: MEMORY,
+    [`${ROUTE_DIR}/plan.md`]: PLAN,
+    [`${ROUTE_DIR}/skills/cite-sources/SKILL.md`]: SKILL,
+  }
+  const ctx = makeCtx("/ns", staticMarkerFs(files))
+
+  it("skills: detects, lists in the prompt, and serves the body through readSkill", async () => {
+    const marker = createSkillsMarker()
+    expect(await marker.detect(ROUTE_DIR, ctx)).toBe(true)
+    const contribution = await marker.load(ROUTE_DIR, ctx)
+    expect(contribution.promptFragment?.render({})).toContain("- **cite-sources** — How to cite.")
+    const readSkill = contribution.tools?.find((t) => t.name === "readSkill")
+    expect(
+      await readSkill?.run({ name: "cite-sources" }, { signal: new AbortController().signal }),
+    ).toBe("Always cite [path].")
+  })
+
+  it("planning: seeds todos from plan.md", async () => {
+    const marker = createPlanningMarker()
+    expect(await marker.detect(ROUTE_DIR, ctx)).toBe(true)
+    const contribution = await marker.load(ROUTE_DIR, ctx)
+    const todos = contribution.stateFields?.find((f) => f.name === "todos")
+    expect(todos?.default).toEqual([
+      { content: "Restate the question", status: "pending" },
+      { content: "Search the corpus", status: "completed" },
+    ])
+  })
+
+  it("memory-md: renders the route memory block", async () => {
+    const marker = createMemoryMdMarker()
+    expect(await marker.detect(ROUTE_DIR, ctx)).toBe(true)
+    const contribution = await marker.load(ROUTE_DIR, ctx)
+    expect(contribution.promptFragment?.render({})).toContain("# Route Memory")
+    expect(contribution.promptFragment?.render({})).toContain(MEMORY)
+  })
+
+  it("none of them detect when the map has no files under the route", async () => {
+    const empty = makeCtx("/ns", staticMarkerFs({}))
+    expect(await createSkillsMarker().detect(ROUTE_DIR, empty)).toBe(false)
+    expect(await createPlanningMarker().detect(ROUTE_DIR, empty)).toBe(false)
+    expect(await createMemoryMdMarker().detect(ROUTE_DIR, empty)).toBe(false)
   })
 })

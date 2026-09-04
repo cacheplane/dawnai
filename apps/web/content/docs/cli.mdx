@@ -117,7 +117,7 @@ Emits, per target:
 
 Restrict which targets are emitted via `build.targets` in `dawn.config.ts` (e.g. `{ build: { targets: ["node"] } }`). The list replaces the defaults rather than adding to them, so an app deploying to the edge names `{ build: { targets: ["node", "hono"] } }`.
 
-The `hono` target serves a **subset** of Dawn, and the build fails with `DAWN_E1005` — naming every offending config key and file at once — when the app uses the sandbox, `backends.filesystem`/`backends.exec`, a config-supplied store, `toolOutput`, a `workspace/` directory, route skills, or route-level long-term memory. [`dawn check`](#dawn-check) applies the identical gate whenever `hono` is a configured target. See [Edge and Hono](/docs/deployment/edge).
+The `hono` target serves a **subset** of Dawn, and the build fails with `DAWN_E1005` — naming every offending config key and file at once — when the app uses the sandbox, `backends.filesystem`/`backends.exec`, a config-supplied store, `toolOutput`, a `workspace/` directory, or route-level long-term memory. [`dawn check`](#dawn-check) applies the identical gate whenever `hono` is a configured target. See [Edge and Hono](/docs/deployment/edge).
 
 `toolOutput` is a recent addition to that list, and the one gated key that is plain JSON — so it used to be inlined into the bundle and then ignored, and the build went green while the deployed worker never offloaded. An app that sets both `toolOutput` and `"hono"` therefore sees a build that passed before start failing: remove the key, or drop `"hono"` from `build.targets`. See [Upgrading](/docs/upgrading#tooloutput-is-now-gated-off-the-hono-target).
 

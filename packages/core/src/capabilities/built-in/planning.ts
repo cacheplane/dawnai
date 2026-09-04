@@ -4,7 +4,7 @@ import type { CapabilityMarker, MarkerFs, PromptFragment, StreamTransformer } fr
 import { type PlanTodo, parsePlanMarkdown } from "./plan-md-parser.js"
 
 const PLAN_MD = "plan.md"
-const MAX_PLAN_BYTES = 64 * 1024
+export const MAX_PLAN_BYTES = 64 * 1024
 
 export interface RuntimeTodo {
   readonly content: string

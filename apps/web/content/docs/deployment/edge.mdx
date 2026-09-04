@@ -8,7 +8,7 @@ The emitted bundle is tested with local workerd and with a Node Hono round trip.
 
 Before selecting Hono, confirm all of these:
 
-- the app does not need sandbox, workspace, shell, skills, route long-term memory, or tool-output offloading;
+- the app does not need sandbox, workspace, shell, route long-term memory, or tool-output offloading;
 - request-scoped WebSocket Postgres through `@neondatabase/serverless` fits the database environment;
 - the host can preserve the exact incoming `Request` object through Hono routing;
 - every authored route, tool, state module, middleware module, and transitive dependency is web-standard and edge-compatible;
@@ -140,10 +140,15 @@ Sharing a database is supported only with hand-composed request stores that pass
 | Custom permission store | `permissions.store` | It would be silently replaced by the emitted per-request Postgres permission store |
 | Custom memory store | `memory.store` | It is removed from the serialized config and no emitted memory store replaces it |
 | Workspace capability set | an app-root `workspace/` directory | File tools, shell, offloading, and `workspace/AGENTS.md` require a filesystem/process surface |
-| Skills | a route `skills/<name>/SKILL.md` | Skill bodies are read from disk when a route loads |
 | Long-term memory | `memory.ts` on an agent route | The emitted stores omit the memory store needed by `recall` and `remember` |
 
-Filesystem marker capabilities such as route `memory.md` and `plan.md` do not activate without a marker filesystem. The explicit build gates above cover surfaces that would otherwise be silently replaced, dropped, or fail only on first use.
+`workspace/AGENTS.md` is the one marker file that stays off the edge: its contract is a file the agent rewrites through `writeFile` and Dawn re-reads every turn, and a read-only copy would keep half of that promise. The explicit build gates above cover surfaces that would otherwise be silently replaced, dropped, or fail only on first use.
+
+## Skills, `plan.md`, and route `memory.md` are bundled
+
+Route [skills](/docs/skills), a route [`plan.md`](/docs/planning), and a route `memory.md` are static files, so `dawn build` reads them for the `hono` and `vercel` targets and inlines their contents into `modules.edge.mjs` beside the route that owns them. At request time they are served from that manifest through the same marker facade the node runtime reads from disk, so `readSkill`, seeded todos, and the route-memory prompt block behave exactly as they do under `dawn dev`. What is served is frozen at build time: on these targets a skill body, a `plan.md` seed, and `memory.md` are read when `dawn build` runs, so editing one of those files takes effect on the next build rather than live.
+
+The build caps each bundled marker — 32 KiB for a `SKILL.md` or `memory.md`, 64 KiB for `plan.md`; the last two match the limits the runtime already applies — and both `dawn build` and `dawn check` fail with `DAWN_E1005`, naming every oversized file, before any artifact is written. A manifest that records skill names but carries no bodies for them (one built before this behavior existed, or composed by hand) is detected at boot and fails every request with `DAWN_E1005` rather than dropping the skills silently; rebuild with `dawn build`.
 
 A [thread-access policy](/docs/thread-access) is not one of these gates: `src/thread-access.ts` is bundled into the manifest as a static import and runs on the edge like it does under `dawn dev`. Nothing in it is filesystem-dependent — the disk probe happens at build time, not at request time. If a manifest built before the app grew a policy is deployed beside a newer entry point, the boot fails rather than serving every thread endpoint ungated, because a bundled runtime has no disk to fall back to. The `langsmith` target still refuses to build while a policy file exists; it materializes graphs with no Dawn HTTP layer to run the policy in.
 

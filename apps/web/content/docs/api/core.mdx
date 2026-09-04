@@ -35,8 +35,10 @@ Importing `/node` registers the disk-backed `dawn.config.ts` loader. The root re
 | `createAgentsMdMarker` | Create the AGENTS.md capability marker. |
 | `createMemoryMarker` | Create the typed-memory capability marker. |
 | `createMemoryMdMarker` | Create the memory.md capability marker. |
+| `MAX_MEMORY_BYTES` | Cap the size of a route `memory.md`. |
 | `RuntimeTodo` | Describe one runtime plan item. |
 | `createPlanningMarker` | Create the planning capability marker. |
+| `MAX_PLAN_BYTES` | Cap the size of a route `plan.md`. |
 | `createSkillsMarker` | Create the skills capability marker. |
 | `createSubagentsMarker` | Create the subagents capability marker. |
 | `createWorkspaceMarker` | Create the workspace capability marker. |
@@ -65,6 +67,8 @@ Importing `/node` registers the disk-backed `dawn.config.ts` loader. The root re
 | `DawnToolDefinition` | Describe a contributed Dawn tool. |
 | `Embedder` | Define the memory embedding seam. |
 | `MarkerFs` | Define capability filesystem operations. |
+| `StaticMarkerFiles` | Describe bundled marker file bodies. |
+| `staticMarkerFs` | Serve bundled marker files without a filesystem. |
 | `MemoryContext` | Provide memory tool context. |
 | `MemoryKindLike` | Name memory kinds at the Core boundary. |
 | `MemoryRecordLike` | Describe a memory record at the Core boundary. |

@@ -13,6 +13,7 @@ import { scanRouteProviders } from "../../runtime/collect-route-providers.js"
 import { assertEdgeCapabilities, collectEdgeDependencyNotice } from "./edge-capabilities.js"
 import { edgeAppNamespace, emitEdgeModulesFile } from "./edge-modules-emitter.js"
 import type { BuildEmitContext } from "./index.js"
+import { assertRouteMarkerFileLimits } from "./marker-files.js"
 import { collectRouteStaticDiscovery, type RouteStaticDiscovery } from "./modules-emitter.js"
 
 export interface WebRuntimeEmitOptions {
@@ -66,10 +67,24 @@ export async function emitWebRuntimeArtifacts(
 
   // The runtime's own discovery functions, run once here at build time —
   // identical to what the node target does, so the two manifests can only
-  // ever disagree about the three lines the edge flavor changes.
+  // ever disagree about the three lines the edge flavor changes, plus the
+  // marker bodies an edge runtime has no filesystem to read.
+  //
+  // Runs BEFORE the mkdir/writes below on purpose: an over-limit marker file
+  // must fail THIS target's build with none of its artifacts written. Other
+  // targets configured earlier in `build.targets` may already have written
+  // theirs — this guard only protects the target currently building.
+  // Marker-file limits are checked across EVERY route first, in one pass, so a
+  // build names every oversized file at once. The per-route throw inside
+  // `collectRouteStaticDiscovery` below aggregates only within a single route,
+  // so on its own a three-route app would need three builds to see three
+  // offenders; with this scan in front it is an unreachable backstop. Both
+  // raise the same DAWN_E1005, and this one still runs before any mkdir/write.
+  await assertRouteMarkerFileLimits({ appRoot, manifest })
+
   const discoveries: RouteStaticDiscovery[] = []
   for (const route of manifest.routes) {
-    discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
+    discoveries.push(await collectRouteStaticDiscovery({ appRoot, markerFiles: true, route }))
   }
   // The same resolution the dynamic probe performs — shared, not re-derived,
   // so a present-but-unreadable middleware file cannot drop out of the edge

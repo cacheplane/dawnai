@@ -8,6 +8,7 @@ import { createRouteAssistantId } from "../../runtime/route-identity.js"
 import { discoverStateDefinition } from "../../runtime/state-discovery.js"
 import { discoverToolDefinitions, type ToolScope } from "../../runtime/tool-discovery.js"
 import { discoverSkillDirs } from "./edge-capabilities.js"
+import { collectRouteMarkerFiles, type RouteMarkerFile } from "./marker-files.js"
 
 /**
  * Build-time discovery results for one route — everything the emitter needs
@@ -42,6 +43,18 @@ export interface RouteStaticDiscovery {
    */
   readonly skills?: readonly string[]
   /**
+   * Marker file contents (`plan.md`, `memory.md`, `skills/<name>/SKILL.md`),
+   * route-relative. Collected only when `collectRouteStaticDiscovery` is asked
+   * for them — the edge flavors, which have no filesystem at request time. The
+   * node manifest never carries bodies; it reads them from disk.
+   */
+  readonly markerFiles?: readonly RouteMarkerFile[]
+  /**
+   * `routeDir` relative to the app root, forward-slashed — the directory the
+   * marker files were read from. Present exactly when `markerFiles` is.
+   */
+  readonly markerFilesDir?: string
+  /**
    * `state.ts` defaults as entries; `undefined` when the route has no state
    * definition, `[]` when it has a defined-but-empty one (mirrors the
    * dynamic path's `discoverStateDefinition` null-vs-empty distinction).
@@ -64,6 +77,8 @@ export interface RouteStaticDiscovery {
  */
 export async function collectRouteStaticDiscovery(options: {
   readonly appRoot: string
+  /** Read marker file bodies too (edge flavors only). */
+  readonly markerFiles?: boolean
   readonly route: RouteDefinition
 }): Promise<RouteStaticDiscovery> {
   const { appRoot, route } = options
@@ -117,6 +132,22 @@ export async function collectRouteStaticDiscovery(options: {
   // is byte-for-byte what it was before this fact existed.
   const skillDirs = discoverSkillDirs(join(route.routeDir, "skills"))
 
+  // Bodies only for the flavors that cannot read them at request time. This is
+  // also where an over-limit marker fails the build — before any artifact is
+  // written.
+  const markerFiles = options.markerFiles
+    ? await collectRouteMarkerFiles({ appRoot, routeDir: route.routeDir })
+    : undefined
+  // Pinned to the SAME directory `collectRouteMarkerFiles` just read from.
+  // Today the two agree by construction: `discoverRoutes` sets
+  // `entryFile = <routeDir>/index.ts`, and the runtime looks these markers up
+  // under `pureDirname(routeFile)`. If route discovery ever stops putting the
+  // entry file directly in `routeDir`, this emitted key must follow
+  // `dirname(entryFile)` — not `routeDir` — to keep matching that runtime
+  // derivation.
+  const markerFilesFields: Pick<RouteStaticDiscovery, "markerFiles" | "markerFilesDir"> =
+    markerFiles ? { markerFiles, markerFilesDir: appRootRelative(appRoot, route.routeDir) } : {}
+
   return {
     entryFile: route.entryFile,
     kind: route.kind,
@@ -124,6 +155,7 @@ export async function collectRouteStaticDiscovery(options: {
     reducers,
     routeId: route.id,
     ...(skillDirs.length > 0 ? { skills: skillDirs } : {}),
+    ...markerFilesFields,
     stateDefaults,
     toolSchemas,
     tools,
@@ -315,6 +347,29 @@ export function emitModulesFileWithFlavor(
     // the runtime guard reports them, it never opens them.
     if (discovery.skills && discovery.skills.length > 0) {
       lines.push(`      skills: ${JSON.stringify(discovery.skills)},`)
+    }
+    // Marker bodies, keyed by the SAME namespace path the runtime computes
+    // (`pureJoin(pureDirname(routeFile), …)`), so a key the markers ask for
+    // and a key the build wrote are the same string. `Object.fromEntries`
+    // over an array, not an object literal: a "__proto__" key can never
+    // perform a prototype assignment this way, and every key/value goes
+    // through JSON.stringify so no content can break out of its literal.
+    if (discovery.markerFiles && discovery.markerFiles.length > 0) {
+      if (discovery.markerFilesDir === undefined) {
+        throw new Error(
+          `Route "${discovery.routeId}" has markerFiles but no markerFilesDir — malformed ` +
+            `RouteStaticDiscovery (collectRouteStaticDiscovery must set both together).`,
+        )
+      }
+      const routeDirRelative = discovery.markerFilesDir
+      const entries = discovery.markerFiles.map((file) => {
+        const key =
+          routeDirRelative === "" ? file.relativePath : `${routeDirRelative}/${file.relativePath}`
+        return `        [${flavor.appRootPathExpression(key)}, ${JSON.stringify(file.content)}],`
+      })
+      lines.push(`      markerFiles: Object.fromEntries([`)
+      lines.push(...entries)
+      lines.push(`      ]),`)
     }
     if (discovery.stateDefaults) {
       // Defaults come from arbitrary user schema code; the dynamic path hands
