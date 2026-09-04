@@ -2861,14 +2861,21 @@ function usageError() {
 }
 
 const FAILURE_DETAIL_MAX_LENGTH = 512
+// The joined message chain is cut here before any redaction regex runs, so a pathological
+// message (a megabyte of one repeated character) costs a bounded amount of matching work.
+const FAILURE_DETAIL_MAX_INPUT_LENGTH = 4096
 const FAILURE_DETAIL_MAX_CAUSES = 3
 const FAILURE_DETAIL_REDACTIONS = Object.freeze([
   /gh[pous]_[A-Za-z0-9]{20,}/gu,
   /github_pat_[A-Za-z0-9_]{20,}/gu,
   /npm_[A-Za-z0-9]{20,}/gu,
-  /Bearer\s+\S+/gu,
+  /Bearer\s+\S+/giu,
   /authorization:\s*\S+(?:\s+\S+)?/giu,
-  /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
+  // JWT-like: anchored so the match can only start at the beginning of a token run; the
+  // unanchored form retried every offset of a long unbroken run (quadratic, 80k chars ~10 s).
+  // The lookbehind deliberately admits a preceding dot: `v1.<jwt>` and `id.<jwt>` are real
+  // shapes and must still redact.
+  /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/gu,
 ])
 
 const executedPath =
@@ -2897,6 +2904,16 @@ function safeCode(error) {
  * detail is derived from the error message chain only: never a stack, never a body.
  */
 export function safeDetail(error) {
+  // A hostile error (a throwing `message` getter, a Proxy that traps every get) must not turn
+  // the failure report itself into a second crash: the placeholder is the only fallback.
+  try {
+    return unsafeDetail(error)
+  } catch {
+    return "(no message)"
+  }
+}
+
+function unsafeDetail(error) {
   const messages = []
   let current = error
   for (
@@ -2905,10 +2922,18 @@ export function safeDetail(error) {
     depth += 1
   ) {
     const message = current?.message
-    messages.push(typeof message === "string" && message.length > 0 ? message : "(no message)")
+    messages.push(
+      typeof message === "string" && message.trim().length > 0 ? message : "(no message)",
+    )
     current = current !== null && typeof current === "object" ? current.cause : undefined
   }
-  let detail = Array.from(messages.join(" <- "), (character) =>
+  let joined = messages.join(" <- ")
+  if (joined.length > FAILURE_DETAIL_MAX_INPUT_LENGTH) {
+    // Drop the token the cut landed inside, so a credential split at the boundary can never
+    // surface as a short fragment the redaction patterns no longer recognize.
+    joined = joined.slice(0, FAILURE_DETAIL_MAX_INPUT_LENGTH).replace(/(?<=\s)\S+$/u, "")
+  }
+  let detail = Array.from(joined, (character) =>
     isControlCharacter(character) ? " " : character,
   ).join("")
   detail = detail.replace(/https?:\/\/[^\s?#]*\?\S*/gu, (token) =>
@@ -2918,6 +2943,7 @@ export function safeDetail(error) {
     detail = detail.replace(pattern, "[redacted]")
   }
   detail = detail.replace(/\s+/gu, " ").trim()
+  if (detail.length === 0) return "(no message)"
   if (detail.length > FAILURE_DETAIL_MAX_LENGTH) {
     detail = `${detail.slice(0, FAILURE_DETAIL_MAX_LENGTH - 1)}\u2026`
   }

@@ -918,6 +918,27 @@ test("attestation verification failures report the exit code, signal, and redact
   assert.equal(timeoutResult.reason.includes(leaked), false)
   assert.equal(timeoutResult.reason.includes("ghp_"), false)
 
+  const jwt =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+  const dotted = createCliAttestationVerifier({
+    repository: "cacheplane/dawnai",
+    token: "token",
+    async runGh() {
+      throw Object.assign(new Error("Command failed"), {
+        code: 1,
+        signal: null,
+        stderr: `bundle rejected: v1.${jwt} via registry.npmjs.org`,
+      })
+    },
+  })
+  const dottedResult = await dotted.verify({ source: "escrow", ...escrow.input })
+  assert.equal(dottedResult.status, "INVALID")
+  assert.equal(
+    dottedResult.reason.includes("eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ"),
+    false,
+  )
+  assert.match(dottedResult.reason, /v1\.\[redacted\] via registry\.npmjs\.org/u)
+
   const failed = createCliAttestationVerifier({
     repository: "cacheplane/dawnai",
     token: "token",

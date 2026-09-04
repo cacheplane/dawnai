@@ -70,8 +70,13 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // is polled at 2 s × 10 then 10 s up to a ten-minute per-package deadline instead of the
 // former 20 × 2 s window (run 33896070181: @dawn-ai/ag-ui@0.8.24 accepted 16:40:52Z,
 // tarball 404 until ~16:46Z); every definitive conflict still fails on first sight.
+// Repinned for failure-detail hardening (scripts/release/cli.mjs): safeDetail caps its input
+// at 4096 chars before redaction, anchors the JWT pattern (the unanchored form was quadratic),
+// matches Bearer case-insensitively, and falls back to the placeholder when the error itself
+// throws or its message is whitespace-only. The same anchored JWT pattern (lookbehind
+// without a dot, so v1.<jwt> still redacts) is applied to artifact-store.mjs for consistency.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "cbc0007d9543cbff2e2f0c0de384842a1a4c4e8a483436975cb1b21ad55aa6a9"
+  "5a539c58d49ad0b6305de6ca4bcebed48497cf254c833533fc78eca950265072"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

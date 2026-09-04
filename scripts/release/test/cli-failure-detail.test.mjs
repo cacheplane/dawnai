@@ -127,6 +127,107 @@ test("safeDetail redacts credentials that straddle a stripped newline", () => {
   assert.ok(!detail.includes("ghp_abcdefghijklmnopqrstuvwxyz0123456789"))
 })
 
+const JWT =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+const JWT_PAYLOAD = "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ"
+
+test("safeDetail bounds its work on a one-million-character message", () => {
+  const error = new Error("q".repeat(1_000_000))
+  const started = performance.now()
+  const detail = safeDetail(error)
+  const elapsed = performance.now() - started
+  assert.ok(elapsed < 200, `safeDetail took ${elapsed.toFixed(1)} ms on a 1M-char message`)
+  assert.equal(detail.length, 512)
+  assert.equal(detail.at(-1), "…")
+  assert.ok(detail.startsWith("qqqq"))
+})
+
+for (const [label, message] of [
+  ["at the start of the message", `${JWT} rejected`],
+  ["after an equals sign", `request failed: token=${JWT} rejected`],
+  ["after a Bearer scheme", `request failed: Bearer ${JWT} rejected`],
+  ["after a colon", `request failed: authorization:${JWT} rejected`],
+  ["inside quotes", `request failed: "${JWT}" rejected`],
+  ["after a slash", `request failed: https://example.test/${JWT} rejected`],
+  ["after a short dotted prefix", `request failed: v1.${JWT} rejected`],
+  ["after an id. prefix inside JSON", `request failed: {"id.${JWT}":1} rejected`],
+  ["after a hyphenated dotted prefix", `request failed: ab-cd.${JWT} rejected`],
+  ["inside a dotted URL path", `request failed: https://h.test/v1.${JWT} rejected`],
+]) {
+  test(`safeDetail redacts a JWT ${label}`, () => {
+    const detail = safeDetail(new Error(message))
+    assert.ok(!detail.includes(JWT_PAYLOAD), `JWT leaked ${label}: ${detail}`)
+    assert.ok(detail.includes("[redacted]"), `JWT not marked redacted ${label}: ${detail}`)
+    assert.ok(detail.startsWith("request failed: ") || detail.startsWith("[redacted]"), detail)
+  })
+}
+
+test("safeDetail leaves dotted identifiers shorter than a JWT segment alone", () => {
+  const detail = safeDetail(new Error("resolved @dawn-ai/core@0.8.24 from registry.npmjs.org"))
+  assert.equal(detail, "resolved @dawn-ai/core@0.8.24 from registry.npmjs.org")
+})
+
+test("safeDetail redacts a lowercase bearer scheme", () => {
+  const detail = safeDetail(
+    new Error("request failed with bearer sk-live-topsecretvalue in the header"),
+  )
+  assert.ok(!detail.includes("sk-live-topsecretvalue"), detail)
+  assert.equal(detail, "request failed with [redacted] in the header")
+  assert.equal(
+    safeDetail(new Error("BEARER sk-live-topsecretvalue rejected")),
+    "[redacted] rejected",
+  )
+})
+
+test("safeDetail returns the placeholder when reading the error throws", () => {
+  const throwingGetter = {
+    get message() {
+      throw new Error("getter exploded")
+    },
+  }
+  assert.equal(safeDetail(throwingGetter), "(no message)")
+
+  const hostileProxy = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("proxy trap exploded")
+      },
+      has() {
+        throw new Error("proxy trap exploded")
+      },
+    },
+  )
+  assert.equal(safeDetail(hostileProxy), "(no message)")
+
+  const throwingCause = new Error("outer", {
+    cause: new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("cause trap exploded")
+        },
+      },
+    ),
+  })
+  assert.equal(safeDetail(throwingCause), "(no message)")
+})
+
+test("safeDetail never emits a credential fragment split by the input cap", () => {
+  const detail = safeDetail(new Error(`${" ".repeat(4080)}ghp_${"A".repeat(30)} trailing`))
+  assert.ok(!detail.includes("ghp_"), detail)
+  assert.equal(detail, "(no message)")
+  const kept = safeDetail(new Error(`prefix ${" ".repeat(4070)}ghp_${"A".repeat(30)}`))
+  assert.equal(kept, "prefix")
+})
+
+test("safeDetail substitutes the placeholder for whitespace-only messages", () => {
+  assert.equal(safeDetail(new Error("   ")), "(no message)")
+  assert.equal(safeDetail(new Error("\t\r\n")), "(no message)")
+  assert.equal(safeDetail(new Error("\u0000\u001b\u0085")), "(no message)")
+  assert.equal(safeDetail({ message: "outer", cause: { message: "  " } }), "outer <- (no message)")
+})
+
 test("the CLI entrypoint prints the code line first and a sanitized detail line second", async () => {
   const token = "ghp_notarealtoken_000000000000000000000000"
   const result = await execFile(
