@@ -2190,7 +2190,7 @@
             },
             "permissions": {
               "actions": "write",
-              "contents": "read"
+              "contents": "write"
             },
             "runs-on": "ubuntu-24.04",
             "timeout-minutes": 5
@@ -2245,7 +2245,7 @@
               "actions": "read",
               "attestations": "read",
               "checks": "read",
-              "contents": "read"
+              "contents": "write"
             },
             "runs-on": "ubuntu-24.04",
             "timeout-minutes": 30
@@ -2686,7 +2686,7 @@
               "actions": "read",
               "attestations": "read",
               "checks": "read",
-              "contents": "read"
+              "contents": "write"
             },
             "runs-on": "ubuntu-24.04",
             "timeout-minutes": 20
@@ -2790,7 +2790,7 @@
             },
             "permissions": {
               "actions": "write",
-              "contents": "read"
+              "contents": "write"
             },
             "runs-on": "ubuntu-24.04",
             "timeout-minutes": 10

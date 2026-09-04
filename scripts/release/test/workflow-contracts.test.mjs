@@ -858,11 +858,29 @@ test("final release workflows pin every action and the exact Node, pnpm, and npm
   assert.ok(npmChecks > 0, "the exact npm runtime must be asserted before release verification")
 })
 
+test("only the enumerated jobs hold contents: write", async () => {
+  const { workflow: release } = await readRequiredWorkflow("release.yml")
+  assert.deepEqual(jobsWithContentsWrite(release), [
+    "correlate-audit",
+    "detect",
+    "dispatch-audit",
+    "escrow",
+    "publish-release",
+    "reconcile-npm",
+    "reconcile-smokes",
+    "record-audit-dispatch",
+    "tag",
+  ])
+
+  const { workflow: audit } = await readRequiredWorkflow("published-artifact-verify.yml")
+  assert.deepEqual(jobsWithContentsWrite(audit), ["coordinate", "verify-draft"])
+})
+
 test("detect invokes the sole production observer and exports only validated controller outputs", async () => {
   const { source, workflow } = await readRequiredWorkflow("release.yml")
   const detect = requiredJob(workflow, "detect")
   assert.deepEqual(normalizeNeeds(detect.needs), [])
-  assertNoWriteOrOidc(detect)
+  assertContentsWriteOnly(detect)
   assert.equal(detect.permissions?.checks, "read")
   const checkout = onlyStepUsing(detect, ACTIONS.checkout)
   const pnpm = onlyStepUsing(detect, ACTIONS.pnpm)
@@ -1204,7 +1222,7 @@ test("audit dispatch, receipt recording, correlation, and immutable publication 
   const publish = requiredJob(workflow, "publish-release")
   assert.deepEqual(normalizeNeeds(dispatch.needs), ["detect", "hydrate", "reconcile-smokes", "tag"])
   assert.equal(dispatch.permissions?.actions, "write")
-  assert.notEqual(dispatch.permissions?.contents, "write")
+  assertContentsWriteOnly(dispatch, { allowedWrites: ["actions"] })
   const dispatchStep = onlyRunStepMatching(
     dispatch,
     /node scripts\/release\/cli\.mjs dispatch-audit\b/u,
@@ -1307,7 +1325,7 @@ test("the independent workflow relays default-branch audits and verifies exact t
 
   const coordinator = requiredJob(workflow, "coordinate")
   assert.equal(coordinator.permissions?.actions, "write")
-  assert.notEqual(coordinator.permissions?.contents, "write")
+  assertContentsWriteOnly(coordinator, { allowedWrites: ["actions"] })
   assert.match(coordinator.if, /github\.event\.repository\.default_branch/u)
   const coordinatorCheckout = onlyStepUsing(coordinator, ACTIONS.checkout)
   assert.equal(
@@ -1327,7 +1345,7 @@ test("the independent workflow relays default-branch audits and verifies exact t
   const draft = requiredJob(workflow, "verify-draft")
   assert.equal(draft.name, "verify")
   assert.deepEqual(normalizeNeeds(draft.needs), ["coordinate"])
-  assert.equal(hasWritePermission(draft.permissions), false)
+  assertContentsWriteOnly(draft)
   assert.equal(draft.permissions?.checks, "read")
   assertExactIndependentTagGate(draft, "draft")
   const checkout = onlyStepUsing(draft, ACTIONS.checkout)
@@ -1410,7 +1428,9 @@ test("the independent workflow relays default-branch audits and verifies exact t
     source,
     /runOpenAI|runPgvector|packageSet|return_run_details|list.*workflow.*runs/iu,
   )
-  assert.doesNotMatch(source, /contents\s*:\s*write|gh\s+release|\/releases\/.+(?:PATCH|DELETE)/iu)
+  // contents: write is required for the draft-reading jobs to see draft Releases at all
+  // (spec 2026-09-04-controller-draft-visibility); the enumeration test pins which jobs hold it.
+  assert.doesNotMatch(source, /gh\s+release|\/releases\/.+(?:PATCH|DELETE)/iu)
 })
 
 test("release.yml is the only trusted npm publisher and chart publication remains separate", async () => {
@@ -3314,6 +3334,24 @@ function assertNoWriteOrOidc(job) {
   assert.ok(isRecord(job.permissions), "read-only jobs must declare explicit permissions")
   assert.equal(hasWritePermission(job.permissions), false)
   assert.notEqual(job.permissions["id-token"], "write")
+}
+
+function assertContentsWriteOnly(job, { allowedWrites = [] } = {}) {
+  assert.ok(isRecord(job.permissions), "draft-reading jobs must declare explicit permissions")
+  assert.equal(job.permissions.contents, "write")
+  assert.notEqual(job.permissions["id-token"], "write")
+  const allowed = new Set(["contents", ...allowedWrites])
+  for (const [permission, value] of Object.entries(job.permissions)) {
+    if (allowed.has(permission)) continue
+    assert.equal(value, "read", `${permission} must stay read-only`)
+  }
+}
+
+function jobsWithContentsWrite(workflow) {
+  return Object.entries(workflow.jobs)
+    .filter(([, job]) => isRecord(job.permissions) && job.permissions.contents === "write")
+    .map(([id]) => id)
+    .sort()
 }
 
 function normalizeNeeds(needs) {
