@@ -2,9 +2,11 @@
 
 Date: 2026-09-04
 
-Status: proposed implementation design, pending written-spec review.
+Status: approved for implementation planning by the user's continuation on
+2026-09-04. Production adoption remains a separate operation.
 
-Independent spec review: passed on 2026-09-04; user review remains pending.
+Independent spec review: passed on 2026-09-04; written-spec review accepted by
+the user before implementation planning.
 
 Parent: [Release reliability architecture](./2026-09-04-release-reliability-architecture.md).
 
