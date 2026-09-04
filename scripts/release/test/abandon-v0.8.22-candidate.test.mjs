@@ -581,6 +581,18 @@ const API_BASE = "https://api.github.com/repos/cacheplane/dawnai"
 const SIGNED_HOST = "https://objects.githubusercontent.com/recovery"
 
 /**
+ * Match a signed asset download URL as `<host>/<digits>` without building a
+ * regular expression from the host (an unescaped "." in a host pattern matches
+ * more hosts than intended). Returns [url, id] like RegExp#exec, or null.
+ */
+function signedAssetMatch(url, host) {
+  const prefix = `${host}/`
+  if (typeof url !== "string" || !url.startsWith(prefix)) return null
+  const id = url.slice(prefix.length)
+  return /^[0-9]+$/u.test(id) ? [url, id] : null
+}
+
+/**
  * One quarantined duplicate exactly as production carries it: the recovery
  * notice as its live body, the 45 base assets, the archived original body
  * (the canonical escrow body), and the recovery receipt.
@@ -689,7 +701,7 @@ function duplicateRoutingReader(fixtures, calls) {
           location: `${SIGNED_HOST}/${download[1]}`,
         })
       }
-      const signed = new RegExp(`^${SIGNED_HOST}/(\\d+)$`, "u").exec(url)
+      const signed = signedAssetMatch(url, SIGNED_HOST)
       if (signed !== null) return binaryResponse(downloads.get(Number(signed[1])))
       assert.fail(`unexpected URL ${url}`)
     }),

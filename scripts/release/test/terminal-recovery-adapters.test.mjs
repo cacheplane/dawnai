@@ -858,6 +858,18 @@ function terminalProjectionSha256(fixture, { name, body }) {
 const SIGNED_DOWNLOAD_HOST = "https://objects.githubusercontent.com/terminal"
 
 /**
+ * Match a signed asset download URL as `<host>/<digits>` without building a
+ * regular expression from the host (an unescaped "." in a host pattern matches
+ * more hosts than intended). Returns [url, id] like RegExp#exec, or null.
+ */
+function signedAssetMatch(url, host) {
+  const prefix = `${host}/`
+  if (typeof url !== "string" || !url.startsWith(prefix)) return null
+  const id = url.slice(prefix.length)
+  return /^[0-9]+$/u.test(id) ? [url, id] : null
+}
+
+/**
  * Serve the canonical draft plus one signed asset download, exactly as GitHub
  * does: the API asset URL answers 302 to a signed host that carries the bytes.
  */
@@ -871,7 +883,7 @@ function downloadRoute(fixture, bytesByAssetId) {
         location: `${SIGNED_DOWNLOAD_HOST}/${asset[1]}`,
       })
     }
-    const signed = new RegExp(`^${SIGNED_DOWNLOAD_HOST}/(\\d+)$`, "u").exec(url)
+    const signed = signedAssetMatch(url, SIGNED_DOWNLOAD_HOST)
     if (signed !== null) {
       const bytes = bytesByAssetId.get(Number(signed[1]))
       if (bytes === undefined) assert.fail(`no bytes for asset ${signed[1]}`)
