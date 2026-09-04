@@ -52,8 +52,9 @@ paths must be absent before activation.
 - A published immutable Release is never repaired. Conflicting public bytes or
   metadata are terminal operator incidents.
 - An irrecoverable prepublication candidate is preserved exactly as observed.
-  Stop, preserve all tags/Releases/evidence, and escalate for a separately
-  reviewed recovery design; do not attempt abandonment from the live workflow.
+  Stop, preserve all tags/Releases/evidence, and follow "Terminal recovery of
+  a disabled-era candidate" below (a reviewed git-resident terminal record);
+  never attempt abandonment from the live workflow.
 
 ## Required toolchain
 
@@ -1579,7 +1580,8 @@ next scheduled reconciliation/audit. It must:
 
 An incomplete older tagged candidate is not a no-op: it wins arbitration and
 must be recovered before newer work proceeds. If recovery is irrecoverable,
-stop, preserve the candidate, and escalate; the live workflow cannot abandon it.
+stop, preserve the candidate, and make it terminal through "Terminal recovery
+of a disabled-era candidate" above; the live workflow cannot abandon it.
 
 ## Live receipt
 
