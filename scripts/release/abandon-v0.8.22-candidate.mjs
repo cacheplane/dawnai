@@ -10,7 +10,12 @@
 import { createHash } from "node:crypto"
 
 import { canonicalAbandonmentReleaseBody } from "./abandonment.mjs"
-import { DUPLICATE_DRAFT_RECOVERY_POLICY } from "./duplicate-draft-recovery.mjs"
+import {
+  assetSetSha256,
+  baseAssetNamespaceFromMarker,
+  DUPLICATE_DRAFT_RECOVERY_POLICY,
+  sameAssetSet,
+} from "./duplicate-draft-recovery.mjs"
 import { createDuplicateDraftRecoveryReader } from "./duplicate-draft-recovery-adapters.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
 import { abandonmentReleaseMarker, parseReleaseMarker, releaseBodySha256 } from "./metadata.mjs"
@@ -207,6 +212,20 @@ export async function captureTerminalRecord({
   if (assets.length !== policy.baseAssetCount) {
     throw new Error("Canonical draft does not carry exactly the 45 base assets")
   }
+  // The marker's own base-asset digest must be self-consistent AND describe the
+  // assets the draft actually carries. Its order comes from the attestation
+  // subjects, never from GitHub's listing order, so it is derived from the
+  // marker and compared as a set — the same recipe the duplicate-draft recovery
+  // uses on the quarantined drafts.
+  const expectedBaseAssets = baseAssetNamespaceFromMarker(marker)
+  if (
+    expectedBaseAssets === null ||
+    expectedBaseAssets.length !== policy.baseAssetCount ||
+    assetSetSha256(expectedBaseAssets) !== marker.baseAssetSetSha256 ||
+    !sameAssetSet(expectedBaseAssets, assets)
+  ) {
+    throw new Error("Canonical draft assets are not the marker's base asset set")
+  }
 
   const firstSweep = normalizeSweep(await reader.readNpmSweep(), policy.version)
   await wait(NPM_SWEEP_GAP_MS)
@@ -215,8 +234,10 @@ export async function captureTerminalRecord({
     throw new Error("npm sweeps are not sixty seconds apart")
   }
   const releaseRuns = normalizeRuns(await reader.readReleaseRuns())
+  // The duplicates are read AFTER the canonical draft on purpose: verifying
+  // each duplicate's archived original-body asset needs the canonical body.
   const duplicateRecovery = normalizeDuplicateRecovery(
-    await reader.readDuplicateRecoveryReceipts(),
+    await reader.readDuplicateRecoveryReceipts({ expectedOriginalBody: snapshot.body }),
     policy,
   )
 
@@ -379,6 +400,9 @@ export function createTerminalRecoveryReader({
       const runs = []
       for (const candidateRun of candidateRuns) {
         const jobs = await base.readCandidatePublishJobs(candidateRun.id, candidateRun.runAttempt)
+        // `normalizeCandidateJobs` already refuses a listing that does not carry
+        // exactly one publish-npm job per attempt; this loop re-proves it rather
+        // than trusting that invariant from a distance.
         // Jobs cover every attempt of the run, and the runbook's verifier walks
         // them attempt by attempt: each attempt must carry exactly one
         // publish-npm job, and the run counts as having started publishing
@@ -405,12 +429,36 @@ export function createTerminalRecoveryReader({
       return runs
     },
 
-    async readDuplicateRecoveryReceipts() {
+    /**
+     * Read both quarantined duplicates' recovery receipts.
+     *
+     * `expectedOriginalBody` is the canonical draft's live escrow body, which
+     * each duplicate archived before it was quarantined. The duplicate reader
+     * REQUIRES it: without it every recovery evidence asset on those drafts is
+     * rejected as `RECOVERY_ASSET_UNEXPECTED`. With it, the reader downloads the
+     * archive and proves it is byte-identical to that body, and returns the
+     * receipt's own verified bytes and digest.
+     */
+    async readDuplicateRecoveryReceipts({ expectedOriginalBody } = {}) {
+      if (typeof expectedOriginalBody !== "string" || expectedOriginalBody.length === 0) {
+        throw new Error("Duplicate recovery receipts require the archived original body")
+      }
       const duplicates = []
       for (const duplicate of TERMINAL_RECOVERY_POLICY.duplicates) {
-        const snapshot = await base.readReleaseSnapshot(duplicate.releaseId)
-        const name = `dawn-v${TERMINAL_RECOVERY_POLICY.version}-duplicate-${duplicate.releaseId}-recovery-receipt.json`
-        const receipt = snapshot.assets.find((asset) => asset.name === name)
+        const snapshot = await base.readReleaseSnapshot(duplicate.releaseId, {
+          expectedOriginalBody,
+        })
+        // The snapshot appends its evidence assets after the base assets in
+        // `evidenceAssets` order, so the receipt is addressed by kind rather
+        // than by rescanning names the reader has already classified.
+        const kinds = snapshot.evidenceAssets
+        if (!Array.isArray(kinds) || JSON.stringify(kinds) !== '["body","receipt"]') {
+          throw new Error(
+            `Duplicate ${duplicate.releaseId} does not carry exactly its archive and receipt`,
+          )
+        }
+        const receipt =
+          snapshot.assets[snapshot.assets.length - kinds.length + kinds.indexOf("receipt")]
         if (receipt === undefined) {
           throw new Error(`Duplicate ${duplicate.releaseId} has no recovery receipt asset`)
         }

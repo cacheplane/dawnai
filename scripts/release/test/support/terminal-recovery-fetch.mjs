@@ -36,3 +36,15 @@ export function canonicalizeForTest(value) {
 export function requestBody(init) {
   return JSON.parse(Buffer.from(init.body).toString("utf8"))
 }
+
+export function binaryResponse(value, status = 200, headers = {}) {
+  return new Response(value, {
+    status,
+    headers: { "content-type": "application/octet-stream", ...headers },
+  })
+}
+
+/** One GitHub Release asset listing row, digested from the bytes it serves. */
+export function releaseAsset(id, name, bytes) {
+  return { id, name, digest: `sha256:${sha256(bytes)}`, size: bytes.byteLength }
+}

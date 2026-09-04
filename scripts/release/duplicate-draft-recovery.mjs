@@ -2353,7 +2353,8 @@ function storedRecoveryCommit(bytes) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value) ? value : null
 }
 
-function assetSetSha256(assets) {
+/** The order-dependent base-asset-set digest the controller records in a marker. */
+export function assetSetSha256(assets) {
   return sha256(`${JSON.stringify(assetNamespace(assets))}\n`)
 }
 

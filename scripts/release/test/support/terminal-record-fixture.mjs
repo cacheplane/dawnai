@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto"
+
+import { baseAssetNamespaceFromMarker } from "../../duplicate-draft-recovery.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../../manifest.mjs"
 
 export const VERSION = "0.8.22"
@@ -33,6 +36,28 @@ export function attestationSet() {
   }
 }
 
+/**
+ * The 45-member base-asset namespace this marker describes, in the exact order
+ * the controller hashes it, and that order-dependent digest. Both are derived
+ * from the marker rather than fixed, so the fixture stays self-consistent: the
+ * terminal capture command re-derives `baseAssetSetSha256` from the live assets
+ * and would reject a marker whose digest did not describe them.
+ */
+export function baseAssetNamespace() {
+  return baseAssetNamespaceFromMarker({
+    manifestSha256: SHA256_A,
+    releaseRecordSha256: SHA256_B,
+    attestationSet: attestationSet(),
+  })
+}
+
+export function baseAssetSetSha256() {
+  const namespace = baseAssetNamespace().map(({ name, sha256 }) => ({ name, sha256 }))
+  return createHash("sha256")
+    .update(`${JSON.stringify(namespace)}\n`, "utf8")
+    .digest("hex")
+}
+
 export function predecessorMarker() {
   return {
     schemaVersion: 1,
@@ -44,7 +69,7 @@ export function predecessorMarker() {
     tag: `v${VERSION}`,
     manifestSha256: SHA256_A,
     releaseRecordSha256: SHA256_B,
-    baseAssetSetSha256: SHA256_C,
+    baseAssetSetSha256: baseAssetSetSha256(),
     attestationSet: attestationSet(),
     npmEvidenceSha256: null,
     smoke: null,
@@ -66,18 +91,17 @@ export function npmObservation(observedAt) {
   }
 }
 
-function escrowAssetsFromAttestation(attestation) {
-  const names = []
-  for (const subject of attestation.subjects) {
-    names.push(subject.subjectName)
-    names.push(subject.bundleName)
-  }
-  names.push("release-record.json")
-  return names.map((name, index) => ({ id: 1000 + index, name, sha256: SHA256_A }))
+function escrowAssets() {
+  // Exactly the namespace the marker's digest covers, so the live assets the
+  // capture command reads back agree with `baseAssetSetSha256` by construction.
+  return baseAssetNamespace().map(({ name, sha256 }, index) => ({
+    id: 1000 + index,
+    name,
+    sha256,
+  }))
 }
 
 export function record(overrides = {}) {
-  const attestation = attestationSet()
   const base = {
     schemaVersion: 1,
     kind: "abandoned-prepublication",
@@ -94,12 +118,12 @@ export function record(overrides = {}) {
       artifact: {
         manifestSha256: SHA256_A,
         releaseRecordSha256: SHA256_B,
-        baseAssetSetSha256: SHA256_C,
+        baseAssetSetSha256: baseAssetSetSha256(),
         attestationSet: attestationSet(),
       },
     },
     evidence: {
-      escrowAssets: escrowAssetsFromAttestation(attestation),
+      escrowAssets: escrowAssets(),
       npm: {
         observations: [
           npmObservation("2026-09-03T18:00:00.000Z"),

@@ -10,6 +10,12 @@ import {
   parseAbandonCliArguments,
   TERMINAL_RECOVERY_POLICY,
 } from "../abandon-v0.8.22-candidate.mjs"
+import {
+  canonicalRecoveryNotice,
+  originalBodyAssetName,
+  recoveryReceiptAssetName,
+} from "../duplicate-draft-recovery.mjs"
+import { createDuplicateDraftRecoveryReader } from "../duplicate-draft-recovery-adapters.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
 import { canonicalReleaseBody, releaseBodySha256 } from "../metadata.mjs"
 import { RecoveryInputError } from "../recover-v0.8.22-duplicate-drafts.mjs"
@@ -23,6 +29,13 @@ import {
   TAG_OBJECT_SHA,
   record as terminalRecord,
 } from "./support/terminal-record-fixture.mjs"
+import {
+  binaryResponse,
+  jsonResponse,
+  releaseAsset,
+  routingFetch,
+  sha256 as sha256Hex,
+} from "./support/terminal-recovery-fetch.mjs"
 
 const REVIEWED = "4".repeat(40)
 const REASON = "The tag-era release workflow cannot observe draft Releases; superseded by 0.8.23."
@@ -85,6 +98,19 @@ function escrowBody() {
   return canonicalReleaseBody({ marker: predecessorMarker(), manifest: null })
 }
 
+function attachingBody() {
+  return canonicalReleaseBody({
+    marker: {
+      ...predecessorMarker(),
+      revision: 1,
+      phase: "ATTACHING",
+      baseAssetSetSha256: null,
+      attestationSet: null,
+    },
+    manifest: null,
+  })
+}
+
 /** The fixture record, bound to the escrow body the fake reader serves. */
 function boundRecord() {
   const base = terminalRecord()
@@ -105,8 +131,8 @@ function fakeReader({
   npmPresent = false,
   releaseBody = escrowBody(),
   name = "Dawn v0.8.22",
+  assets = boundRecord().evidence.escrowAssets,
 } = {}) {
-  const assets = boundRecord().evidence.escrowAssets
   const observedAt = ["2026-09-03T18:00:00.000Z", "2026-09-03T18:01:05.000Z"]
   let sweep = 0
   return {
@@ -137,7 +163,8 @@ function fakeReader({
         assets,
       }
     },
-    async readDuplicateRecoveryReceipts() {
+    async readDuplicateRecoveryReceipts({ expectedOriginalBody }) {
+      assert.equal(expectedOriginalBody, releaseBody, "the duplicates are read with the live body")
       return boundRecord().evidence.duplicateRecovery
     },
     async readReleaseRuns() {
@@ -206,11 +233,13 @@ test("capture refuses a published package, a non-escrow body, and a foreign draf
     captureTerminalRecord({
       reviewedCommit: REVIEWED,
       reason: REASON,
-      reader: fakeReader({ releaseBody: "hello\n" }),
+      // A well-formed marker in another phase, so capture's own phase check is
+      // what fires rather than the marker parser.
+      reader: fakeReader({ releaseBody: attachingBody() }),
       now,
       wait: async () => {},
     }),
-    /escrow|marker/iu,
+    /escrow marker/iu,
   )
   await assert.rejects(
     captureTerminalRecord({
@@ -239,6 +268,22 @@ test("capture refuses sweeps that are not sixty seconds apart", async () => {
       wait: async () => {},
     }),
     /sixty seconds/iu,
+  )
+})
+
+test("capture refuses base assets that do not hash to the marker's base asset set", async () => {
+  const assets = boundRecord().evidence.escrowAssets.map((asset, index) =>
+    index === 0 ? { ...asset, sha256: "d".repeat(64) } : asset,
+  )
+  await assert.rejects(
+    captureTerminalRecord({
+      reviewedCommit: REVIEWED,
+      reason: REASON,
+      reader: fakeReader({ assets }),
+      now: () => Date.parse("2026-09-03T18:02:00.000Z"),
+      wait: async () => {},
+    }),
+    /base asset set/iu,
   )
 })
 
@@ -304,10 +349,6 @@ test("the live reader reads the canonical draft only through the terminal writer
     body: escrowBody(),
     assets: [],
   }
-  const receiptAssets = new Map([
-    [379982100, { id: 542241526, sha256: "b".repeat(64) }],
-    [379986168, { id: 542244137, sha256: "c".repeat(64) }],
-  ])
   const npmCalls = []
   const duplicateReader = {
     async readReviewedMergeAuthority(sha) {
@@ -353,17 +394,7 @@ test("the live reader reads the canonical draft only through the terminal writer
     },
     async readReleaseSnapshot(releaseId) {
       duplicateSnapshotCalls.push(releaseId)
-      const receipt = receiptAssets.get(releaseId)
-      return {
-        releaseId,
-        assets: [
-          {
-            id: receipt.id,
-            name: `dawn-v0.8.22-duplicate-${releaseId}-recovery-receipt.json`,
-            sha256: receipt.sha256,
-          },
-        ],
-      }
+      assert.fail(`the duplicate reader must not be asked for Release ${releaseId} here`)
     },
   }
   const reader = createTerminalRecoveryReader({
@@ -398,16 +429,9 @@ test("the live reader reads the canonical draft only through the terminal writer
     [...CANONICAL_RELEASE_PACKAGE_ORDER].sort(),
   )
   assert.deepEqual(npmCalls, [...CANONICAL_RELEASE_PACKAGE_ORDER].sort())
-  assert.deepEqual(await reader.readDuplicateRecoveryReceipts(), {
-    duplicates: [
-      { releaseId: 379982100, receiptAssetId: 542241526, receiptSha256: "b".repeat(64) },
-      { releaseId: 379986168, receiptAssetId: 542244137, receiptSha256: "c".repeat(64) },
-    ],
-    finalAuthorizationReceiptSha256: FINAL_AUTHORIZATION_RECEIPT_SHA256,
-  })
   assert.deepEqual(
     duplicateSnapshotCalls,
-    [379982100, 379986168],
+    [],
     "the canonical Release is never read through the duplicate reader",
   )
 })
@@ -514,4 +538,171 @@ test("the live reader refuses a present package", async () => {
     },
   })
   await assert.rejects(reader.readNpmSweep(), /absent/iu)
+})
+
+const API_BASE = "https://api.github.com/repos/cacheplane/dawnai"
+const SIGNED_HOST = "https://objects.githubusercontent.com/recovery"
+
+/**
+ * One quarantined duplicate exactly as production carries it: the recovery
+ * notice as its live body, the 45 base assets, the archived original body
+ * (the canonical escrow body), and the recovery receipt.
+ */
+function duplicateFixture(releaseId, tagName, { receiptDigestDrift = false } = {}) {
+  const originalBody = escrowBody()
+  const originalBodySha256 = sha256Hex(Buffer.from(originalBody, "utf8"))
+  const archiveName = originalBodyAssetName(releaseId, originalBodySha256)
+  const receiptName = recoveryReceiptAssetName(releaseId)
+  const receiptBytes = Buffer.from(`{"releaseId":${releaseId}}\n`, "utf8")
+  const receiptSha256 = sha256Hex(receiptBytes)
+  const body = canonicalRecoveryNotice({
+    repository: "cacheplane/dawnai",
+    version: "0.8.22",
+    canonicalReleaseId: TERMINAL_RECOVERY_POLICY.canonicalReleaseId,
+    duplicateReleaseId: releaseId,
+    originalBodySha256,
+    archiveAssetName: archiveName,
+    receiptAssetName: receiptName,
+    receiptSha256,
+  })
+  const archiveBytes = Buffer.from(originalBody, "utf8")
+  const base = boundRecord().evidence.escrowAssets.map((asset, index) => ({
+    id: releaseId * 10 + index,
+    name: asset.name,
+    digest: `sha256:${asset.sha256}`,
+    size: index + 1,
+  }))
+  const receiptRow = releaseAsset(releaseId * 10 + 200, receiptName, receiptBytes)
+  return {
+    releaseId,
+    receiptAssetId: receiptRow.id,
+    receiptSha256,
+    archiveAssetId: releaseId * 10 + 100,
+    release: {
+      id: releaseId,
+      tag_name: tagName,
+      name: "Dawn v0.8.22",
+      body,
+      draft: true,
+      prerelease: false,
+      immutable: false,
+      target_commitish: "main",
+    },
+    assets: [
+      ...base,
+      { ...releaseAsset(releaseId * 10 + 100, archiveName, archiveBytes) },
+      // A drifted listing digest must fail the downloaded-bytes comparison.
+      receiptDigestDrift ? { ...receiptRow, digest: `sha256:${"e".repeat(64)}` } : receiptRow,
+    ],
+    downloads: new Map([
+      [releaseId * 10 + 100, archiveBytes],
+      [releaseId * 10 + 200, receiptBytes],
+    ]),
+  }
+}
+
+function duplicateRoutingReader(fixtures, calls) {
+  const byId = new Map(fixtures.map((fixture) => [fixture.releaseId, fixture]))
+  const downloads = new Map()
+  for (const fixture of fixtures) {
+    for (const [assetId, bytes] of fixture.downloads) downloads.set(assetId, bytes)
+  }
+  return createDuplicateDraftRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED}\n`,
+    fetchImpl: routingFetch(calls, (url) => {
+      for (const [releaseId, fixture] of byId) {
+        if (url === `${API_BASE}/releases/${releaseId}`) return jsonResponse(fixture.release)
+        if (url === `${API_BASE}/releases/${releaseId}/assets?per_page=100`) {
+          return jsonResponse(fixture.assets)
+        }
+      }
+      const download =
+        /^https:\/\/api\.github\.com\/repos\/cacheplane\/dawnai\/releases\/assets\/(\d+)$/u.exec(
+          url,
+        )
+      if (download !== null) {
+        return binaryResponse(new Uint8Array(), 302, {
+          location: `${SIGNED_HOST}/${download[1]}`,
+        })
+      }
+      const signed = new RegExp(`^${SIGNED_HOST}/(\\d+)$`, "u").exec(url)
+      if (signed !== null) return binaryResponse(downloads.get(Number(signed[1])))
+      assert.fail(`unexpected URL ${url}`)
+    }),
+  })
+}
+
+test("the live reader reads both quarantined duplicates with their archived original body", async () => {
+  const fixtures = TERMINAL_RECOVERY_POLICY.duplicates.map((duplicate) =>
+    duplicateFixture(duplicate.releaseId, duplicate.tagName),
+  )
+  const calls = []
+  const reader = createTerminalRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED}\n`,
+    dependencies: {
+      createDuplicateReader: () => duplicateRoutingReader(fixtures, calls),
+      createTerminalWriter: () => ({ async readCanonicalSnapshot() {} }),
+    },
+  })
+
+  assert.deepEqual(
+    await reader.readDuplicateRecoveryReceipts({ expectedOriginalBody: escrowBody() }),
+    {
+      duplicates: fixtures.map((fixture) => ({
+        releaseId: fixture.releaseId,
+        receiptAssetId: fixture.receiptAssetId,
+        receiptSha256: fixture.receiptSha256,
+      })),
+      finalAuthorizationReceiptSha256: FINAL_AUTHORIZATION_RECEIPT_SHA256,
+    },
+  )
+  assert.equal(
+    calls.some(({ url }) =>
+      url.includes(`/releases/${TERMINAL_RECOVERY_POLICY.canonicalReleaseId}`),
+    ),
+    false,
+    "the canonical Release is never read through the duplicate reader",
+  )
+})
+
+test("the live reader rejects a duplicate whose receipt bytes do not match its digest", async () => {
+  const fixtures = [
+    duplicateFixture(
+      TERMINAL_RECOVERY_POLICY.duplicates[0].releaseId,
+      TERMINAL_RECOVERY_POLICY.duplicates[0].tagName,
+      { receiptDigestDrift: true },
+    ),
+  ]
+  const reader = createTerminalRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED}\n`,
+    dependencies: {
+      createDuplicateReader: () => duplicateRoutingReader(fixtures, []),
+      createTerminalWriter: () => ({ async readCanonicalSnapshot() {} }),
+    },
+  })
+
+  await assert.rejects(
+    reader.readDuplicateRecoveryReceipts({ expectedOriginalBody: escrowBody() }),
+    { code: "RECOVERY_ASSET_BYTES_CONFLICT" },
+  )
+})
+
+test("the live reader refuses to read the duplicates without the archived original body", async () => {
+  const reader = createTerminalRecoveryReader({
+    root: "/workspace",
+    run: async () => `${REVIEWED}\n`,
+    dependencies: {
+      createDuplicateReader: () => ({
+        async readReleaseSnapshot() {
+          assert.fail("no duplicate is read without the body to verify its archive against")
+        },
+      }),
+      createTerminalWriter: () => ({ async readCanonicalSnapshot() {} }),
+    },
+  })
+
+  await assert.rejects(reader.readDuplicateRecoveryReceipts({}), /original body/iu)
 })
