@@ -1557,8 +1557,12 @@ byte-for-byte equal to the canonical abandonment body. Download
 `abandonment.json` through the numeric asset endpoint and hash it. Run a
 read-only `observe` from the clone with `GITHUB_REPOSITORY=cacheplane/dawnai`
 and require `state=ABANDONED_PREPUBLICATION`, `disposition=noop`, no conflicts,
-no diagnostics. Record the ledger row, then release the freeze. Tag `v0.8.22`
-and both quarantined duplicates are never touched.
+no diagnostics. Hash the apply receipt and require its `authority.reviewedCommit`
+to equal the record pull request's merge commit and its `record.sha256` to equal
+the committed record file's SHA-256; a second `apply` at the same commit must
+exit 0 with `outcome: "preexisting-abandoned"` and zero transitions. Record the
+ledger row, then release the freeze. Tag `v0.8.22` and both quarantined
+duplicates are never touched.
 
 After the record is merged, scheduled discovery classifies `v0.8.22` as
 terminal from the committed record alone, so a newer candidate is no longer
