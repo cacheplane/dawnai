@@ -5,6 +5,7 @@ import {
   observationStructureIsValid,
 } from "./observation-schema.mjs"
 import { compareSemver, isExactSemver } from "./semver.mjs"
+import { smokeAdjudicationApplies } from "./smoke-adjudication.mjs"
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 
@@ -67,7 +68,12 @@ function invalidEvidence(conflicts) {
       latestNewer: false,
       ambiguous: false,
     }),
-    smokes: Object.freeze({ complete: false, anyPassed: false, ambiguous: false }),
+    smokes: Object.freeze({
+      complete: false,
+      anyPassed: false,
+      ambiguous: false,
+      adjudicated: false,
+    }),
     audit: Object.freeze({
       dispatched: false,
       complete: false,
@@ -666,11 +672,19 @@ function analyzeNpm(candidate, observation, packageByName, conflicts) {
 }
 
 function analyzeSmokes(candidate, observation, manifestSha256, conflicts) {
+  // An adjudication only ever satisfies the gate for the exact candidate it
+  // names; it never asserts that the lanes passed. See smoke-adjudication.mjs.
+  const adjudicated = smokeAdjudicationApplies(observation.smokeAdjudication ?? null, {
+    commitSha: candidate.commitSha,
+    manifestSha256,
+    requiredLanes: observation.requiredSmokeLanes,
+    version: candidate.version,
+  })
   const lanes = observation.requiredSmokeLanes
   const results = Array.isArray(observation.smokes) ? observation.smokes : []
   if (!Array.isArray(lanes)) {
     conflicts.add("required-smoke-lanes-missing")
-    return Object.freeze({ complete: false, anyPassed: false, ambiguous: false })
+    return Object.freeze({ complete: false, anyPassed: false, ambiguous: false, adjudicated })
   }
   if (lanes.length === 0) conflicts.add("required-smoke-lanes-empty")
   if (new Set(lanes).size !== lanes.length) conflicts.add("required-smoke-lane-duplicate")
@@ -718,6 +732,7 @@ function analyzeSmokes(candidate, observation, manifestSha256, conflicts) {
     complete,
     anyPassed: results.some((result) => result.status === "passed"),
     ambiguous,
+    adjudicated,
   })
 }
 

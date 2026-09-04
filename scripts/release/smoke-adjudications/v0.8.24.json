@@ -1,0 +1,45 @@
+{
+  "adjudicatedLanes": [
+    {
+      "detail": "Passed in release run 33913051310 after the registry served the attestation for the last-published package; the earlier failure was convergence lag, not a defect.",
+      "name": "metadata",
+      "outcome": "passed"
+    },
+    {
+      "detail": "Failed in release run 33913051310 on the known sandbox fork-bomb flake: the PID-exhausted keeper assertion compares two identical container ids under notStrictEqual. A flake in the lane, not evidence about the published packages.",
+      "name": "published-harness",
+      "outcome": "flaked"
+    },
+    {
+      "detail": "Failed deterministically: the candidate's node runtime probe asserts typeof graphAdapter === \"function\", but graphAdapter is and always has been a BackendAdapter object exposing kind \"graph\" with execute and stream. Verified directly against the published @dawn-ai/langgraph@0.8.24. The probe is wrong; the package is correct.",
+      "name": "runtime-targets",
+      "outcome": "failed"
+    },
+    {
+      "detail": "Passed in release run 33913051310, exercising the published scaffolder end to end: create, install, typecheck, build and run.",
+      "name": "scaffold",
+      "outcome": "passed"
+    },
+    {
+      "detail": "Failed deterministically: runRuntimeSmoke passes includeOpenAi as a command option, which the candidate's strict systemd runner rejects as a field outside its allowlist, so both storage runtime probes died before touching the published packages. A defect in the lane's own plumbing.",
+      "name": "storage",
+      "outcome": "failed"
+    }
+  ],
+  "authority": {
+    "capturedAt": "2026-09-04T20:30:00.000Z",
+    "mode": "operator-adjudication",
+    "operator": "blove",
+    "reviewedCommit": "f3766a9eac7de7c0df42a5424df73117a69ae26a"
+  },
+  "commitSha": "88c01c4afd59866fc0ea4c8f3b8444439a01c8ea",
+  "kind": "smoke-gate-adjudicated",
+  "manifestSha256": "68e45c7d302147f387c4cd68586a4e6411ea6a7c7889f6e2edc32a0793696e5c",
+  "reason": "All 21 packages published correctly at 0.8.24 with valid npm provenance, and reconcile-npm succeeded. Two of the five smoke lanes carry defects in the candidate's own scripts, and every release job outside the controller checks out the candidate commit, so those lanes fail identically on every re-dispatch. The published packages' provenance binds them to this commit, so the tag cannot be moved to pick up the fix. Without this adjudication the candidate can never reach a terminal state and no later version can be released. Only the smoke gate is adjudicated: the release audit still runs.",
+  "remediation": {
+    "fixCommitSha": "2689ef8d260b089bbb2ed105b165e625409d8701",
+    "summary": "Both lane defects are fixed on main: every lane now passes only strict-runner contract fields at its boundary, and the runtime-target probe asserts the real BackendAdapter contract. The fixes reach the next candidate, which is where they are proven."
+  },
+  "schemaVersion": 1,
+  "version": "0.8.24"
+}

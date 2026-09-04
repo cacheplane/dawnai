@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { canonicalReleaseBody, parseSmokeReleaseAssetName } from "./metadata.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
+import { SMOKE_ADJUDICATION_RECORD_FIELDS } from "./smoke-adjudication.mjs"
 
 const PLANNER_FIELDS = Object.freeze(["candidate", "observation", "mode"])
 const CANDIDATE_FIELDS = Object.freeze([
@@ -46,6 +47,7 @@ const OBSERVATION_FIELDS = Object.freeze([
   "smokes",
   "audit",
   "abandonment",
+  "smokeAdjudication",
 ])
 const SMOKE_FIELDS = Object.freeze([
   "name",
@@ -65,6 +67,11 @@ const AUDIT_FIELDS = Object.freeze([
   "runAttempt",
   "conclusion",
 ])
+
+function smokeAdjudicationShapeValid(value) {
+  if (value === undefined || value === null) return true
+  return hasExactFields(value, SMOKE_ADJUDICATION_RECORD_FIELDS)
+}
 
 export function snapshotPlannerInput(input) {
   assertPlannerRoot(input)
@@ -88,7 +95,12 @@ export function snapshotReleaseInput(candidate, observation) {
 export function findObservationSchemaConflicts(observation) {
   const conflicts = new Set()
   if (!isRecord(observation)) return ["observation-schema-invalid"]
-  if (!hasExactFields(observation, OBSERVATION_FIELDS, ["requiredSmokeLanes"])) {
+  if (
+    !hasExactFields(observation, OBSERVATION_FIELDS, ["requiredSmokeLanes", "smokeAdjudication"])
+  ) {
+    conflicts.add("observation-schema-invalid")
+  }
+  if (!smokeAdjudicationShapeValid(observation.smokeAdjudication)) {
     conflicts.add("observation-schema-invalid")
   }
   const structurallyValid =
