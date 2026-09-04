@@ -8,7 +8,6 @@ import { afterEach, describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { parse } from "yaml"
-
 import {
   assertCleanDependencySpecs,
   assertInstalledCoreResolution,
@@ -45,6 +44,7 @@ import {
   runPublishedArtifactVerify,
 } from "./published-artifact-verify.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "./release/manifest.mjs"
+import { assertStrictSmokeCommandOptions } from "./release/smoke-process-runner.mjs"
 import { parseSmokeResult, REQUIRED_RELEASE_SMOKE_LANES } from "./release/smoke-result.mjs"
 
 const {
@@ -3515,7 +3515,10 @@ function fakeStrictRunner(runCommand = async () => ({ stdout: "", stderr: "" }))
     async probe() {
       return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
     },
-    runCommand,
+    async runCommand(command, args, options = {}) {
+      assertStrictSmokeCommandOptions(options)
+      return await runCommand(command, args, options)
+    },
   }
 }
 

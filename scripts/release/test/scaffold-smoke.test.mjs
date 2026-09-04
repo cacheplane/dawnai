@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { runScaffoldSmoke } from "../smoke/scaffold.mjs"
+import { assertStrictSmokeCommandOptions } from "../smoke-process-runner.mjs"
 import { parseSmokeResult } from "../smoke-result.mjs"
 
 const options = Object.freeze({
@@ -109,7 +110,10 @@ function fakeStrictRunner(runCommand) {
     async probe() {
       return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
     },
-    runCommand,
+    async runCommand(command, args, options = {}) {
+      assertStrictSmokeCommandOptions(options)
+      return await runCommand(command, args, options)
+    },
   }
 }
 

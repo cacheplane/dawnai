@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import test from "node:test"
-
 import { CANONICAL_RELEASE_PACKAGE_ORDER, canonicalManifestBytes } from "../manifest.mjs"
 import {
   cleanupDockerSandboxResources,
@@ -9,6 +8,7 @@ import {
   runPublishedHarnessSmoke,
   validateNpmAuditSignatures,
 } from "../smoke/published-harness.mjs"
+import { assertStrictSmokeCommandOptions } from "../smoke-process-runner.mjs"
 import { parseSmokeResult } from "../smoke-result.mjs"
 import { EXACT_NPM_PROVENANCE_CERTIFICATE } from "./fixtures/npm-audit-certificates.mjs"
 
@@ -559,7 +559,10 @@ function fakeStrictRunner(runCommand) {
     async probe() {
       return { adapter: "systemd-cgroup-v2", imageOS: "ubuntu24", imageVersion: "test" }
     },
-    runCommand,
+    async runCommand(command, args, options = {}) {
+      assertStrictSmokeCommandOptions(options)
+      return await runCommand(command, args, options)
+    },
   }
 }
 

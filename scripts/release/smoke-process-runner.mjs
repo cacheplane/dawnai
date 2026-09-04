@@ -70,6 +70,41 @@ export function strictContainmentReceiptDetail(environment = process.env) {
   return `strict systemd/cgroup-v2 containment available (ImageOS=${imageOS}, ImageVersion=${imageVersion})`
 }
 
+export const STRICT_SMOKE_COMMAND_OPTION_FIELDS = Object.freeze([
+  "acceptedExitCodes",
+  "cwd",
+  "env",
+  "maxOutputBytes",
+  "signal",
+  "timeoutMs",
+])
+
+const STRICT_SMOKE_COMMAND_OPTION_FIELD_SET = new Set(STRICT_SMOKE_COMMAND_OPTION_FIELDS)
+
+export function pickStrictSmokeCommandOptions(options = {}) {
+  if (options === null || Array.isArray(options) || typeof options !== "object") {
+    throw new TypeError("Strict smoke command options are invalid")
+  }
+  const picked = {}
+  for (const field of STRICT_SMOKE_COMMAND_OPTION_FIELDS) {
+    if (options[field] !== undefined) picked[field] = options[field]
+  }
+  return picked
+}
+
+export function assertStrictSmokeCommandOptions(options) {
+  if (options === null || Array.isArray(options) || typeof options !== "object") {
+    throw new TypeError("Strict smoke command options are invalid")
+  }
+  if (
+    Reflect.ownKeys(options).some(
+      (key) => typeof key !== "string" || !STRICT_SMOKE_COMMAND_OPTION_FIELD_SET.has(key),
+    )
+  ) {
+    throw new TypeError("Strict smoke command options contain an unexpected field")
+  }
+}
+
 function normalizeInvocation(command, args, options) {
   if (
     typeof command !== "string" ||
@@ -92,20 +127,7 @@ function normalizeInvocation(command, args, options) {
     }
     return value
   })
-  if (options === null || Array.isArray(options) || typeof options !== "object") {
-    throw new TypeError("Strict smoke command options are invalid")
-  }
-  const allowed = new Set([
-    "acceptedExitCodes",
-    "cwd",
-    "env",
-    "maxOutputBytes",
-    "signal",
-    "timeoutMs",
-  ])
-  if (Reflect.ownKeys(options).some((key) => typeof key !== "string" || !allowed.has(key))) {
-    throw new TypeError("Strict smoke command options contain an unexpected field")
-  }
+  assertStrictSmokeCommandOptions(options)
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
     throw new TypeError("Strict smoke command timeout is outside its bound")

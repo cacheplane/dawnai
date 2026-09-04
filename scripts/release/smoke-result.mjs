@@ -678,6 +678,7 @@ export function formatSmokeError(error) {
   let detail
   try {
     detail = error instanceof Error ? error.message : String(error)
+    detail = appendAggregatedCauses(detail, error)
   } catch {
     detail = "Smoke operation failed with an unprintable error"
   }
@@ -687,6 +688,19 @@ export function formatSmokeError(error) {
   detail = replaceControlCharacters(detail)
   detail = detail.replace(/\s+/gu, " ").trim()
   return truncateUtf8(detail || "Smoke operation failed", 4_096)
+}
+
+function appendAggregatedCauses(detail, error, depth = 0) {
+  if (depth >= 4 || !(error instanceof AggregateError) || !Array.isArray(error.errors)) {
+    return detail
+  }
+  const causes = []
+  for (const cause of error.errors.slice(0, 8)) {
+    let text = cause instanceof Error ? cause.message : String(cause)
+    text = appendAggregatedCauses(text, cause, depth + 1)
+    if (text) causes.push(text)
+  }
+  return causes.length === 0 ? detail : `${detail}: ${causes.join("; ")}`
 }
 
 function replaceControlCharacters(value) {

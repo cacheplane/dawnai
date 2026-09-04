@@ -59,19 +59,19 @@
       "sha256": "fee872a1dddfa280cf0efe608525cad6d9f42d8d647a9ccf2ef9be1b7c41a06a"
     },
     "scripts/release/smoke-result.mjs": {
-      "sha256": "d86a5cc1ccb9bafa45451ae4186b7d2a8573eba03cbf127efe0843712c9cd21e"
+      "sha256": "b6ab2832f862bd628529528ab95d462708cc84d832d935163e48abe029e2af21"
     },
     "scripts/release/smoke/published-harness.mjs": {
-      "sha256": "48cec31768f1df81f29876f3630c9d721a4af1b606740d3502c9c02b0473c041"
+      "sha256": "763afad7c1a2fcf2501d246164fa221aedebf494d8a0ffe9484adb482f4c1a42"
     },
     "scripts/release/smoke/runtime-targets.mjs": {
-      "sha256": "8828d0c774ae927aaf32e7a806cb0618cc67912c8f526e3300fae6b6e0b8e237"
+      "sha256": "e82aebe4c25805b7c60e7ec64af72f8c4b922a3aeddd1c9afbff48e6bdf8294d"
     },
     "scripts/release/smoke/scaffold.mjs": {
-      "sha256": "948e0e51b372244839cebe358d5370874ef134ee7226a365c127577ae0f670ac"
+      "sha256": "a8809c7be496ce59e3dddecc7f893135800dab4fefce823a5112ebd72dba3b52"
     },
     "scripts/release/smoke/storage.mjs": {
-      "sha256": "448dbbca39890ef849ed5658931b0e2a193693354ed87d6c109f0f7e0d6270a7"
+      "sha256": "be07add60b15362476e45f5705b9f6fcdb44d0b005ee277a6538cae07f189798"
     },
     "scripts/release/terminal-records.mjs": {
       "sha256": "17151da8acf77431decd76ea3b78af41243b7e5a92cb572427c8aa8196af61d1"

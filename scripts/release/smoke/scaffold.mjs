@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url"
 import { makeTempDir, publicNpmEnvironment, removeDir } from "../../lib/published-artifacts.mjs"
 import {
   createStrictSmokeProcessRunner,
+  pickStrictSmokeCommandOptions,
   strictContainmentReceiptDetail,
 } from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
@@ -123,7 +124,7 @@ export async function verifyExactScaffold(root, version) {
 
 function productionCommandOptions(options = {}) {
   return {
-    ...options,
+    ...pickStrictSmokeCommandOptions(options),
     env: publicNpmEnvironment({ home: options.cwd ?? process.cwd(), extra: options.env }),
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_OUTPUT_BYTES,

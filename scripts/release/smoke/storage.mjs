@@ -13,6 +13,7 @@ import {
 } from "../../published-artifact-smoke.mjs"
 import {
   createStrictSmokeProcessRunner,
+  pickStrictSmokeCommandOptions,
   strictContainmentReceiptDetail,
 } from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
@@ -231,7 +232,7 @@ try {
 
 function productionCommandOptions(options = {}) {
   return {
-    ...options,
+    ...pickStrictSmokeCommandOptions(options),
     env: publicNpmEnvironment({
       home: options.cwd ?? process.cwd(),
       extra: options.env,

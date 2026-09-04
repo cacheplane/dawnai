@@ -29,6 +29,7 @@ import {
 import { parseNpmAuditSignatures as parseVerifiedNpmAuditSignatures } from "../npm-audit.mjs"
 import {
   createStrictSmokeProcessRunner,
+  pickStrictSmokeCommandOptions,
   strictContainmentReceiptDetail,
 } from "../smoke-process-runner.mjs"
 import { executeSmokeLane, parseSmokeLaneArgs } from "../smoke-result.mjs"
@@ -332,7 +333,7 @@ for (const [name, value] of Object.entries(surfaces[lane])) {
 
 function productionCommandOptions(options = {}) {
   return {
-    ...options,
+    ...pickStrictSmokeCommandOptions(options),
     env: publicNpmEnvironment({ home: options.cwd ?? process.cwd(), extra: options.env }),
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: options.maxOutputBytes ?? COMMAND_OUTPUT_BYTES,
