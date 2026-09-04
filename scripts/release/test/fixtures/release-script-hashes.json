@@ -71,7 +71,7 @@
       "sha256": "01fed2681f86b452ec5f2323190e0cbfdce2ce265c62c185ca802464f3e8a2fb"
     },
     "scripts/release/evidence.mjs": {
-      "sha256": "4c509c699fe8bd2fc9dd46468e849eb0d05e8206d43e1d3debc7c2fdb1a1836f"
+      "sha256": "d75eca0a21c2ecef2b0041f4aa3a4c3b0052c329820f8a96b1be9845a379405d"
     },
     "scripts/release/fixture-io.mjs": {
       "sha256": "427419a41951adb53720470d80f1defca030f8eb9289dae50c704f332e5f9ac0"
@@ -101,10 +101,10 @@
       "sha256": "fc14058dcf57fd3252cf758d8f58ee2795a5d5f210f41231a794018b17366b74"
     },
     "scripts/release/observation-schema.mjs": {
-      "sha256": "168c24767b3b891e769e4b1447942a0786f9da1965db8d13b2fd82c540edd74b"
+      "sha256": "fc3847533cbf01b8fa2420f484680a7576b8b2b4edf4d6f41f56df925f4914c3"
     },
     "scripts/release/observe.mjs": {
-      "sha256": "ed3a23d3ac333ae17a9637a347d4b34c5fe9db178586157f66809b5e8216424a"
+      "sha256": "1c19385a438555a0715aacbf0b2ef616cce81a6cc4906dbe44cc8562c6d51c8f"
     },
     "scripts/release/planner.mjs": {
       "sha256": "c68760ef160b100ad20233fe7c3608e381b976158b248ff6ee3bceccf3023d0f"
@@ -129,6 +129,9 @@
     },
     "scripts/release/semver.mjs": {
       "sha256": "fee872a1dddfa280cf0efe608525cad6d9f42d8d647a9ccf2ef9be1b7c41a06a"
+    },
+    "scripts/release/smoke-adjudication.mjs": {
+      "sha256": "3cbcdaab65d37a970043338b04341fc6ebf2ecafb1f3dda5709aa329e72390e6"
     },
     "scripts/release/smoke-command-shim.mjs": {
       "sha256": "ee2691f7b31b03ecd1b2501b74d72f7491f92350cb0fc74d5251ab812f64dc04"
@@ -158,7 +161,7 @@
       "sha256": "be07add60b15362476e45f5705b9f6fcdb44d0b005ee277a6538cae07f189798"
     },
     "scripts/release/state.mjs": {
-      "sha256": "15aba66d4234bd11db65c11dbaf8efa3825c6660f7a024cbb67c714120780863"
+      "sha256": "81e852b5c9d1dd6f34ab0cceb28002b7917f364e749e1a0e1b2ddff4e35c2479"
     },
     "scripts/release/terminal-record-store.mjs": {
       "sha256": "cd5561d0dfb8e959ae180f851791b26b7611e2252c6cb4ac4a6718bdeab0225a"

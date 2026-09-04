@@ -31,6 +31,7 @@ import {
   releaseRecordSha256,
 } from "./release-record.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
+import { readSmokeAdjudication } from "./smoke-adjudication.mjs"
 import {
   aggregateSmokeResults,
   canonicalAggregateSmokeResultBytes,
@@ -397,6 +398,25 @@ export async function observeProductionCandidate({
       error instanceof TypeError ? "TERMINAL_RECORD_INVALID" : "TERMINAL_RECORD_UNREADABLE",
     )
   }
+  let smokeAdjudication = null
+  try {
+    smokeAdjudication = await readSmokeAdjudication({
+      git,
+      ref: terminalRecordRef,
+      version: identity.version,
+    })
+  } catch (error) {
+    // A present-but-unreadable adjudication must never widen into a waiver: leave it null so the
+    // smoke gate stays shut, and record why an operator's record did not take effect.
+    smokeAdjudication = null
+    addDiagnostic(
+      diagnostics,
+      "git",
+      "smoke-adjudication",
+      "AMBIGUOUS",
+      error instanceof TypeError ? "SMOKE_ADJUDICATION_INVALID" : "SMOKE_ADJUDICATION_UNREADABLE",
+    )
+  }
   if (
     committedTerminalRecord !== null &&
     !terminalRecordBindsCandidate(committedTerminalRecord, identity)
@@ -686,6 +706,7 @@ export async function observeProductionCandidate({
         : pendingProductionSmokeObservations(identity, artifacts.manifestSha256),
     audit: releaseState.audit,
     abandonment,
+    smokeAdjudication,
   }
   diagnostics.sort(compareDiagnostics)
   const result = { observation, diagnostics }
