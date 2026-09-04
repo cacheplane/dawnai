@@ -293,8 +293,18 @@ function makesUnsupportedCompatibilityClaim(source: string): boolean {
   return namesManagedKubernetes && !isManagedKubernetesBoundary(text)
 }
 
+function compareChartVersions(left: string, right: string): number {
+  const parts = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10))
+  const [leftParts, rightParts] = [parts(left), parts(right)]
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
 describe("Kubernetes compatibility documentation policy", () => {
-  test("publishes the infrastructure documentation patch as chart 0.1.4", async () => {
+  test("ships the infrastructure documentation patch at chart 0.1.4 or later", async () => {
     const { dawnAppChart, sandboxInfraChart } = await loadDocumentation()
     const infrastructureMetadata = parse(sandboxInfraChart) as {
       readonly version?: unknown
@@ -302,7 +312,13 @@ describe("Kubernetes compatibility documentation policy", () => {
     }
     const applicationMetadata = parse(dawnAppChart) as { readonly appVersion?: unknown }
 
-    expect(infrastructureMetadata.version).toBe("0.1.4")
+    // The documentation patch first shipped in chart 0.1.4. Version Packages
+    // bumps the chart patch on every release, so pin a floor, not a literal.
+    expect(infrastructureMetadata.version).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(
+      compareChartVersions(infrastructureMetadata.version as string, "0.1.4"),
+      "infrastructure chart must not regress below the documentation patch",
+    ).toBeGreaterThanOrEqual(0)
     expect(infrastructureMetadata.appVersion).toBe(applicationMetadata.appVersion)
   })
 

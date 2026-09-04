@@ -3327,9 +3327,24 @@ const sandboxInfraChartSource = readFileSync(
   "utf8",
 )
 const sandboxInfraChart = parseYaml(sandboxInfraChartSource)
-if (sandboxInfraChart?.version !== "0.1.4") {
+// The documentation patch first shipped in chart 0.1.4. Version Packages bumps
+// the chart patch on every release, so require a floor rather than a literal.
+const SANDBOX_INFRA_DOCS_PATCH_FLOOR = [0, 1, 4]
+const sandboxInfraChartVersion =
+  typeof sandboxInfraChart?.version === "string" &&
+  /^\d+\.\d+\.\d+$/u.test(sandboxInfraChart.version)
+    ? sandboxInfraChart.version.split(".").map((part) => Number.parseInt(part, 10))
+    : null
+const sandboxInfraChartAtFloor =
+  sandboxInfraChartVersion !== null &&
+  sandboxInfraChartVersion.reduce(
+    (order, part, index) =>
+      order !== 0 ? order : Math.sign(part - SANDBOX_INFRA_DOCS_PATCH_FLOOR[index]),
+    0,
+  ) >= 0
+if (!sandboxInfraChartAtFloor) {
   failures.push(
-    `charts/dawn-sandbox-infra/Chart.yaml must publish the documentation patch as version 0.1.4; found ${sandboxInfraChart?.version ?? "missing"}`,
+    `charts/dawn-sandbox-infra/Chart.yaml must publish the documentation patch as version 0.1.4 or later; found ${sandboxInfraChart?.version ?? "missing"}`,
   )
 }
 const canonicalKubernetesSandboxUrl = "https://dawnai.org/docs/sandbox/kubernetes"
