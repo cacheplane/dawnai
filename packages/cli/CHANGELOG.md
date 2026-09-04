@@ -1,5 +1,35 @@
 # @dawn-ai/cli
 
+## 0.8.23
+
+### Patch Changes
+
+- 21654e8: Align the CopilotKit v2 examples, research scaffold, and Dawn AG-UI runtime on CopilotKit 1.70 and AG-UI 0.0.59.
+- 7e62bb1: Refresh the GitHub and npm documentation surfaces, add package discovery
+  metadata, and introduce reproducible product-loop media. No runtime API changed.
+- 47bf96b: Validate the complete Kubernetes runtime permission contract during preflight,
+  replace existing owned NetworkPolicies with their live resource version, and
+  export the structured `KubePermission` type and
+  `KubeAuthorizationReviewError`. Custom `KubeClient` implementations must
+  replace positional `canI(namespace, verb, resource)` with
+  `canI(namespace, permission)`; no compatibility overload is provided, and the
+  exported error preserves API-versus-transport preflight diagnostics.
+
+  Serialize filesystem changes observed during the initial `dawn dev` child boot
+  so startup and restart children cannot race for the same listening port, and
+  drain fixing edits queued while a watched restart is failing.
+
+- Updated dependencies [21654e8]
+- Updated dependencies [7e62bb1]
+  - @dawn-ai/ag-ui@0.8.23
+  - @dawn-ai/core@0.8.23
+  - @dawn-ai/langchain@0.8.23
+  - @dawn-ai/langgraph@0.8.23
+  - @dawn-ai/memory@0.8.23
+  - @dawn-ai/permissions@0.8.23
+  - @dawn-ai/sdk@0.8.23
+  - @dawn-ai/sqlite-storage@0.8.23
+
 ## 0.8.22
 
 ### Patch Changes

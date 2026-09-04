@@ -1,5 +1,16 @@
 # @dawn-ai/langchain
 
+## 0.8.23
+
+### Patch Changes
+
+- 7e62bb1: Refresh the GitHub and npm documentation surfaces, add package discovery
+  metadata, and introduce reproducible product-loop media. No runtime API changed.
+- Updated dependencies [7e62bb1]
+  - @dawn-ai/core@0.8.23
+  - @dawn-ai/sdk@0.8.23
+  - @dawn-ai/workspace@0.8.23
+
 ## 0.8.22
 
 ### Patch Changes
