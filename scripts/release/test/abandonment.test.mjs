@@ -3,12 +3,16 @@ import { createHash } from "node:crypto"
 import test from "node:test"
 
 import {
+  abandonmentRecordTag,
   canonicalAbandonmentBytes,
   canonicalAbandonmentReleaseBody,
   evaluateAbandonment,
+  parseAbandonmentReleaseBody,
+  parseAnyAbandonmentRecord,
   recordAbandonment,
 } from "../abandonment.mjs"
 import { createAbandonmentArtifactContext } from "../abandonment-handoff.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { CANONICAL_RELEASE_PACKAGE_ORDER } from "../manifest.mjs"
 import {
   abandonmentReleaseMarker,
@@ -16,6 +20,15 @@ import {
   parseReleaseMarker,
   releaseBodySha256,
 } from "../metadata.mjs"
+import {
+  canonicalTerminalRecordBytes,
+  MAX_TERMINAL_RECORD_BYTES,
+} from "../terminal-record-store.mjs"
+import {
+  COMMIT_SHA as TERMINAL_COMMIT_SHA,
+  VERSION as TERMINAL_VERSION,
+  record as terminalRecord,
+} from "./support/terminal-record-fixture.mjs"
 
 const VERSION = "0.8.22"
 const SHA = "a".repeat(40)
@@ -1052,3 +1065,99 @@ function sha256(bytes) {
 function compareText(left, right) {
   return left === right ? 0 : left < right ? -1 : 1
 }
+
+test("operator-recovery records round-trip through the abandonment body", () => {
+  const tombstone = terminalRecord()
+  const bytes = canonicalTerminalRecordBytes(tombstone)
+  assert.ok(canonicalAbandonmentBytes(tombstone).equals(bytes))
+  const parsed = parseAnyAbandonmentRecord(tombstone)
+  assert.equal(parsed.authority.mode, "operator-recovery")
+  assert.equal(Object.hasOwn(parsed, "sha256"), false)
+  const marker = abandonmentReleaseMarker({
+    candidate: { version: TERMINAL_VERSION, commitSha: TERMINAL_COMMIT_SHA },
+    artifact: tombstone.predecessor.artifact,
+    abandonmentSha256: sha256(bytes),
+    previousMarker: tombstone.predecessor.marker,
+  })
+  const body = canonicalAbandonmentReleaseBody({
+    marker,
+    tombstone,
+    previousMarker: tombstone.predecessor.marker,
+  })
+  const reparsed = parseAbandonmentReleaseBody(body)
+  assert.deepEqual(reparsed.authority, tombstone.authority)
+  assert.deepEqual(reparsed.predecessor, tombstone.predecessor)
+})
+
+test("a tampered operator-recovery tombstone is rejected by the body parser", () => {
+  const tombstone = terminalRecord()
+  const bytes = canonicalTerminalRecordBytes(tombstone)
+  const marker = abandonmentReleaseMarker({
+    candidate: { version: TERMINAL_VERSION, commitSha: TERMINAL_COMMIT_SHA },
+    artifact: tombstone.predecessor.artifact,
+    abandonmentSha256: sha256(bytes),
+    previousMarker: tombstone.predecessor.marker,
+  })
+  const body = canonicalAbandonmentReleaseBody({
+    marker,
+    tombstone,
+    previousMarker: tombstone.predecessor.marker,
+  })
+
+  const start = body.indexOf("\n", body.indexOf("<!-- DAWN_ABANDONMENT_RECORD_BASE64")) + 1
+  const end = body.indexOf("\nEND_DAWN_ABANDONMENT_RECORD_BASE64")
+  const mid = Math.floor((start + end) / 2)
+  const tamperedMiddle = body.slice(0, mid) + (body[mid] === "A" ? "B" : "A") + body.slice(mid + 1)
+  assert.notEqual(tamperedMiddle, body)
+  assert.throws(
+    () => parseAbandonmentReleaseBody(tamperedMiddle),
+    /not canonical|does not match|not exact|invalid/iu,
+  )
+
+  const quarter = start + Math.floor((end - start) / 4)
+  const tamperedFirstQuarter =
+    body.slice(0, quarter) + (body[quarter] === "A" ? "B" : "A") + body.slice(quarter + 1)
+  assert.notEqual(tamperedFirstQuarter, body)
+  assert.throws(
+    () => parseAbandonmentReleaseBody(tamperedFirstQuarter),
+    /not canonical|does not match|not exact|invalid/iu,
+  )
+})
+
+test("a record without operator authority still requires the environment approval schema", () => {
+  const { authority: _authority, ...legacyShaped } = terminalRecord()
+  assert.throws(
+    () => parseAnyAbandonmentRecord({ ...legacyShaped, approval: {} }),
+    /Invalid abandonment/u,
+  )
+  assert.throws(
+    () => parseAnyAbandonmentRecord({ ...terminalRecord(), authority: { mode: "other" } }),
+    /Invalid abandonment/u,
+  )
+})
+
+test("abandonmentRecordTag returns the tag name for either tombstone variant and throws otherwise", () => {
+  assert.equal(abandonmentRecordTag({ tag: `v${VERSION}` }), `v${VERSION}`)
+  assert.equal(
+    abandonmentRecordTag({ tag: { name: `v${VERSION}`, objectSha: SHA } }),
+    `v${VERSION}`,
+  )
+  assert.throws(() => abandonmentRecordTag({ tag: null }), /Abandonment record tag is invalid/u)
+  assert.throws(() => abandonmentRecordTag({ tag: 42 }), /Abandonment record tag is invalid/u)
+  assert.throws(() => abandonmentRecordTag({ tag: {} }), /Abandonment record tag is invalid/u)
+  assert.throws(() => abandonmentRecordTag({}), /Abandonment record tag is invalid/u)
+  assert.throws(() => abandonmentRecordTag(null), /Abandonment record tag is invalid/u)
+})
+
+test("canonicalAbandonmentBytes rejects non-record input before touching its fields", () => {
+  assert.throws(() => canonicalAbandonmentBytes(null), /Canonical abandonment input is invalid/u)
+  assert.throws(
+    () => canonicalAbandonmentBytes("not a record"),
+    /Canonical abandonment input is invalid/u,
+  )
+  assert.throws(() => canonicalAbandonmentBytes([]), /Canonical abandonment input is invalid/u)
+})
+
+test("the terminal record byte cap stays under the audit-receipt payload limit", () => {
+  assert.ok(MAX_TERMINAL_RECORD_BYTES < RELEASE_PAYLOAD_LIMITS.auditReceiptBytes)
+})

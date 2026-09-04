@@ -26,7 +26,9 @@ import {
   canonicalSmokeResultBytes,
   REQUIRED_RELEASE_SMOKE_LANES,
 } from "../smoke-result.mjs"
+import { canonicalTerminalRecordBytes } from "../terminal-record-store.mjs"
 import { canonicalAuditResultBytes } from "../terminal-records.mjs"
+import { record as terminalRecordFixture } from "./support/terminal-record-fixture.mjs"
 
 const VERSION = "0.8.22"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -66,6 +68,7 @@ test("production event classification distinguishes exact refs from schedules", 
 test("production candidate resolution uses the exact immutable ref or scheduled arbitration", async () => {
   const calls = []
   const exact = await resolveProductionCandidate({
+    terminalRecordRef: "HEAD",
     event: { ref: "refs/heads/main", after: COMMIT_SHA },
     inventory: inventoryReader(),
     git: {},
@@ -85,6 +88,7 @@ test("production candidate resolution uses the exact immutable ref or scheduled 
   assert.deepEqual(exact, selection())
 
   const scheduled = await resolveProductionCandidate({
+    terminalRecordRef: "HEAD",
     event: { schedule: "17 * * * *" },
     inventory: inventoryReader(),
     git: {},
@@ -111,6 +115,7 @@ test("production candidate resolution uses the exact immutable ref or scheduled 
 test("production exact dispatch accepts a verified current-version no-candidate no-op", async () => {
   const reads = []
   const resolved = await resolveProductionCandidate({
+    terminalRecordRef: "HEAD",
     event: { inputs: { version: VERSION, commitSha: COMMIT_SHA } },
     inventory: {
       async read({ ref }) {
@@ -138,6 +143,7 @@ test("production exact dispatch accepts a verified current-version no-candidate 
 test("production exact no-candidate dispatch rejects inventory version drift", async () => {
   await assert.rejects(
     resolveProductionCandidate({
+      terminalRecordRef: "HEAD",
       event: { inputs: { version: VERSION, commitSha: COMMIT_SHA } },
       inventory: {
         async read() {
@@ -170,6 +176,7 @@ test("production exact-ref resolution cannot leapfrog an older globally selected
   const newer = { ...candidate(), version: "0.8.23" }
   const older = { ...candidate(), commitSha: PARENT_SHA }
   const resolved = await resolveProductionCandidate({
+    terminalRecordRef: "HEAD",
     event: { ref: "refs/heads/main", after: COMMIT_SHA },
     inventory: inventoryReader(),
     git: {},
@@ -205,6 +212,7 @@ test("production exact-ref resolution cannot leapfrog an older globally selected
 test("production candidate resolution rejects a mixed or extended discovery selection", async () => {
   await assert.rejects(
     resolveProductionCandidate({
+      terminalRecordRef: "HEAD",
       event: { ref: "refs/heads/main", after: COMMIT_SHA },
       inventory: inventoryReader(),
       git: {},
@@ -224,6 +232,7 @@ test("production candidate resolution rejects a mixed or extended discovery sele
 
   await assert.rejects(
     resolveProductionCandidate({
+      terminalRecordRef: "HEAD",
       event: { ref: "refs/heads/main", after: COMMIT_SHA },
       inventory: inventoryReader(),
       git: {},
@@ -269,6 +278,7 @@ test("production inventory reader loads and validates the immutable commit", asy
 
 test("production observation proves an early tagged candidate without fabricating digests", async () => {
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -315,6 +325,7 @@ test("production observation maps adapter authorization and timeout failures to 
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -371,6 +382,7 @@ test("production CI correlation ignores unrelated commit checks", async () => {
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -431,6 +443,7 @@ test("production CI correlation cannot authorize a pull-request run at the candi
   })
 
   const { observation } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -484,6 +497,7 @@ test("production CI correlation selects the exact main push when a PR suite shar
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -518,6 +532,7 @@ test("production observation derives publication start only from exact all-attem
     },
   })
   const pending = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -537,6 +552,7 @@ test("production observation derives publication start only from exact all-attem
     },
   })
   const started = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -559,6 +575,7 @@ test("production observation derives publication start only from exact all-attem
     },
   })
   const mixed = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -615,6 +632,7 @@ test("production publication history ignores the branch coordinator and schedule
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -661,6 +679,7 @@ test("production publication history permits only the current exact-tag detect b
   })
 
   const blocked = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -672,6 +691,7 @@ test("production publication history permits only the current exact-tag detect b
   assert.ok(blocked.diagnostics.some((entry) => entry.code === "PUBLISHER_JOB_HISTORY_INVALID"))
 
   const current = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -723,6 +743,7 @@ test("production observation binds a prepared artifact to its exact run and rele
   })
 
   const { observation, diagnostics, recovery } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -782,6 +803,7 @@ test("production observation binds preparation to its historical exact run attem
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -865,6 +887,7 @@ test("production observation revalidates a sealed CI attempt after a later rerun
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -917,6 +940,7 @@ test("production observation deliberately ignores remote attestations until exac
     })
 
     const { observation, diagnostics } = await observeProductionCandidate({
+      terminalRecordRef: "HEAD",
       candidate: candidate(),
       inventory: inventory(),
       marker: MARKER,
@@ -966,6 +990,7 @@ test("production observation permits replacement of an orphaned pre-escrow paylo
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1008,6 +1033,7 @@ test("production observation permits replacement after an expired payload proves
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1073,6 +1099,7 @@ test("production observation rejects a live replacement mixed with a different e
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1109,6 +1136,7 @@ test("production observation never accepts a noncanonical release-record handoff
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1145,6 +1173,7 @@ test("production observation rejects duplicate canonical release-record handoffs
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1190,6 +1219,7 @@ test("production observation correlates one replacement handoff despite an older
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1233,6 +1263,7 @@ test("production observation rejects a prepared artifact from a mixed workflow r
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1267,6 +1298,7 @@ test("production observation rejects live prepared evidence from a pull-request 
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1302,6 +1334,7 @@ test("production observation rejects retained prepared evidence from a pull-requ
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1339,6 +1372,7 @@ test("production observation binds a prepared manifest to the exact successful C
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1361,6 +1395,7 @@ test("production observation binds retained Release manifests to the exact succe
   const github = releaseFixtureReader(escrow)
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1408,6 +1443,7 @@ test("production observation rejects a retained manifest sealed by a pull-reques
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1464,6 +1500,7 @@ test("production observation partitions and binds the exact draft Release base n
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1509,6 +1546,7 @@ test("production observation fails closed on duplicate marker-backed draft Relea
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1536,6 +1574,7 @@ test("production observation rejects a retained attestation winner without its e
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1561,6 +1600,7 @@ test("production observation keeps exact durable escrow after attestation run re
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1595,6 +1635,7 @@ test("production observation rejects self-consistent escrow and terminal bundles
     })
 
     const { observation, diagnostics } = await observeProductionCandidate({
+      terminalRecordRef: "HEAD",
       candidate: candidate(),
       inventory: inventory(),
       marker: MARKER,
@@ -1640,6 +1681,7 @@ test("production observation rejects 128 oversized audit assets before downloadi
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1662,6 +1704,7 @@ test("production observation requires the canonical main Release target", async 
   const github = releaseFixtureReader(offTarget)
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1702,6 +1745,7 @@ test("production observation uses durable escrow after exact Actions retention e
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1724,6 +1768,7 @@ test("production observation uses durable escrow after exact Actions retention e
   assert.deepEqual(plan.conflicts, [])
 
   const unrecoverable = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1749,6 +1794,7 @@ test("production observation uses durable escrow after exact Actions retention e
   )
 
   const malformed = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1808,6 +1854,7 @@ test("production observation preserves the prepared-to-attested phase boundary w
     })
 
     const { observation, diagnostics } = await observeProductionCandidate({
+      terminalRecordRef: "HEAD",
       candidate: candidate(),
       inventory: inventory(),
       marker: MARKER,
@@ -1901,6 +1948,7 @@ test("production observation accepts npm presence only through exact tarball and
   })
 
   const { observation, diagnostics, recovery } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1975,6 +2023,7 @@ test("production observation rejects a marker whose npm evidence digest does not
   const npmFixture = publishedNpmFixture(escrow.manifest)
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -1994,6 +2043,7 @@ test("production observation resumes a markerless partial smoke receipt set from
   const npmFixture = publishedNpmFixture(fixture.manifest)
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2040,6 +2090,7 @@ test("production observation verifies the exact durable five-lane receipt set fo
   const npmFixture = publishedNpmFixture(fixture.manifest)
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2143,6 +2194,7 @@ test("production observation fails closed on marker-selected smoke receipt byte,
     mutate(fixture)
     const npmFixture = publishedNpmFixture(fixture.manifest)
     const { observation, diagnostics } = await observeProductionCandidate({
+      terminalRecordRef: "HEAD",
       candidate: candidate(),
       inventory: inventory(),
       marker: MARKER,
@@ -2202,6 +2254,7 @@ test("production observation rejects a marker-bound smoke namespace with an extr
     }
     const npmFixture = publishedNpmFixture(fixture.manifest)
     const { observation, diagnostics } = await observeProductionCandidate({
+      terminalRecordRef: "HEAD",
       candidate: candidate(),
       inventory: inventory(),
       marker: MARKER,
@@ -2286,6 +2339,7 @@ test("production observation binds terminal audit assets to the exact run, attem
   })
 
   const { observation, diagnostics, recovery } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2336,6 +2390,7 @@ test("production observation rejects a noncanonical Release body or title outsid
       },
     })
     const { observation, diagnostics } = await observeProductionCandidate({
+      terminalRecordRef: "HEAD",
       candidate: candidate(),
       inventory: inventory(),
       marker: MARKER,
@@ -2389,6 +2444,7 @@ test("production observation rejects terminal audit run and job snapshots that d
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2531,6 +2587,7 @@ test("production observation maps allowlisted non-success audit conclusions to a
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2582,6 +2639,7 @@ test("production observation blocks a published Release whose terminal marker is
   })
 
   const { observation } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2628,6 +2686,7 @@ test("production observation recognizes a protected tagged-only abandonment from
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2687,6 +2746,7 @@ test("production observation retains a prepared predecessor after exact Actions 
   })
 
   const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
     candidate: candidate(),
     inventory: inventory(),
     marker: MARKER,
@@ -2749,6 +2809,7 @@ test("production observation requires complete verified escrow for attested aban
     })
 
     const { observation, diagnostics } = await observeProductionCandidate({
+      terminalRecordRef: "HEAD",
       candidate: candidate(),
       inventory: inventory(),
       marker: MARKER,
@@ -3229,6 +3290,12 @@ function gitReader(overrides = {}) {
   return {
     async resolveTag() {
       return COMMIT_SHA
+    },
+    async listTree() {
+      return ""
+    },
+    async showFile() {
+      throw new Error("showFile must not be called when no terminal record exists")
     },
     ...overrides,
   }
@@ -4469,3 +4536,365 @@ function storedZip(files) {
   end.writeUInt32LE(centralOffset, 16)
   return Buffer.concat([...locals, ...centrals, end])
 }
+
+function recordFor(overrides = {}) {
+  const value = terminalRecordFixture()
+  const retag = (set) => ({ ...set, commitSha: COMMIT_SHA })
+  return {
+    ...value,
+    commitSha: COMMIT_SHA,
+    tag: { ...value.tag, commitSha: COMMIT_SHA },
+    predecessor: {
+      ...value.predecessor,
+      marker: {
+        ...value.predecessor.marker,
+        commitSha: COMMIT_SHA,
+        attestationSet: retag(value.predecessor.marker.attestationSet),
+      },
+      artifact: {
+        ...value.predecessor.artifact,
+        attestationSet: retag(value.predecessor.artifact.attestationSet),
+      },
+    },
+    ...overrides,
+  }
+}
+
+function escrowTerminalRecord(escrow, overrides = {}) {
+  const base = recordFor()
+  const marker = escrow.marker
+  return {
+    ...base,
+    predecessor: {
+      state: "CANDIDATE_ESCROWED",
+      releaseId: escrow.release.id,
+      releaseStatus: "draft",
+      bodySha256: digest(Buffer.from(escrow.release.body, "utf8")),
+      marker,
+      artifact: {
+        manifestSha256: marker.manifestSha256,
+        releaseRecordSha256: marker.releaseRecordSha256,
+        baseAssetSetSha256: marker.baseAssetSetSha256,
+        attestationSet: marker.attestationSet,
+      },
+    },
+    evidence: {
+      ...base.evidence,
+      escrowAssets: escrow.assets.map((asset) => ({
+        id: asset.id,
+        name: asset.name,
+        sha256: asset.digest.slice("sha256:".length),
+      })),
+    },
+    ...overrides,
+  }
+}
+
+function recordedGit(bytes) {
+  return gitReader({
+    async listTree({ ref }) {
+      assert.equal(ref, "HEAD")
+      return "package.json\nscripts/release/terminal-records/v0.8.22.json\n"
+    },
+    async showFile({ ref, path: filePath }) {
+      assert.equal(ref, "HEAD")
+      assert.equal(filePath, "scripts/release/terminal-records/v0.8.22.json")
+      return bytes.toString("utf8")
+    },
+  })
+}
+
+function stampedTerminalDraft(escrow, value) {
+  const bytes = canonicalTerminalRecordBytes(value)
+  const sha256 = digest(bytes)
+  const marker = abandonmentReleaseMarker({
+    candidate: candidate(),
+    artifact: value.predecessor.artifact,
+    abandonmentSha256: sha256,
+    previousMarker: value.predecessor.marker,
+  })
+  const tombstoneAsset = {
+    id: 3_100,
+    name: "abandonment.json",
+    digest: `sha256:${sha256}`,
+    size: bytes.length,
+  }
+  return {
+    bytes,
+    sha256,
+    marker,
+    assets: [...escrow.assets, tombstoneAsset],
+    bytesById: new Map([...escrow.bytesById, [tombstoneAsset.id, bytes]]),
+    release: {
+      ...escrow.release,
+      name: `Dawn v${VERSION} (abandoned before publication)`,
+      body: canonicalAbandonmentReleaseBody({
+        marker,
+        tombstone: value,
+        previousMarker: value.predecessor.marker,
+      }),
+    },
+  }
+}
+
+function releaseReader(fixture) {
+  return {
+    async listReleases() {
+      return present("releases", [fixture.release])
+    },
+    async getRelease({ releaseId }) {
+      assert.equal(releaseId, fixture.release.id)
+      return present("release", fixture.release)
+    },
+    async listReleaseAssets({ releaseId }) {
+      assert.equal(releaseId, fixture.release.id)
+      return present("release-assets", fixture.assets)
+    },
+    async downloadReleaseAsset({ assetId }) {
+      const bytes = fixture.bytesById.get(Number(assetId))
+      assert.ok(bytes)
+      return binary("release-asset-download", bytes)
+    },
+  }
+}
+
+test("a committed terminal record makes the candidate terminal even when no draft is visible", async () => {
+  const bytes = canonicalTerminalRecordBytes(recordFor())
+  const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(bytes),
+    github: githubReader(),
+    npm: npmReader(),
+  })
+  assert.deepEqual(diagnostics, [])
+  assert.equal(observation.release.status, "absent")
+  assert.deepEqual(observation.abandonment, {
+    requested: true,
+    recorded: true,
+    predecessor: "CANDIDATE_ESCROWED",
+  })
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(plan.state, "ABANDONED_PREPUBLICATION")
+  assert.equal(plan.disposition, "noop")
+  assert.deepEqual(plan.conflicts, [])
+})
+
+test("a terminal record with a published package blocks with TERMINAL_RECORD_PUBLISHED_VERSION", async () => {
+  const bytes = canonicalTerminalRecordBytes(recordFor())
+  const npm = npmReader({
+    async observePackageVersion({ name, version }) {
+      if (name !== "@dawn-ai/core") return envelope("ABSENT", "package-version", 404, "E404")
+      return {
+        status: "PRESENT",
+        operation: "package-version",
+        httpStatus: 200,
+        code: null,
+        package: {
+          name,
+          version,
+          tarballUrl: npmTarballUrl(name, version),
+          shasum: "1".repeat(40),
+          integrity: packageEntry(name).npmIntegrity,
+          distTags: { latest: version },
+          latest: version,
+        },
+      }
+    },
+  })
+  const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(bytes),
+    github: githubReader(),
+    npm,
+  })
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_PUBLISHED_VERSION"))
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(plan.disposition, "blocked")
+})
+
+test("a terminal record with a visible unstamped escrow draft blocks with TERMINAL_RECORD_MISMATCH", async () => {
+  const escrow = attestedReleaseFixture()
+  const value = escrowTerminalRecord(escrow)
+  const bytes = canonicalTerminalRecordBytes(value)
+  const github = githubReader(releaseReader(escrow))
+  const { diagnostics, observation } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(bytes),
+    github,
+    npm: npmReader(),
+    attestations: attestationVerifier([]),
+  })
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
+  assert.equal(observation.abandonment.recorded, false)
+  assert.equal(observation.release.status, "ambiguous")
+  assert.equal(
+    planRelease({ candidate: candidate(), observation, mode: "controller" }).disposition,
+    "blocked",
+  )
+})
+
+// Regression guard against a FALSE mismatch: this passes without the terminal-record code too,
+// because mapProductionAbandonmentRelease already records the abandonment from the draft alone.
+// The positive branch of terminalRecordMatchesRelease is therefore not independently observable
+// here; its job is to not fire, which is exactly what this test pins.
+test("a terminal record with a visible stamped draft that matches is terminal with no diagnostics", async () => {
+  const escrow = attestedReleaseFixture()
+  const value = escrowTerminalRecord(escrow)
+  const stamped = stampedTerminalDraft(escrow, value)
+  const github = githubReader(releaseReader(stamped))
+  const { diagnostics, observation } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(stamped.bytes),
+    github,
+    npm: npmReader(),
+    attestations: attestationVerifier([]),
+  })
+  assert.deepEqual(diagnostics, [])
+  assert.equal(observation.release.status, "draft")
+  assert.equal(observation.release.marker.phase, "ABANDONED_PREPUBLICATION")
+  assert.deepEqual(observation.abandonment, {
+    requested: true,
+    recorded: true,
+    predecessor: "CANDIDATE_ESCROWED",
+  })
+  const plan = planRelease({ candidate: candidate(), observation, mode: "controller" })
+  assert.equal(plan.state, "ABANDONED_PREPUBLICATION")
+  assert.deepEqual(plan.conflicts, [])
+})
+
+test("a visible stamped draft whose tombstone digest differs from the committed record blocks with TERMINAL_RECORD_MISMATCH", async () => {
+  const escrow = attestedReleaseFixture()
+  const committed = escrowTerminalRecord(escrow)
+  const other = escrowTerminalRecord(escrow, {
+    reason: "a different reason for the very same abandoned candidate",
+  })
+  const stamped = stampedTerminalDraft(escrow, other)
+  assert.notEqual(digest(canonicalTerminalRecordBytes(committed)), stamped.sha256)
+  const github = githubReader(releaseReader(stamped))
+  const { diagnostics, observation } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(canonicalTerminalRecordBytes(committed)),
+    github,
+    npm: npmReader(),
+    attestations: attestationVerifier([]),
+  })
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
+  assert.equal(observation.abandonment.recorded, false)
+  assert.equal(observation.release.status, "ambiguous")
+  assert.equal(
+    planRelease({ candidate: candidate(), observation, mode: "controller" }).disposition,
+    "blocked",
+  )
+})
+
+test("a malformed terminal record blocks the observation with TERMINAL_RECORD_INVALID", async () => {
+  const git = gitReader({
+    async listTree() {
+      return "scripts/release/terminal-records/v0.8.22.json\n"
+    },
+    async showFile() {
+      return "{}\n"
+    },
+  })
+  const { diagnostics, observation } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git,
+    github: githubReader(),
+    npm: npmReader(),
+  })
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_INVALID"))
+  assert.equal(
+    planRelease({ candidate: candidate(), observation, mode: "controller" }).disposition,
+    "blocked",
+  )
+})
+
+test("a terminal record for another candidate is never used and blocks with TERMINAL_RECORD_FOREIGN", async () => {
+  // The unmodified fixture record names commit 2a80dee..., not this test's candidate.
+  const bytes = canonicalTerminalRecordBytes(terminalRecordFixture())
+  const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git: recordedGit(bytes),
+    github: githubReader(),
+    npm: npmReader(),
+  })
+  assert.notEqual(diagnostics.length, 0)
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_FOREIGN"))
+  assert.ok(!diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_MISMATCH"))
+  assert.equal(observation.abandonment.recorded, false)
+  assert.equal(observation.release.status, "ambiguous")
+  assert.equal(
+    planRelease({ candidate: candidate(), observation, mode: "controller" }).disposition,
+    "blocked",
+  )
+})
+
+test("an unreadable terminal record tree is reported as TERMINAL_RECORD_UNREADABLE, not invalid", async () => {
+  const git = gitReader({
+    async listTree() {
+      throw new Error("git process exited with code 128")
+    },
+  })
+  const { observation, diagnostics } = await observeProductionCandidate({
+    terminalRecordRef: "HEAD",
+    candidate: candidate(),
+    inventory: inventory(),
+    marker: MARKER,
+    git,
+    github: githubReader(),
+    npm: npmReader(),
+  })
+  assert.ok(diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_UNREADABLE"))
+  assert.ok(!diagnostics.some((entry) => entry.code === "TERMINAL_RECORD_INVALID"))
+  assert.equal(observation.release.status, "ambiguous")
+  assert.equal(
+    planRelease({ candidate: candidate(), observation, mode: "controller" }).disposition,
+    "blocked",
+  )
+})
+
+test("the production observer and resolver both require an explicit terminal record ref", async () => {
+  await assert.rejects(
+    observeProductionCandidate({
+      candidate: candidate(),
+      inventory: inventory(),
+      marker: MARKER,
+      git: gitReader(),
+      github: githubReader(),
+      npm: npmReader(),
+    }),
+    /Terminal record ref is invalid/u,
+  )
+  await assert.rejects(
+    resolveProductionCandidate({
+      terminalRecordRef: "",
+      event: { ref: "refs/heads/main", after: COMMIT_SHA },
+      inventory: inventoryReader(),
+      git: {},
+      github: {},
+      marker: MARKER,
+    }),
+    /Terminal record ref is invalid/u,
+  )
+})

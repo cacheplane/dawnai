@@ -45,12 +45,18 @@ const EXECUTABLE_ALLOWLIST = JSON.parse(
 )
 const SCRIPT_PIN_FIXTURE = "scripts/release/test/fixtures/release-script-hashes.json"
 const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
-// Exact fixture bytes after the reviewed artifact-download Accept fix
+// Exact fixture bytes after exporting validateMarker for the terminal record store
+// (v0.8.22 terminal recovery) on top of the reviewed artifact-download Accept fix
 // (scripts/release/adapters/github.mjs; GitHub began answering HTTP 415 to
 // application/octet-stream on the artifact zip endpoint on 2026-09-03).
 // Previously pinned at Task 11's starting HEAD e5cf1986c0f2cb2f55b891a7c92fa7291289dfdb.
+// Repinned for the required terminalRecordRef option on observeProductionCandidate /
+// resolveProductionCandidate (scripts/release/cli.mjs, independent-audit.mjs, and
+// post-publication-audit.mjs each now pass the ref their own job checks out).
+// Repinned for getAuthenticatedUser on the GitHub reader (scripts/release/adapters/github.mjs):
+// the v0.8.22 terminal recovery record names the operator login its token acts as.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "1d0c67a4da9dd7fc33b8a8938dd672ae215a5db9cd8ace27756a72a0d5531f1f"
+  "23b0a9057c4f8051049e4ebd71f40c8844cca4ce9f562b6f40c5d82e066fbdb0"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

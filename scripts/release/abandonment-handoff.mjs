@@ -122,6 +122,11 @@ export async function createAbandonmentArtifactContext(input, dependencies) {
       ...(npmAuditFactory === undefined ? {} : { npmAuditFactory }),
       attestations,
       marker,
+      // Known limitation: the dormant protected-abandonment handoff reads the terminal record at
+      // the candidate commit, which by construction predates any record, so a git-resident record
+      // cannot stop it. This path is disabled by the 2026-08-25 design and any reactivation must
+      // supply an explicit operator-provided ref (as the recovery CLI does with reviewedCommit).
+      terminalRecordRef: candidate.commitSha,
     }),
     candidate,
   )
@@ -135,6 +140,11 @@ export async function createAbandonmentArtifactContext(input, dependencies) {
       npm,
       ...(npmAuditFactory === undefined ? {} : { npmAuditFactory }),
       attestations,
+      // Known limitation: the dormant protected-abandonment handoff reads the terminal record at
+      // the candidate commit, which by construction predates any record, so a git-resident record
+      // cannot stop it. This path is disabled by the 2026-08-25 design and any reactivation must
+      // supply an explicit operator-provided ref (as the recovery CLI does with reviewedCommit).
+      terminalRecordRef: candidate.commitSha,
     }),
   )
   assertExactFields(observed, ["observation", "diagnostics"], "production observation result")

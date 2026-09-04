@@ -11,6 +11,11 @@ import {
   releaseBodySha256,
 } from "./metadata.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
+import {
+  canonicalTerminalRecordBytes,
+  OPERATOR_RECOVERY_MODE,
+  parseOperatorRecoveryRecord,
+} from "./terminal-record-store.mjs"
 import { parseAbandonmentRecord } from "./terminal-records.mjs"
 
 const EXPECTED_ENVIRONMENT = "release-abandonment"
@@ -99,6 +104,20 @@ export async function evaluateAbandonment(input) {
 
 export function canonicalAbandonmentBytes(value) {
   const source = snapshotJson(value)
+  if (!isRecord(source)) {
+    throw new TypeError("Canonical abandonment input is invalid")
+  }
+  if (isRecord(source.authority) && source.authority.mode === OPERATOR_RECOVERY_MODE) {
+    // MAX_TERMINAL_RECORD_BYTES (512 KiB, terminal-record-store.mjs) must stay
+    // below RELEASE_PAYLOAD_LIMITS.auditReceiptBytes (1 MiB, limits.mjs): this
+    // producer accepts anything up to the smaller terminal-record cap, and
+    // parseAbandonmentReleaseBody enforces the larger audit-receipt cap on the
+    // embedded bytes it reads back. If that ordering ever inverted, a body this
+    // function happily produced could be rejected on read.
+    const bytes = canonicalTerminalRecordBytes(source)
+    parseOperatorRecoveryRecord(bytes)
+    return bytes
+  }
   const record = parseAbandonmentRecord(source, {
     candidate: { version: source.version, commitSha: source.commitSha },
     environment: EXPECTED_ENVIRONMENT,
@@ -130,6 +149,14 @@ export function canonicalAbandonmentArtifactContextBytes(value, options) {
   return encodeArtifactContext(parseAbandonmentArtifactContext(value, options))
 }
 
+/** The tag NAME of either tombstone variant (legacy: string; operator-recovery: `{ name, objectSha, commitSha }`). */
+export function abandonmentRecordTag(record) {
+  const tag = record?.tag
+  if (typeof tag === "string") return tag
+  if (isRecord(tag) && typeof tag.name === "string") return tag.name
+  throw new TypeError("Abandonment record tag is invalid")
+}
+
 export function canonicalAbandonmentReleaseBody(input) {
   const source = snapshotJson(input)
   const keys = isRecord(source) ? Object.keys(source) : []
@@ -156,7 +183,7 @@ export function canonicalAbandonmentReleaseBody(input) {
     releaseMarker.phase !== "ABANDONED_PREPUBLICATION" ||
     record.version !== releaseMarker.version ||
     record.commitSha !== releaseMarker.commitSha ||
-    record.tag !== releaseMarker.tag ||
+    abandonmentRecordTag(record) !== releaseMarker.tag ||
     sha256(tombstoneBytes) !== releaseMarker.abandonmentSha256
   ) {
     throw new TypeError("Abandonment Release body evidence does not match its marker")
@@ -1028,8 +1055,32 @@ function parseCanonicalAbandonmentBytes(bytes) {
   if (!canonical.equals(bytes)) {
     throw new TypeError("Abandonment record bytes are not canonical")
   }
-  return parseAbandonmentRecord(value, {
-    candidate: { version: value.version, commitSha: value.commitSha },
+  return parseAnyAbandonmentRecord(value)
+}
+
+/**
+ * Parse either tombstone variant. An operator-recovery record (see
+ * terminal-record-store.mjs) is authorized by a reviewed commit and carries
+ * `authority.mode`; every other record must satisfy the environment-approval
+ * schema in terminal-records.mjs. The two schemas share `predecessor`.
+ */
+export function parseAnyAbandonmentRecord(value) {
+  const source = snapshotJson(value)
+  if (
+    isRecord(source) &&
+    isRecord(source.authority) &&
+    source.authority.mode === OPERATOR_RECOVERY_MODE
+  ) {
+    // canonicalAbandonmentBytes(source) above already ran parseOperatorRecoveryRecord
+    // once (to canonicalize `source` into bytes); re-parsing those bytes here is
+    // deliberate defence in depth at the trust boundary that turns bytes back into
+    // a record callers rely on, not redundant validation worth trimming.
+    const parsed = parseOperatorRecoveryRecord(canonicalAbandonmentBytes(source))
+    const { sha256: _digest, ...record } = parsed
+    return deepFreeze(record)
+  }
+  return parseAbandonmentRecord(source, {
+    candidate: { version: source?.version, commitSha: source?.commitSha },
     environment: EXPECTED_ENVIRONMENT,
     packageNames: CANONICAL_PACKAGE_NAMES,
   })

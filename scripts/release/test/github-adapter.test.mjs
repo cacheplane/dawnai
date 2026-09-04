@@ -18,6 +18,7 @@ const ALLOWED_METHODS = [
   "getActionsRun",
   "getActionsRunAttempt",
   "getAttestations",
+  "getAuthenticatedUser",
   "getBranchProtection",
   "getCommitCheckRuns",
   "getGitTag",
@@ -264,6 +265,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
     jsonResponse({ enabled_repositories: "all" }),
     jsonResponse({ default_workflow_permissions: "read", can_approve_pull_request_reviews: false }),
     jsonResponse({ required_status_checks: {} }),
+    jsonResponse({ login: "blove", id: 1 }),
   ])
   const github = createGitHubReader({ owner: OWNER, repo: REPO, token: TOKEN, fetchImpl })
 
@@ -279,6 +281,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
   await github.getActionsPermissions()
   await github.getWorkflowPermissions()
   await github.getBranchProtection({ branch: "release/0.8" })
+  await github.getAuthenticatedUser()
 
   assert.deepEqual(
     calls.map(({ url, init }) => ({
@@ -301,6 +304,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
       `${BASE}/actions/permissions`,
       `${BASE}/actions/permissions/workflow`,
       `${BASE}/branches/release%2F0.8/protection`,
+      "https://api.github.com/user",
     ].map((url) => ({
       url,
       method: "GET",

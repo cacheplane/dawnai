@@ -1,18 +1,19 @@
 import { createHash } from "node:crypto"
 
-import { canonicalAbandonmentBytes, parseAbandonmentReleaseBody } from "./abandonment.mjs"
+import {
+  abandonmentRecordTag,
+  canonicalAbandonmentBytes,
+  parseAbandonmentReleaseBody,
+  parseAnyAbandonmentRecord,
+} from "./abandonment.mjs"
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
-import { CANONICAL_RELEASE_PACKAGE_ORDER } from "./manifest.mjs"
 import { canonicalReleaseBody, isManagedReleaseForTag, parseReleaseMarker } from "./metadata.mjs"
 import { planCandidateArbitration } from "./planner.mjs"
 import { releaseRecordSha256 } from "./release-record.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 import { ReleaseState } from "./state.mjs"
-import {
-  canonicalAuditResultBytes,
-  parseAbandonmentRecord,
-  parseAuditResult,
-} from "./terminal-records.mjs"
+import { readTerminalRecord } from "./terminal-record-store.mjs"
+import { canonicalAuditResultBytes, parseAuditResult } from "./terminal-records.mjs"
 
 const MARKER_PATH = "scripts/release/controller-schema.json"
 const PRODUCTION_MAIN_REF = "refs/remotes/origin/main"
@@ -36,9 +37,6 @@ const TERMINAL_ABANDONMENT_ASSET = "abandonment.json"
 const RELEASE_MARKER_TOKEN = "<!-- DAWN_RELEASE_CONTROLLER_MARKER\n"
 const MAX_ABANDONMENT_ASSETS = 46
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
-const CANONICAL_PACKAGE_NAMES = Object.freeze(
-  [...CANONICAL_RELEASE_PACKAGE_ORDER].sort(compareText),
-)
 
 export async function discoverManagedCandidate({ ref, inventory, git, marker }) {
   return (
@@ -121,9 +119,13 @@ export async function discoverScheduledCandidate({
   git,
   github,
   marker,
+  terminalRecordRef,
   verifyTerminalAbandonment,
 }) {
   normalizeActiveMarker(marker)
+  if (typeof terminalRecordRef !== "string" || terminalRecordRef.length === 0) {
+    throw new TypeError("Terminal record ref is invalid")
+  }
   assertMethods(
     git,
     ["resolveTag", "listFirstParentHistory", "firstParent", "isAncestor", "listTree", "showFile"],
@@ -155,9 +157,31 @@ export async function discoverScheduledCandidate({
   const releaseRecords = presentList(releaseResult, "GitHub Releases")
   const tags = await normalizeManagedTags(tagRecords, git, github)
   const tagsByName = new Map(tags.map((tag) => [tag.tag, tag]))
+  // Committed terminal records are authoritative for their version regardless of
+  // what the GitHub token can see; a record is read at the controller's own
+  // checkout, the same ref the observer uses.
+  const recorded = new Map()
+  const terminalRecordReader = memoizeListTree(git, terminalRecordRef)
+  for (const tag of tags) {
+    const terminalRecord = await readTerminalRecord({
+      git: terminalRecordReader,
+      ref: terminalRecordRef,
+      version: tag.version,
+    })
+    if (terminalRecord === null) continue
+    if (
+      terminalRecord.commitSha !== tag.commitSha ||
+      terminalRecord.tag.name !== tag.tag ||
+      terminalRecord.tag.objectSha !== tag.tagObjectSha
+    ) {
+      throw new Error(`Terminal record for ${tag.tag} does not match the tag peel`)
+    }
+    recorded.set(tag.tag, terminalRecord)
+  }
   const releases = await inspectManagedReleases({
     records: releaseRecords,
     tagsByName,
+    recorded,
     inventory,
     git,
     github,
@@ -168,7 +192,7 @@ export async function discoverScheduledCandidate({
   const standalone = []
 
   for (const tag of tags) {
-    if (releasesByTag.has(tag.tag)) continue
+    if (releasesByTag.has(tag.tag) || recorded.has(tag.tag)) continue
     const discovery = await discoverManagedCandidate({
       ref: tag.commitSha,
       inventory,
@@ -189,6 +213,34 @@ export async function discoverScheduledCandidate({
         state: ReleaseState.CANDIDATE_TAGGED,
         disposition: "selected",
         tag: tag.tag,
+        conflicts: [],
+      }),
+    )
+  }
+
+  // These selections exist only as arbitration input: terminal states are
+  // filtered out of `incomplete`, so a recorded version is never re-selected.
+  for (const [tagName, terminalRecord] of recorded) {
+    const discovery = await discoverManagedCandidate({
+      ref: terminalRecord.commitSha,
+      inventory,
+      git,
+      marker,
+    })
+    if (discovery.state === ReleaseState.SUPERSEDED_NOOP) continue
+    if (
+      discovery.state !== ReleaseState.CANDIDATE_VALIDATED ||
+      discovery.candidate.version !== terminalRecord.version ||
+      discovery.candidate.commitSha !== terminalRecord.commitSha
+    ) {
+      throw new Error(`Recorded terminal tag ${tagName} is not an exact release candidate`)
+    }
+    standalone.push(
+      candidateSelection({
+        candidate: discovery.candidate,
+        state: ReleaseState.ABANDONED_PREPUBLICATION,
+        disposition: "selected",
+        tag: tagName,
         conflicts: [],
       }),
     )
@@ -386,6 +438,7 @@ function normalizeGithubRef(value) {
 async function inspectManagedReleases({
   records,
   tagsByName,
+  recorded,
   inventory,
   git,
   github,
@@ -417,6 +470,28 @@ async function inspectManagedReleases({
     if (tagIdentity === undefined) {
       throw new Error(`Managed GitHub Release ${tag} has no matching tag ref`)
     }
+    // A committed terminal record settles this version, so no Release evidence
+    // is read for it: the controller must reach the same classification whether
+    // or not its token can see this draft at all. A visible Release must still
+    // be the stamped tombstone the record describes, because a recorded version
+    // is never re-selected and so is never observed again: a stray, tampered, or
+    // published Release on that tag would otherwise go unexamined forever. The
+    // marker alone settles it, from data already in hand — no extra reads.
+    const terminalRecord = recorded.get(tagIdentity.tag)
+    if (terminalRecord !== undefined) {
+      const stamped = releaseMarkerIfPresent(release.body)
+      if (
+        release.draft !== true ||
+        release.immutable !== false ||
+        stamped?.phase !== "ABANDONED_PREPUBLICATION" ||
+        stamped.abandonmentSha256 !== terminalRecord.sha256
+      ) {
+        throw new Error(
+          `Visible Release for recorded ${tagIdentity.tag} is not its stamped tombstone`,
+        )
+      }
+      continue
+    }
     const candidate = await discoverManagedCandidateDetails({
       ref: tagIdentity.commitSha,
       inventory,
@@ -441,7 +516,6 @@ async function inspectManagedReleases({
       release,
       assets,
       tagIdentity,
-      abandonmentEnvironment: marker.abandonmentEnvironment,
       github,
       verifyTerminalAbandonment,
     })
@@ -580,7 +654,6 @@ async function inspectAbandonmentRelease({
   release,
   assets,
   tagIdentity,
-  abandonmentEnvironment,
   github,
   verifyTerminalAbandonment,
 }) {
@@ -685,16 +758,18 @@ async function inspectAbandonmentRelease({
         includeBytes: true,
       },
     )
-    tombstone = parseAbandonmentRecord(downloaded.value, {
-      candidate: {
-        version: tagIdentity.version,
-        commitSha: tagIdentity.commitSha,
-      },
-      environment: abandonmentEnvironment,
-      packageNames: CANONICAL_PACKAGE_NAMES,
-    })
+    tombstone = parseAnyAbandonmentRecord(downloaded.value)
+    if (
+      tombstone.version !== tagIdentity.version ||
+      tombstone.commitSha !== tagIdentity.commitSha
+    ) {
+      throw new Error(`Managed abandonment record for ${tagIdentity.tag} names another candidate`)
+    }
     tombstoneBytes = canonicalAbandonmentBytes(tombstone)
-    if (!tombstoneBytes.equals(downloaded.bytes) || tombstone.tag !== tagIdentity.tag) {
+    if (
+      !tombstoneBytes.equals(downloaded.bytes) ||
+      abandonmentRecordTag(tombstone) !== tagIdentity.tag
+    ) {
       throw new Error(`Managed abandonment record for ${tagIdentity.tag} is not canonical`)
     }
   }
@@ -839,6 +914,22 @@ function jsonValuesEqual(left, right) {
     arraysEqual(leftKeys, rightKeys) &&
     leftKeys.every((key) => jsonValuesEqual(left[key], right[key]))
   )
+}
+
+/**
+ * One full-repository tree listing serves every terminal-record read at `ref`;
+ * the wrapper forwards every other read to the reader it was given unchanged.
+ */
+function memoizeListTree(git, ref) {
+  let listing = null
+  return {
+    ...git,
+    listTree(input) {
+      if (input?.ref !== ref) return git.listTree(input)
+      listing ??= git.listTree(input)
+      return listing
+    },
+  }
 }
 
 function releaseMarkerIfPresent(body) {

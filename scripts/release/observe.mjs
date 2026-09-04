@@ -38,6 +38,7 @@ import {
   REQUIRED_RELEASE_SMOKE_LANES,
 } from "./smoke-result.mjs"
 import { ReleaseState } from "./state.mjs"
+import { readTerminalRecord } from "./terminal-record-store.mjs"
 import { canonicalAuditResultBytes, parseAuditResult } from "./terminal-records.mjs"
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
@@ -123,8 +124,10 @@ export async function resolveProductionCandidate({
   npmAuditFactory,
   attestations,
   marker,
+  terminalRecordRef,
   discovery = { discoverManagedCandidate, discoverScheduledCandidate },
 }) {
+  assertTerminalRecordRef(terminalRecordRef)
   assertMethods(inventory, ["read"], "inventory reader")
   assertMethods(
     discovery,
@@ -148,6 +151,7 @@ export async function resolveProductionCandidate({
               npm,
               npmAuditFactory,
               attestations,
+              terminalRecordRef,
             })
             const observation = verified.observation
             const baseAssets = observation.release.assets.filter(
@@ -179,6 +183,7 @@ export async function resolveProductionCandidate({
       git,
       github,
       marker,
+      terminalRecordRef,
       ...(verifyTerminalAbandonment === undefined ? {} : { verifyTerminalAbandonment }),
     })
   let normalized
@@ -330,17 +335,19 @@ export async function observeProductionCandidate({
   npm,
   npmAuditFactory,
   attestations,
+  terminalRecordRef,
   includeRecovery = false,
   currentPublisherRun = null,
 }) {
   if (typeof includeRecovery !== "boolean") {
     throw new TypeError("Production recovery inclusion flag is invalid")
   }
+  assertTerminalRecordRef(terminalRecordRef)
   const identity = normalizeCandidate(candidate)
   const currentRun = normalizeCurrentPublisherRun(currentPublisherRun, identity)
   const managedInventory = normalizeProductionInventory(inventory, identity)
   normalizeControllerMarker(marker)
-  assertMethods(git, ["resolveTag"], "Git reader")
+  assertMethods(git, ["resolveTag", "listTree", "showFile"], "Git reader")
   assertMethods(
     github,
     [
@@ -368,6 +375,40 @@ export async function observeProductionCandidate({
   }
 
   const diagnostics = []
+  let committedTerminalRecord = null
+  let terminalRecordUnusable = false
+  let terminalRecordMismatch = false
+  try {
+    committedTerminalRecord = await readTerminalRecord({
+      git,
+      ref: terminalRecordRef,
+      version: identity.version,
+    })
+  } catch (error) {
+    // The store throws TypeError for a record it read but could not validate; anything else came
+    // from the git transport itself (spawn failure, timeout, output cap), which is not evidence
+    // of tampering. Both fail closed, but an operator must be able to tell them apart.
+    terminalRecordUnusable = true
+    addDiagnostic(
+      diagnostics,
+      "git",
+      "terminal-record",
+      "AMBIGUOUS",
+      error instanceof TypeError ? "TERMINAL_RECORD_INVALID" : "TERMINAL_RECORD_UNREADABLE",
+    )
+  }
+  if (
+    committedTerminalRecord !== null &&
+    !terminalRecordBindsCandidate(committedTerminalRecord, identity)
+  ) {
+    // A record for another version or another commit proves nothing about THIS candidate, and a
+    // record whose own tag disagrees with its commit is self-inconsistent. Discard it entirely
+    // (it is never read again below) and fail closed exactly like a draft mismatch, under its own
+    // code: a foreign record is a different operator situation from a draft that disagrees.
+    committedTerminalRecord = null
+    terminalRecordMismatch = true
+    addDiagnostic(diagnostics, "git", "terminal-record", "AMBIGUOUS", "TERMINAL_RECORD_FOREIGN")
+  }
   const [ciResult, ciWorkflowResult, tagRefsResult, releasesResult, artifactResult, publisherRuns] =
     await Promise.all([
       observeAdapter(() => github.getCommitCheckRuns({ commitSha: identity.commitSha }), {
@@ -444,6 +485,23 @@ export async function observeProductionCandidate({
     attestations,
     diagnostics,
   })
+  let abandonment = releaseState.abandonment
+  if (committedTerminalRecord !== null) {
+    if (terminalRecordMatchesRelease(committedTerminalRecord, releaseState.release)) {
+      abandonment = {
+        requested: true,
+        recorded: true,
+        predecessor: committedTerminalRecord.predecessor.state,
+      }
+    } else {
+      // The committed record and the visible draft disagree, so neither may be reported as the
+      // abandonment of record. The release itself is forced ambiguous further below, where the
+      // observed release is finalized, so planRelease blocks rather than only the CLI.
+      terminalRecordMismatch = true
+      addDiagnostic(diagnostics, "github", "release", "AMBIGUOUS", "TERMINAL_RECORD_MISMATCH")
+    }
+  }
+  if (terminalRecordMismatch) abandonment = { requested: true, recorded: false, predecessor: null }
   const retentionResolvedByDurableRelease =
     releaseState.release.status !== "absent" &&
     releaseState.release.status !== "ambiguous" &&
@@ -451,8 +509,8 @@ export async function observeProductionCandidate({
     ((releaseState.artifactState.artifacts.status === "attested" &&
       releaseState.release.marker.attestationSet !== null) ||
       (releaseState.release.marker.phase === "ABANDONED_PREPUBLICATION" &&
-        releaseState.abandonment.requested === true &&
-        releaseState.abandonment.recorded === true))
+        abandonment.requested === true &&
+        abandonment.recorded === true))
   if (!retentionResolvedByDurableRelease) {
     diagnostics.push(...(preparedArtifactState.deferredDiagnostics ?? []))
   }
@@ -543,6 +601,19 @@ export async function observeProductionCandidate({
     )
   }
 
+  // registryPresenceObserved, not the mapped package status: without an npmAuditFactory an
+  // observed-PRESENT package is downgraded to "ambiguous", and a record can never mask a
+  // publication just because signature verification was unavailable.
+  if ((committedTerminalRecord !== null || terminalRecordUnusable) && registryPresenceObserved) {
+    addDiagnostic(
+      diagnostics,
+      "npm",
+      "package-version",
+      "AMBIGUOUS",
+      "TERMINAL_RECORD_PUBLISHED_VERSION",
+    )
+  }
+
   const tag = await mapProductionTag({
     result: tagRefsResult,
     candidate: identity,
@@ -582,6 +653,9 @@ export async function observeProductionCandidate({
       release = nonPresentRelease("ambiguous")
     }
   }
+  // A record we cannot parse, or one the visible draft contradicts, leaves the terminal state
+  // unknown: fail closed so planRelease blocks on github-release-ambiguous, not only the CLI.
+  if (terminalRecordUnusable || terminalRecordMismatch) release = nonPresentRelease("ambiguous")
   const publicationHistory = await observeProductionPublicationHistory({
     result: publisherRuns,
     candidate: identity,
@@ -611,7 +685,7 @@ export async function observeProductionCandidate({
         ? releaseState.smokes
         : pendingProductionSmokeObservations(identity, artifacts.manifestSha256),
     audit: releaseState.audit,
-    abandonment: releaseState.abandonment,
+    abandonment,
   }
   diagnostics.sort(compareDiagnostics)
   const result = { observation, diagnostics }
@@ -1444,7 +1518,12 @@ function inventoryFromManifest(inventory, manifest) {
   }
 }
 
-function parseProductionManifest(bytes, { candidate }) {
+/**
+ * Parse the sealed manifest exactly as production observation does. Exported so
+ * the one-time terminal recovery command rebuilds the ESCROWED Release body
+ * through the very same parser the observer renders it with.
+ */
+export function parseProductionManifest(bytes, { candidate }) {
   return parseSealedReleaseManifest(bytes, { candidate })
 }
 
@@ -2403,6 +2482,48 @@ async function mapProductionAbandonmentRelease({
       predecessor: tombstone.predecessor.state,
     },
   })
+}
+
+/** The ref a terminal record is read from is always explicit: never defaulted, never empty. */
+function assertTerminalRecordRef(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError("Terminal record ref is invalid")
+  }
+}
+
+/** The record must name exactly this candidate: version, commit, and its own self-consistent tag. */
+function terminalRecordBindsCandidate(record, identity) {
+  return (
+    record.version === identity.version &&
+    record.commitSha === identity.commitSha &&
+    record.tag.name === `v${identity.version}` &&
+    record.tag.commitSha === identity.commitSha
+  )
+}
+
+/**
+ * true  — no draft is visible (absent/ambiguous: the committed record stands alone), or the
+ *         visible draft is the stamped abandonment whose marker digest and tombstone asset
+ *         digest both equal the record's canonical SHA-256.
+ * false — a draft is visible but is not the stamped tombstone for this exact record.
+ * The numeric Release ID is not part of the observation; the apply command verifies it.
+ */
+function terminalRecordMatchesRelease(record, release) {
+  // An already-ambiguous release means GitHub itself was unreadable, not that the draft
+  // contradicts the record; that path carries its own AMBIGUOUS diagnostic, so the committed
+  // record still stands alone here rather than being reported as a mismatch.
+  if (release.status === "absent" || release.status === "ambiguous") return true
+  if (release.status !== "draft") return false
+  const marker = release.marker
+  if (
+    marker === null ||
+    marker.phase !== "ABANDONED_PREPUBLICATION" ||
+    marker.abandonmentSha256 !== record.sha256
+  ) {
+    return false
+  }
+  const tombstones = release.assets.filter((asset) => asset.name === "abandonment.json")
+  return tombstones.length === 1 && tombstones[0].sha256 === record.sha256
 }
 
 function normalizeReleaseIdentity(value, candidate) {

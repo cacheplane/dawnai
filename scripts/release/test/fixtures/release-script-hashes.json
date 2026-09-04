@@ -8,7 +8,7 @@
       "sha256": "465beffc12678ec5bd6d6e5ef6dc4f4c9cc1d76e622b4ed27c35dd231f2e0dda"
     },
     "scripts/release/adapters/github.mjs": {
-      "sha256": "00d507ac49a810092b78fbd65445aca3bde7b96cb50fda7202791593a22cfe53"
+      "sha256": "11a1cb51ae31be026d000489d0dac816b00abc7cbc294d53e6127909f385b8f0"
     },
     "scripts/release/adapters/http.mjs": {
       "sha256": "86e03a6cd1536bd57983c27256694bb281d83dfc7efd09181a299b7f351f9510"
@@ -20,13 +20,13 @@
       "sha256": "1b1e17298068211d5e47ac6adfe74e996b1faee91a567385d694704e3ba2de54"
     },
     "scripts/release/cli.mjs": {
-      "sha256": "7d78f62482a472a7380987353a5d895c84c9da97600643ff2aead40c7904b2c8"
+      "sha256": "9672a6f16ad7f45f43b565f43ae3142e818e273a0020fad3a2599d4e0b237830"
     },
     "scripts/release/independent-audit-coordinator.mjs": {
       "sha256": "a72f438f776f9ca26914c2ec51dd75de8f3b6c7d85ae8b11f2cc51c651e10d53"
     },
     "scripts/release/independent-audit.mjs": {
-      "sha256": "1d18e376e41e12b4d98cf63f79448d485a5cf3ca95abdedbc5045b3f29c6a818"
+      "sha256": "32746a3162b0fbf97990e3ad01952a4f581fa92ece87aaf8252a9a7fa4a68dd8"
     },
     "scripts/release/limits.mjs": {
       "sha256": "6ace39d22cdf5dbedff3b14b444c00cd3102082f8ef733ee458d0e6b52f1982f"
@@ -35,7 +35,7 @@
       "sha256": "1a931c3056826e489894f67474287b81d6518c9076abbc779ad387697b61b4a9"
     },
     "scripts/release/metadata.mjs": {
-      "sha256": "7eb0cfcbccc5ab01a222c3e8c69b645eb6bcc20f23d087a7bdf9f649100feb69"
+      "sha256": "15e739bbe95a683e0254d79e7a3dfefdb5bbd7f7e18cf96545c38a09ee132be1"
     },
     "scripts/release/npm-audit.mjs": {
       "sha256": "308b723105b9549a2740456eaedf2f272c0885fdc5c530f9bfb3aa0e49314111"
@@ -44,7 +44,7 @@
       "sha256": "fc14058dcf57fd3252cf758d8f58ee2795a5d5f210f41231a794018b17366b74"
     },
     "scripts/release/post-publication-audit.mjs": {
-      "sha256": "1e77a5909322b39d8c0a2b297302501e86e2d1c66931d97d787638982a61cf8e"
+      "sha256": "909600cbb051aabcf36e819ff002c3aae05d45de47c2e91a5364419bdeeea0d4"
     },
     "scripts/release/process-runner.mjs": {
       "sha256": "bdc06e4902b3e853e858166240e3dd1e068061c3ec69f74cad33f1ae122c7e1b"

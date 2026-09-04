@@ -31,16 +31,16 @@ import { createProductionInventoryReader, observeProductionCandidate } from "./o
 import { planRelease } from "./planner.mjs"
 
 const execFile = promisify(execFileCallback)
-const RECOVERY_DIRECTORY = ".dawn/release-recovery"
-const ACKNOWLEDGEMENT_FLAG = "--acknowledge-non-atomic-release-edit-freeze"
+export const RECOVERY_DIRECTORY = ".dawn/release-recovery"
+export const ACKNOWLEDGEMENT_FLAG = "--acknowledge-non-atomic-release-edit-freeze"
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const MAX_PATH_BYTES = 4_096
-const MAX_EVIDENCE_BYTES = 512 * 1024
-const MAX_RECEIPT_BYTES = 512 * 1024
+export const MAX_EVIDENCE_BYTES = 512 * 1024
+export const MAX_RECEIPT_BYTES = 512 * 1024
 const MAX_GIT_OUTPUT_BYTES = 8 * 1024
-const DEPENDENCY_FIELDS = Object.freeze([
+export const DEPENDENCY_FIELDS = Object.freeze([
   "applyDuplicateDraftRecovery",
   "canonicalDuplicateDraftEvidence",
   "captureDuplicateDraftRecoveryEvidence",
@@ -189,6 +189,8 @@ export async function runDuplicateDraftRecoveryCli({
       environment: runtime.environment,
       fileSystem: runtime.fileSystem,
       runGit: runtime.runGit,
+      // The reviewed merge commit is the exact tree this recovery was authorized against.
+      terminalRecordRef: reviewedCommit,
       createNormalObserver: runtime.createNormalProductionRecoveryObserver,
     })
     const receipt = await runtime.applyDuplicateDraftRecovery({
@@ -247,9 +249,12 @@ const RECOVERY_ERROR_NAMES = new Set([
   "DuplicateDraftRecoveryCaptureError",
   "DuplicateDraftRecoveryReadError",
   "DuplicateDraftRecoveryWriteError",
+  // The one-time terminal recovery command's own conflicts. Its codes are
+  // built from static operation names too, never from remote data.
+  "TerminalRecoveryError",
 ])
 
-function diagnosticCodeSuffix(error) {
+export function diagnosticCodeSuffix(error) {
   // Only Dawn's own recovery errors qualify. A Node errno such as EIO carries a
   // `code` too, and echoing arbitrary error codes would widen this surface
   // beyond the curated recovery constants.
@@ -259,7 +264,43 @@ function diagnosticCodeSuffix(error) {
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/u.test(code) ? ` (code: ${code})` : ""
 }
 
-function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {
+// Every duplicate-draft-specific dependency's production implementation,
+// keyed by its DEPENDENCY_FIELDS name. `runGit` is intentionally excluded:
+// it is always wrapped through `createScrubbedGitRunner` before the loop
+// below runs, so it never falls through to a table lookup.
+const DEPENDENCY_DEFAULTS = Object.freeze({
+  fileSystem: defaultFileSystem,
+  randomUUID: defaultRandomUUID,
+  resolveRepositoryRoot,
+  applyDuplicateDraftRecovery: defaultApplyDuplicateDraftRecovery,
+  canonicalDuplicateDraftEvidence: defaultCanonicalDuplicateDraftEvidence,
+  captureDuplicateDraftRecoveryEvidence: defaultCaptureDuplicateDraftRecoveryEvidence,
+  createDuplicateDraftRecoveryReader: defaultCreateDuplicateDraftRecoveryReader,
+  createDuplicateDraftRecoveryWriter: defaultCreateDuplicateDraftRecoveryWriter,
+  createNormalProductionRecoveryObserver,
+  createProductionRecoveryObserver,
+  parseDuplicateDraftEvidence: defaultParseDuplicateDraftEvidence,
+})
+
+/**
+ * Build the frozen runtime the recovery CLI and its sibling one-time
+ * commands execute against. `allowedDependencies` names which dependency
+ * overrides `dependencies` may supply (defaults to the full duplicate-draft
+ * DEPENDENCY_FIELDS list); an allowed name with neither a supplied value nor
+ * an entry in DEPENDENCY_DEFAULTS (i.e. a caller-specific name the table
+ * does not know) is simply absent from the returned runtime rather than set
+ * to `undefined`. Only `runGit` is always present; a caller-specific
+ * allow-list must name `fileSystem` and `resolveRepositoryRoot` explicitly
+ * to receive their defaults.
+ */
+export function normalizeRuntime({
+  cwd,
+  environment,
+  stdout,
+  stderr,
+  dependencies,
+  allowedDependencies = DEPENDENCY_FIELDS,
+}) {
   if (
     typeof cwd !== "string" ||
     !path.isAbsolute(cwd) ||
@@ -273,54 +314,27 @@ function normalizeRuntime({ cwd, environment, stdout, stderr, dependencies }) {
   ) {
     throw new RecoveryInputError()
   }
-  validateDependencies(dependencies)
+  validateDependencies(dependencies, allowedDependencies)
   const dependency = (name, fallback) => dataProperty(dependencies, name) ?? fallback
   const runGit = createScrubbedGitRunner(dependency("runGit", defaultGitExecutor))
-  return Object.freeze({
-    cwd,
-    environment,
-    stdout,
-    stderr,
-    fileSystem: dependency("fileSystem", defaultFileSystem),
-    randomUUID: dependency("randomUUID", defaultRandomUUID),
-    runGit,
-    resolveRepositoryRoot: dependency("resolveRepositoryRoot", resolveRepositoryRoot),
-    applyDuplicateDraftRecovery: dependency(
-      "applyDuplicateDraftRecovery",
-      defaultApplyDuplicateDraftRecovery,
-    ),
-    canonicalDuplicateDraftEvidence: dependency(
-      "canonicalDuplicateDraftEvidence",
-      defaultCanonicalDuplicateDraftEvidence,
-    ),
-    captureDuplicateDraftRecoveryEvidence: dependency(
-      "captureDuplicateDraftRecoveryEvidence",
-      defaultCaptureDuplicateDraftRecoveryEvidence,
-    ),
-    createDuplicateDraftRecoveryReader: dependency(
-      "createDuplicateDraftRecoveryReader",
-      defaultCreateDuplicateDraftRecoveryReader,
-    ),
-    createDuplicateDraftRecoveryWriter: dependency(
-      "createDuplicateDraftRecoveryWriter",
-      defaultCreateDuplicateDraftRecoveryWriter,
-    ),
-    createNormalProductionRecoveryObserver: dependency(
-      "createNormalProductionRecoveryObserver",
-      createNormalProductionRecoveryObserver,
-    ),
-    createProductionRecoveryObserver: dependency(
-      "createProductionRecoveryObserver",
-      createProductionRecoveryObserver,
-    ),
-    parseDuplicateDraftEvidence: dependency(
-      "parseDuplicateDraftEvidence",
-      defaultParseDuplicateDraftEvidence,
-    ),
-  })
+  const runtime = { cwd, environment, stdout, stderr, runGit }
+  for (const name of allowedDependencies) {
+    if (name === "runGit") continue
+    const value = dependency(name, DEPENDENCY_DEFAULTS[name])
+    if (value !== undefined) runtime[name] = value
+  }
+  return Object.freeze(runtime)
 }
 
-function validateDependencies(value) {
+function validateDependencies(value, allowed = DEPENDENCY_FIELDS) {
+  if (
+    !Array.isArray(allowed) ||
+    allowed.length === 0 ||
+    allowed.some((name) => typeof name !== "string" || name.length === 0) ||
+    new Set(allowed).size !== allowed.length
+  ) {
+    throw new RecoveryInputError()
+  }
   if (
     value === null ||
     typeof value !== "object" ||
@@ -333,10 +347,13 @@ function validateDependencies(value) {
     const descriptor = typeof key === "string" ? Object.getOwnPropertyDescriptor(value, key) : null
     if (
       typeof key !== "string" ||
-      !DEPENDENCY_FIELDS.includes(key) ||
+      !allowed.includes(key) ||
       descriptor === null ||
       !descriptor.enumerable ||
       !("value" in descriptor) ||
+      // Only `fileSystem` may hold a non-function dependency (it carries the
+      // node:fs/promises-shaped module object); every other allowed
+      // dependency name must be a function.
       (key !== "fileSystem" && typeof descriptor.value !== "function")
     ) {
       throw new RecoveryInputError()
@@ -365,7 +382,7 @@ function snapshotArgumentArray(value) {
   return output
 }
 
-function normalizePrivatePath(value) {
+export function normalizePrivatePath(value) {
   if (
     typeof value !== "string" ||
     value.length === 0 ||
@@ -389,13 +406,21 @@ function normalizePrivatePath(value) {
   return value
 }
 
-function resolveInvocationPaths(root, options) {
+export function resolveInvocationPaths(root, options) {
   const output = resolvePrivatePath(root, options.output)
   if (options.command === "capture") return { output }
   return { evidence: resolvePrivatePath(root, options.evidence), output }
 }
 
-function resolvePrivatePath(root, relative) {
+/**
+ * Resolve `relative` to an absolute path confined under the recovery
+ * boundary. Callers must have already validated `relative` through
+ * `normalizePrivatePath` (or an equally strict check) before calling this;
+ * it re-checks the boundary but not the shape of `relative` itself. The
+ * returned `relative` field is the input value passed straight through,
+ * not renormalized.
+ */
+export function resolvePrivatePath(root, relative) {
   const absolute = path.resolve(root, relative)
   const boundary = path.resolve(root, RECOVERY_DIRECTORY)
   const fromBoundary = path.relative(boundary, absolute)
@@ -405,7 +430,7 @@ function resolvePrivatePath(root, relative) {
   return Object.freeze({ absolute, relative })
 }
 
-async function resolveRepositoryRoot(cwd, runGit) {
+export async function resolveRepositoryRoot(cwd, runGit) {
   let output
   try {
     output = await runGit("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
@@ -430,7 +455,7 @@ async function resolveRepositoryRoot(cwd, runGit) {
   return root
 }
 
-async function assertReviewedIgnorePolicy({
+export async function assertReviewedIgnorePolicy({
   fileSystem,
   root,
   reviewedCommit,
@@ -549,7 +574,15 @@ function defaultGitExecutor(command, args, options) {
   return execFile(command, args, options).then(({ stdout }) => stdout)
 }
 
-async function assertPrivatePathBoundary(fileSystem, root, target) {
+/**
+ * TOCTOU guard: confirms `target` still resolves inside the recovery
+ * boundary and is not a symlink escaping it. Every await between resolving
+ * a path and committing output to it is a window for that path to be
+ * replaced out from under the process, so callers must re-run this check
+ * immediately before each write/rename that follows an await, not just
+ * once up front.
+ */
+export async function assertPrivatePathBoundary(fileSystem, root, target) {
   const operations = fileSystemOperations(fileSystem, ["lstat"])
   const boundary = path.resolve(root, RECOVERY_DIRECTORY)
   const fromBoundary = path.relative(boundary, target.absolute)
@@ -581,7 +614,7 @@ async function assertPrivatePathBoundary(fileSystem, root, target) {
   }
 }
 
-async function assertUnusedOutput(fileSystem, target) {
+export async function assertUnusedOutput(fileSystem, target) {
   const operations = fileSystemOperations(fileSystem, ["lstat"])
   try {
     await operations.lstat(target)
@@ -592,7 +625,7 @@ async function assertUnusedOutput(fileSystem, target) {
   throw new Error("Recovery output already exists")
 }
 
-async function readBoundedPrivateFile(
+export async function readBoundedPrivateFile(
   fileSystem,
   target,
   maximumBytes,
@@ -643,7 +676,7 @@ async function readBoundedPrivateFile(
   }
 }
 
-async function reserveExclusiveOutput(runtime, target) {
+export async function reserveExclusiveOutput(runtime, target) {
   const operations = fileSystemOperations(runtime.fileSystem, ["link", "lstat", "open", "unlink"])
   if (!Number.isInteger(fsConstants.O_DIRECTORY) || !Number.isInteger(fsConstants.O_NOFOLLOW)) {
     throw new Error("Recovery durable output primitives are unavailable")
@@ -1208,9 +1241,13 @@ export function createProductionRecoveryObserver({
   environment,
   fileSystem,
   runGit,
+  terminalRecordRef,
   createNormalObserver = createNormalProductionRecoveryObserver,
 }) {
   assertDuplicateDraftRecoveryReader(reader)
+  if (typeof terminalRecordRef !== "string" || terminalRecordRef.length === 0) {
+    throw new TypeError("Recovery terminal record ref is invalid")
+  }
   // Retain the exact repository environment gate used by the normal release
   // observer without allowing it to supply credentials or candidate identity.
   const repository = environmentDataProperty(environment, "GITHUB_REPOSITORY")
@@ -1220,7 +1257,13 @@ export function createProductionRecoveryObserver({
   if (typeof createNormalObserver !== "function") {
     throw new TypeError("Recovery normal observer factory is invalid")
   }
-  const normalObserver = createNormalObserver({ root, token, fileSystem, runGit })
+  const normalObserver = createNormalObserver({
+    root,
+    token,
+    fileSystem,
+    runGit,
+    terminalRecordRef,
+  })
   if (typeof normalObserver !== "function") {
     throw new TypeError("Recovery normal observer is invalid")
   }
@@ -1267,7 +1310,16 @@ export function productionRecoveryCandidate(candidate) {
   })
 }
 
-export function createNormalProductionRecoveryObserver({ root, token, fileSystem, runGit }) {
+export function createNormalProductionRecoveryObserver({
+  root,
+  token,
+  fileSystem,
+  runGit,
+  terminalRecordRef,
+}) {
+  if (typeof terminalRecordRef !== "string" || terminalRecordRef.length === 0) {
+    throw new TypeError("Recovery terminal record ref is invalid")
+  }
   const git = createGitReader({ root, run: runGit })
   const github = createGitHubReader({
     owner: "cacheplane",
@@ -1296,6 +1348,7 @@ export function createNormalProductionRecoveryObserver({ root, token, fileSystem
       github,
       npm,
       attestations,
+      terminalRecordRef,
     })
     const plan = planRelease({
       candidate: productionCandidate,
@@ -1456,7 +1509,7 @@ export async function readCandidateControllerMarker({ git, candidate }) {
   }
 }
 
-function environmentToken(environment) {
+export function environmentToken(environment) {
   const token = environmentDataProperty(environment, "GITHUB_TOKEN")
   if (
     typeof token !== "string" ||
@@ -1548,7 +1601,7 @@ function hasControlCharacters(value) {
   })
 }
 
-function writeSuccessBestEffort(stream, message) {
+export function writeSuccessBestEffort(stream, message) {
   let cleanupScheduled = false
   const removeErrorListener = () => {
     if (typeof stream.removeListener === "function") stream.removeListener("error", onError)
@@ -1575,7 +1628,7 @@ function writeSuccessBestEffort(stream, message) {
   }
 }
 
-class RecoveryOutputCleanupUncertainError extends Error {
+export class RecoveryOutputCleanupUncertainError extends Error {
   constructor(errors = []) {
     super("Recovery output cleanup is uncertain")
     this.name = "RecoveryOutputCleanupUncertainError"
@@ -1583,7 +1636,7 @@ class RecoveryOutputCleanupUncertainError extends Error {
   }
 }
 
-class RecoveryInputError extends Error {
+export class RecoveryInputError extends Error {
   constructor() {
     super("Invalid duplicate draft recovery input")
   }

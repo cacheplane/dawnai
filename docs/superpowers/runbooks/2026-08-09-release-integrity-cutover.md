@@ -52,8 +52,9 @@ paths must be absent before activation.
 - A published immutable Release is never repaired. Conflicting public bytes or
   metadata are terminal operator incidents.
 - An irrecoverable prepublication candidate is preserved exactly as observed.
-  Stop, preserve all tags/Releases/evidence, and escalate for a separately
-  reviewed recovery design; do not attempt abandonment from the live workflow.
+  Stop, preserve all tags/Releases/evidence, and follow "Terminal recovery of
+  a disabled-era candidate" below (a reviewed git-resident terminal record);
+  never attempt abandonment from the live workflow.
 
 ## Required toolchain
 
@@ -1455,21 +1456,123 @@ Typical recovery actions are:
 | Audit failure | Dispatch a new exact-tag audit and attach a new attempt receipt. |
 | Published immutable Release | Observe only; no repair or mutation is allowed. |
 
-## Irrecoverable prepublication candidate
+## Terminal recovery of a disabled-era candidate
 
-The live workflow does not provide terminal abandonment. If reconciliation
-cannot safely resume an exact prepublication candidate, stop without mutation:
+The live workflow does not provide terminal abandonment. A disabled-era
+candidate that cannot be reconciled is made terminal by the reviewed
+git-resident terminal record described in
+`docs/superpowers/specs/2026-09-03-v0.8.22-terminal-recovery-design.md`. The
+record is the tombstone: its canonical bytes are committed at
+`scripts/release/terminal-records/v<version>.json`, uploaded to the canonical
+draft as `abandonment.json`, and their SHA-256 becomes the marker's
+`abandonmentSha256`. The controller on `main` reads the record from its own
+checkout, so it is authoritative even when the Actions token cannot see drafts.
 
-1. Preserve the annotated tag, draft Release, Actions artifacts, run identities,
-   logs, and every canonical receipt exactly as observed.
-2. Do not delete or reuse the candidate version, synthesize a tombstone, create
-   an environment, or invoke the dormant CLI abandonment commands directly.
-3. Escalate with the preserved evidence for a separately reviewed recovery or
-   reactivation design.
+Prerequisites are identical to the duplicate-draft recovery above: the fresh
+clone and frozen install block, the operator edit freeze, the private
+`.dawn/release-recovery` directory, and the same-principal check before every
+step. `RECOVERY_SHA` is the merge commit of the reviewed code pull request for
+the first run and of the record pull request for the second. The writer that
+stamps the canonical draft is pinned to Release `379991871` and is separate
+from the duplicate-draft writer, which cannot reach the canonical Release by
+design.
 
-Restoring protected abandonment requires its own reviewed workflow change,
-independent reviewer configuration, and ref-aware owner evidence. It is not part
-of this cutover.
+### Capture the record
+
+```zsh
+set -euo pipefail
+test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
+: "${ATTEMPT:=01}"
+printf '%s\n' "$ATTEMPT" | grep -Eq '^(0[1-9]|[1-9][0-9])$'
+CAPTURE_PATH=".dawn/release-recovery/v0.8.22-terminal-capture-$ATTEMPT.json"
+test ! -e "$CAPTURE_PATH"
+env -u NODE_OPTIONS -u NODE_PATH GITHUB_TOKEN="$GITHUB_TOKEN" \
+  node scripts/release/abandon-v0.8.22-candidate.mjs capture \
+  --reviewed-commit "$RECOVERY_SHA" \
+  --reason 'The tag-era release workflow cannot observe draft Releases; superseded by 0.8.23.' \
+  --output "$CAPTURE_PATH"
+shasum -a 256 "$CAPTURE_PATH"
+```
+
+Capture is read-only. It takes two npm sweeps at least sixty seconds apart, so
+expect it to run for over a minute. Inspect the JSON. Require the predecessor
+to be Release `379991871` in `ESCROWED` phase whose 45 base assets hash to the
+marker's `baseAssetSetSha256`, two absent npm sweeps at least sixty seconds
+apart, every candidate Release run terminal with `publishJobStarted: false`,
+both duplicate recovery receipts with their asset IDs and digests, and
+`authority.mode: "operator-recovery"` with your login and `RECOVERY_SHA` as
+`reviewedCommit`. Copy the file byte for byte to
+`scripts/release/terminal-records/v0.8.22.json`, open the record pull request
+containing only that file, and merge it on green `validate`. That review is the
+approval. Record the capture path, digest, UTC window, and exit in the attempt
+ledger.
+
+### Apply the record
+
+From a fresh clone at the record pull request's merge commit
+(`RECOVERY_SHA`), with the freeze still active:
+
+```zsh
+set -euo pipefail
+test "$(GH_TOKEN="$GITHUB_TOKEN" gh api user -H 'X-GitHub-Api-Version: 2022-11-28' --jq '.login')" = "$OPERATOR_LOGIN"
+test "$(git rev-parse HEAD)" = "$RECOVERY_SHA"
+APPLY_PATH=".dawn/release-recovery/v0.8.22-terminal-apply-$ATTEMPT.json"
+test ! -e "$APPLY_PATH"
+env -u NODE_OPTIONS -u NODE_PATH GITHUB_TOKEN="$GITHUB_TOKEN" \
+  node scripts/release/abandon-v0.8.22-candidate.mjs apply \
+  --record scripts/release/terminal-records/v0.8.22.json \
+  --reviewed-commit "$RECOVERY_SHA" \
+  --acknowledge-non-atomic-release-edit-freeze \
+  --output "$APPLY_PATH"
+shasum -a 256 "$APPLY_PATH"
+```
+
+`apply` requires the record on disk to equal the committed record at
+`RECOVERY_SHA`, re-captures fresh evidence and requires it to equal the record
+except for timestamps, then performs only the missing ladder transition:
+upload `abandonment.json` when absent, then replace the draft's title and body
+together with the canonical abandonment form through a compare-before-write
+PATCH keyed on the escrow body digest and the tombstone digest. It never
+retries an ambiguous write. It finishes by running the normal production
+observer at `RECOVERY_SHA` and requires `ABANDONED_PREPUBLICATION` with
+disposition `noop`, no conflicts, and no diagnostics, before writing the
+receipt. Exit code 2 is invalid input, 1 is a refused or failed transition, and
+3 means output cleanup is uncertain; treat 3 exactly as the duplicate-draft
+procedure does. Every conflict prints a stable `code:` on stderr. A failure
+reported as "after mutation" means a write landed: re-run `apply` and it will
+classify the ladder and finish. The one exception is
+`FINAL_OBSERVATION_NOT_TERMINAL`: the draft was stamped but the observer does
+not classify it terminal; keep the freeze, preserve the receipt path, and
+escalate instead of re-running. On any nonzero exit, preserve everything, keep the freeze, and
+re-run only after a fresh read-only inspection proves one of the three ladder
+states: `escrowed`, `asset-uploaded`, or `abandoned`. A rerun after a
+successful stamp is safe: the command reads the canonical Release only through
+its title-tolerant snapshot and reports `preexisting-abandoned` without
+writing.
+
+### Verify and release the freeze
+
+Re-read Release `379991871` by numeric ID and require: title
+`Dawn v0.8.22 (abandoned before publication)`, `draft: true`,
+`immutable: false`, `prerelease: false`, `target_commitish: main`, the
+original opaque tag name, marker phase `ABANDONED_PREPUBLICATION` with
+`abandonmentSha256` equal to the record file's SHA-256, 45 unchanged base
+assets plus one `abandonment.json` whose digest equals that SHA-256, and a body
+byte-for-byte equal to the canonical abandonment body. Download
+`abandonment.json` through the numeric asset endpoint and hash it. Run a
+read-only `observe` from the clone with `GITHUB_REPOSITORY=cacheplane/dawnai`
+and require `state=ABANDONED_PREPUBLICATION`, `disposition=noop`, no conflicts,
+no diagnostics. Hash the apply receipt and require its `authority.reviewedCommit`
+to equal the record pull request's merge commit and its `record.sha256` to equal
+the committed record file's SHA-256; a second `apply` at the same commit must
+exit 0 with `outcome: "preexisting-abandoned"` and zero transitions. Record the
+ledger row, then release the freeze. Tag `v0.8.22` and both quarantined
+duplicates are never touched.
+
+After the record is merged, scheduled discovery classifies `v0.8.22` as
+terminal from the committed record alone, so a newer candidate is no longer
+blocked by `older-tagged-candidate-incomplete`; if the Actions token can see
+the draft, it must be exactly the stamped tombstone or discovery fails closed.
 
 ## Scheduled no-op proof
 
@@ -1486,7 +1589,8 @@ next scheduled reconciliation/audit. It must:
 
 An incomplete older tagged candidate is not a no-op: it wins arbitration and
 must be recovered before newer work proceeds. If recovery is irrecoverable,
-stop, preserve the candidate, and escalate; the live workflow cannot abandon it.
+stop, preserve the candidate, and make it terminal through "Terminal recovery
+of a disabled-era candidate" above; the live workflow cannot abandon it.
 
 ## Live receipt
 

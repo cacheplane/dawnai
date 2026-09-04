@@ -48,6 +48,9 @@ export async function runPostPublicationAudit(argv, overrides = {}) {
           npm: runtime.npm,
           npmAuditFactory: runtime.npmAuditFactory,
           attestations: runtime.attestations,
+          // Same tag checkout as the independent audit: the candidate commit predates any
+          // terminal record on main, so TERMINAL_RECORD_PUBLISHED_VERSION cannot fire here.
+          terminalRecordRef: candidate.commitSha,
         }),
       )
       if (
