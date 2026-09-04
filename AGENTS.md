@@ -200,9 +200,17 @@ substitute for the other or optional release cleanup.
   script, adding an unpinned entrypoint, or retaining a stale pin fails
   `pnpm test:release-controller` until the reviewed fixture is regenerated in
   the same commit. Reachability is re-derived from workflow `run:` steps,
-  package-script expansion, and action `with:` inputs. This is deliberately
-  limited to release ownership; ordinary CI-only scripts are not pinned. See
-  `CONTRIBUTORS.md`'s "Release Integrity Coverage" for the boundary.
+  package-script expansion, and action `with:` inputs, and then closed
+  transitively over each entrypoint's repository-local module loads — static
+  `import`/`export ... from`, dynamic `import()` with a literal specifier, and
+  the `new URL("./sibling.mjs", import.meta.url)` form the release CLI hands to
+  its injected loader. A load whose specifier cannot be resolved statically
+  fails the check rather than being skipped; the reviewed exceptions live in
+  `REVIEWED_DYNAMIC_IMPORT_SEAMS`. Files a pinned module reads off disk instead
+  of importing are declared in `RELEASE_DATA_FILES` and anchored to a reader.
+  This is deliberately limited to release ownership; ordinary CI-only scripts
+  are not pinned. See `CONTRIBUTORS.md`'s "Release Integrity Coverage" for the
+  boundary.
 
 ## Where things live
 
