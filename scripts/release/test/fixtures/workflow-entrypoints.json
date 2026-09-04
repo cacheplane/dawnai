@@ -2689,7 +2689,7 @@
               "contents": "write"
             },
             "runs-on": "ubuntu-24.04",
-            "timeout-minutes": 20
+            "timeout-minutes": 60
           },
           "steps": [
             {

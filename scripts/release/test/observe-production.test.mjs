@@ -3076,7 +3076,7 @@ test("observe CLI waits within a fixed budget for the exact main CI before autho
     )
 
     assert.equal(result.before.plan.nextTransition, "prepare-artifacts")
-    assert.deepEqual(delays, [10_000])
+    assert.deepEqual(delays, [30_000])
     assert.ok(checkReads >= 3, "CI is polled to success and then independently re-observed")
     assert.ok(workflowReads >= 3, "the exact workflow/check-suite correlation is re-observed")
   } finally {
