@@ -3604,6 +3604,17 @@ async function oneDeletionFixture(t, options) {
   const authorityTime = new Date(
     Math.max(Date.now(), Date.parse(journal.record.updatedAt) + 1_000),
   ).toISOString()
+  // The retry freshness clock read by the plain dependencies. Every fresh
+  // authority capture stamps its npm inventory `freshAuthorityAdvanceMs`
+  // (default one second) past the journal head, which can sit ahead of the
+  // real clock on a fast run; a frozen clock sixty seconds past the seed
+  // authority is always at or after that inventory and never crosses the
+  // 120 s MAXIMUM_RETRY_NPM_AGE_MS boundary, so the outcome cannot depend on
+  // wall-clock speed. Tests that exercise the stale-retry path build their own
+  // timeline with `dependenciesWithWallClockTimeline`.
+  const retryClockTimeline = Object.freeze(
+    Array.from({ length: 16 }, () => new Date(Date.parse(authorityTime) + 60_000).toISOString()),
+  )
   const targetEvidence = proposal.record.releases.find(({ id }) => id === targetReleaseId)
   const authority = deletionAuthorityFixture({
     proposal,
@@ -3932,6 +3943,7 @@ async function oneDeletionFixture(t, options) {
         assert.equal(signal instanceof AbortSignal, true)
         waits.push(milliseconds)
       }),
+      wallClockTimeline: retryClockTimeline,
     }),
     dependenciesWithFault(faultAt) {
       return Object.freeze({
@@ -3945,6 +3957,7 @@ async function oneDeletionFixture(t, options) {
           waits.push(milliseconds)
         }),
         faultAt,
+        wallClockTimeline: retryClockTimeline,
       })
     },
     dependenciesWithTimeline(monotonicTimeline) {
@@ -3959,6 +3972,7 @@ async function oneDeletionFixture(t, options) {
           waits.push(milliseconds)
         }),
         monotonicTimeline,
+        wallClockTimeline: retryClockTimeline,
       })
     },
     dependenciesWithWallClockTimeline(wallClockTimeline, faultAt) {
