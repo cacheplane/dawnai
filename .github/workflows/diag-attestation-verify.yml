@@ -4,6 +4,11 @@
 name: diag-attestation-verify
 
 on:
+  # push trigger only so GitHub registers this non-default-branch workflow
+  # (a workflow_dispatch-only file on a feature branch is never indexed).
+  push:
+    branches:
+      - diag/attestation-verify-runner
   workflow_dispatch:
     inputs:
       run_id:
@@ -34,7 +39,7 @@ jobs:
       attestations: read
       contents: write
     env:
-      FILE: ${{ inputs.file }}
+      FILE: ${{ inputs.file || 'dawn-ai-cli-0.8.24.tgz' }}
       SIGNER_WORKFLOW: cacheplane/dawnai/.github/workflows/release.yml
       SOURCE_DIGEST: 88c01c4afd59866fc0ea4c8f3b8444439a01c8ea
       SOURCE_REF: refs/tags/v0.8.24
@@ -52,16 +57,16 @@ jobs:
       - name: Download payload artifact by name
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ inputs.payload_artifact }}
-          run-id: ${{ inputs.run_id }}
+          name: ${{ inputs.payload_artifact || 'release-v0.8.24-88c01c4afd59' }}
+          run-id: ${{ inputs.run_id || '33892398216' }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/payload
 
       - name: Download attestation artifact by name
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ inputs.attestation_artifact }}
-          run-id: ${{ inputs.run_id }}
+          name: ${{ inputs.attestation_artifact || 'release-attestation-33892398216-1' }}
+          run-id: ${{ inputs.run_id || '33892398216' }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/attestation
 
