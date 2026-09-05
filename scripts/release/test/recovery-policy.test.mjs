@@ -306,6 +306,7 @@ test("reviewed probe inventory equals independently discovered local executable 
     "scripts/release/smoke/storage.mjs",
     "scripts/release/recovery/schema.mjs",
     "scripts/release/recovery/smoke.mjs",
+    "scripts/release/recovery/audit.mjs",
   ]
   const seen = new Set(),
     pending = [...roots]

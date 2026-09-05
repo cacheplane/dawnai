@@ -46,10 +46,10 @@ function adapter(dependencies, name) {
   requireThat(descriptor && Object.hasOwn(descriptor, "value"), `safe ${name} adapter required`)
   return descriptor.value
 }
-function boundary(dependencies) {
+function boundary(dependencies, role) {
   const callbacks = recoveryMethods(dependencies, [
     "readInvocation",
-    "observeLegacyFence",
+    ...(role === "audit" ? [] : ["observeLegacyFence"]),
     "now",
     "sleep",
   ])
@@ -79,7 +79,7 @@ function boundary(dependencies) {
   }
   return { ...callbacks, ...timers, now, git, github }
 }
-function invocation(value, request) {
+function invocation(value, request, role) {
   exact(value, "sha ref workflow runId runAttempt jobId repository repositoryId defaultBranch")
   requireThat(
     /^[a-f0-9]{40}$/u.test(value.sha) && value.sha === request.expectedControllerSha,
@@ -90,7 +90,10 @@ function invocation(value, request) {
     "actual invocation must use main ref",
   )
   requireThat(
-    value.workflow === ".github/workflows/release-postpublication.yml",
+    value.workflow ===
+      (role === "audit"
+        ? ".github/workflows/release-postpublication-audit.yml"
+        : ".github/workflows/release-postpublication.yml"),
     "writer authority requires the recovery owner workflow",
   )
   same(value.repository, request.candidate.repository, "invocation repository mismatch")
@@ -140,7 +143,7 @@ function validateCandidate(candidate) {
     operations: ["adopt"],
   })
 }
-async function capture(request, dependencies) {
+async function capture(request, dependencies, role = "owner") {
   request = snapshotRecoveryData(request, 16384)
   exact(request, "candidate expectedControllerSha")
   validateCandidate(request.candidate)
@@ -149,7 +152,7 @@ async function capture(request, dependencies) {
       /^[a-f0-9]{40}$/u.test(request.expectedControllerSha),
     "expected controller SHA required",
   )
-  const deps = boundary(dependencies)
+  const deps = boundary(dependencies, role)
   const start = deps.now()
   requireThat(Number.isSafeInteger(start) && start >= 0, "bounded clock required")
   const phaseDeadline = start + RECOVERY_RETRY.phaseDeadlineMs
@@ -166,7 +169,7 @@ async function capture(request, dependencies) {
     return result.value
   }
   const context = snapshotRecoveryData(await callbackRead("readInvocation", {}), 16384)
-  invocation(context, request)
+  invocation(context, request, role)
   const read = async (name, args) => {
     const result = await runRecoveryRead({ phaseDeadline }, () => deps.github[name](args), deps)
     requireThat(
@@ -189,7 +192,9 @@ async function capture(request, dependencies) {
     attempt: context.runAttempt,
   })
   apiRun(run, context, request.candidate)
-  const workflow = await read("getWorkflow", { workflow: context.workflow.split("/").at(-1) })
+  const workflow = await read("getWorkflow", {
+    workflow: context.workflow.split("/").at(-1),
+  })
   requireThat(
     id(workflow.id) === id(run.workflow_id) &&
       workflow.path === context.workflow &&
@@ -198,7 +203,10 @@ async function capture(request, dependencies) {
   )
   const jobs = await read("listActionsRunJobs", { runId: context.runId })
   requireThat(
-    Array.isArray(jobs) && jobs.filter((job) => apiJob(job, context)).length === 1,
+    Array.isArray(jobs) &&
+      jobs.filter(
+        (job) => apiJob(job, context) && (role !== "audit" || job.name === "recovery-audit"),
+      ).length === 1,
     "API executing job mismatch",
   )
   const main = await read("getRef", { ref: "heads/main" })
@@ -209,10 +217,16 @@ async function capture(request, dependencies) {
     "main ref unavailable",
   )
   requireThat(
-    (await gitRead("isAncestor", { ancestor: context.sha, descendant: main.object.sha })) === true,
+    (await gitRead("isAncestor", {
+      ancestor: context.sha,
+      descendant: main.object.sha,
+    })) === true,
     "controller is not merged on main",
   )
-  const rawPolicy = await gitRead("showFile", { ref: context.sha, path: RECOVERY_POLICY_PATH })
+  const rawPolicy = await gitRead("showFile", {
+    ref: context.sha,
+    path: RECOVERY_POLICY_PATH,
+  })
   const policy = parseRecoveryPolicy(rawPolicy)
   requireThat(policy.status === "ADMITTED", "policy is dormant")
   const policySha256 = createHash("sha256").update(canonicalPolicyBytes(policy)).digest("hex")
@@ -258,7 +272,9 @@ async function capture(request, dependencies) {
     ci.status === "completed" && ci.conclusion === "success",
     "successful exact-SHA main CI required",
   )
-  const ciWorkflow = await read("getWorkflow", { workflow: policy.ci.workflow.split("/").at(-1) })
+  const ciWorkflow = await read("getWorkflow", {
+    workflow: policy.ci.workflow.split("/").at(-1),
+  })
   requireThat(
     id(ciWorkflow.id) === id(ci.workflow_id) && ciWorkflow.path === policy.ci.workflow,
     "CI workflow identity mismatch",
@@ -297,6 +313,24 @@ async function capture(request, dependencies) {
     runId: context.runId,
     runAttempt: context.runAttempt,
     jobId: context.jobId,
+  }
+  if (role === "audit") {
+    requireThat(deps.now() < phaseDeadline, "audit admission deadline expired")
+    return {
+      facts: {
+        candidate: request.candidate,
+        policySha256,
+        executor,
+        capability: {
+          schemaVersion: 2,
+          policySha256,
+          controllerSha: context.sha,
+          verifierClosureSha256,
+          workflow: context.workflow,
+          admission: "reviewed-main-ci",
+        },
+      },
+    }
   }
   const fence = snapshotRecoveryData(
     await callbackRead("observeLegacyFence", {
@@ -385,6 +419,12 @@ function validateFence(fence, candidate, executor, policy, now) {
   }
 }
 
+// Auditor admission deliberately grants neither a legacy fence nor mutation ownership.
+export async function captureRecoveryAuditor(request, dependencies) {
+  const { facts } = await capture(request, dependencies, "audit")
+  return immutable(facts)
+}
+
 // Resume eligibility deliberately does not reinterpret or reread historical adoption authority.
 export async function captureRecoveryEligibility(request, dependencies) {
   const { facts } = await capture(request, dependencies)
@@ -404,7 +444,10 @@ export async function captureRecoveryAuthority(request, dependencies) {
     "unsupported operation",
   )
   const captured = await capture(
-    { candidate: request.candidate, expectedControllerSha: request.expectedControllerSha },
+    {
+      candidate: request.candidate,
+      expectedControllerSha: request.expectedControllerSha,
+    },
     dependencies,
   )
   const { facts, gitRead } = captured

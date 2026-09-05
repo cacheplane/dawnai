@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { RECOVERY_AUDIT_CHECKS } from "../../recovery/audit-proof.mjs"
 import { metadataCheckName } from "../../recovery/schema.mjs"
 
 export const digest = (text) => createHash("sha256").update(text).digest("hex")
@@ -54,7 +55,12 @@ export function wireFixtures({ retainedCount = 0 } = {}) {
   const c = candidate()
   const e = executor()
   const policySha256 = digest("reviewed recovery policy")
-  const wire = (kind, fields) => ({ schemaVersion: 2, kind, candidate: c, ...fields })
+  const wire = (kind, fields) => ({
+    schemaVersion: 2,
+    kind,
+    candidate: c,
+    ...fields,
+  })
   const baseAssets = [
     asset("dawn-ai-sdk-0.8.24.tgz", "tarball", 15),
     asset("dawn-ai-sdk-0.8.24.tgz.intoto.jsonl", "original sdk attestation", 16),
@@ -257,7 +263,10 @@ export function wireFixtures({ retainedCount = 0 } = {}) {
       runId: dispatch.runId,
       jobId: "906",
     }),
-    checks,
+    checks: RECOVERY_AUDIT_CHECKS.map((name) => ({
+      name,
+      conclusion: "success",
+    })),
     conclusion: "success",
   })
   const auditRef = receiptRef(audit, "recovery-v2-audit-result-905-1.json", 33)
@@ -350,7 +359,11 @@ export function recoveryFacts({ phase = "NPM_COMPLETE", retainedCount = 0 } = {}
         admission: "reviewed-main-ci",
       },
       marker: phase === "NPM_COMPLETE" ? null : markerAt(phase, f),
-      legacy: { phase: "NPM_COMPLETE", bodySha256: f.intent.legacyBodySha256, candidate: c },
+      legacy: {
+        phase: "NPM_COMPLETE",
+        bodySha256: f.intent.legacyBodySha256,
+        candidate: c,
+      },
       authority: {
         intent: f.intent,
         intentPath: f.adoption.authority.intentPath,
@@ -424,7 +437,11 @@ export function recoveryFacts({ phase = "NPM_COMPLETE", retainedCount = 0 } = {}
           phase === "PUBLICATION_READY" || phase === "COMPLETE"
             ? [...f.assets, f.finalRef].sort(byName)
             : f.assets,
-        tag: { name: c.tag, objectSha: c.tagObjectSha, candidateSha: c.candidateSha },
+        tag: {
+          name: c.tag,
+          objectSha: c.tagObjectSha,
+          candidateSha: c.candidateSha,
+        },
         immutableReleasePolicy: "enabled",
         ownership: "exclusive",
       },
@@ -434,7 +451,11 @@ export function recoveryFacts({ phase = "NPM_COMPLETE", retainedCount = 0 } = {}
               candidate: c,
               state: "published",
               immutable: true,
-              tag: { name: c.tag, objectSha: c.tagObjectSha, candidateSha: c.candidateSha },
+              tag: {
+                name: c.tag,
+                objectSha: c.tagObjectSha,
+                candidateSha: c.candidateSha,
+              },
               assets: [...f.assets, f.finalRef].sort(byName),
               finalizationSha256: f.finalRef.sha256,
               metadata: "matching",

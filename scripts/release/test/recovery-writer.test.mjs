@@ -18,9 +18,10 @@ const archiveInput = (r) => ({
   contentBase64: Buffer.from(r.legacyBody).toString("base64"),
 })
 
-test("recovery writer exposes only exact-release upload, canonical draft update, and publication", async () => {
+test("recovery writer exposes only bounded release effects and independent audit dispatch", async () => {
   const r = await recoveryWriteRemote()
   assert.deepEqual(Object.keys(writer(r)).sort(), [
+    "dispatchRecoveryAudit",
     "publishRecoveryDraft",
     "updateRecoveryDraft",
     "uploadRecoveryAsset",

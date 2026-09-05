@@ -203,7 +203,12 @@ write is necessary for completion; that is controller policy, not an API limit.
 
 Failed verification stays at `RECOVERY_ADOPTED` with failure receipts. Failed
 audit stays nonterminal with an immutable attempt receipt and a classified retry
-or block. A repeated exact plan is a no-op only when its postcondition is proven.
+or block. Once a selected audit is independently proven failed and its
+immutable attempt receipt is retained, a fresh correlated request may replace
+that audit selection at `AUDIT_PENDING`. The verification selection and phase
+do not regress. A running or successful audit cannot be displaced by an
+unverified failure claim, and finalization freezes all audit retries.
+A repeated exact plan is a no-op only when its postcondition is proven.
 
 ## Verifier execution and receipts
 

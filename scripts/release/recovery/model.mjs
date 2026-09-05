@@ -4,6 +4,7 @@
 // collected after execution. Collection plans retain the current durable phase.
 // These facts are an adapter boundary, not an authorization parser for user JSON.
 import { createHash } from "node:crypto"
+import { RECOVERY_AUDIT_CHECKS } from "./audit-proof.mjs"
 import {
   canonicalRecoveryBytes,
   metadataCheckName,
@@ -308,6 +309,12 @@ function auditProof(facts) {
   const result = receipt(facts, proof.result, proof.resultRef, "recovery-audit-result")
   policy(facts, result)
   requireThat(result.conclusion === "success", "Independent audit failed")
+  requireThat(
+    RECOVERY_AUDIT_CHECKS.every((name) =>
+      result.checks.some((check) => check.name === name && check.conclusion === "success"),
+    ),
+    "Mandatory audit checks missing",
+  )
   same(result.requestId, intent.requestId, "Audit request mismatch")
   same(
     result.verificationSetSha256,
@@ -358,6 +365,14 @@ function finalInventory(facts) {
     facts.audit.intentRef,
     facts.audit.dispatchRef,
     facts.audit.resultRef,
+    ...(facts.auditBookkeeping ?? [])
+      .map((e) => e.ref)
+      .filter(
+        (ref) =>
+          ![facts.audit.intentRef, facts.audit.dispatchRef, facts.audit.resultRef].some(
+            (selected) => selected.assetName === ref.assetName,
+          ),
+      ),
   ])
 }
 function freshProof(facts, finalization) {
@@ -519,7 +534,11 @@ export function planRecovery(input) {
           "Finalization cannot regress or reuse a valid marker revision",
         )
       }
-      if (!ready) effects.push({ operation: "write-marker", target: "PUBLICATION_READY" })
+      if (!ready)
+        effects.push({
+          operation: "write-marker",
+          target: "PUBLICATION_READY",
+        })
       effects.push({ operation: "publish", target: facts.candidate.releaseId })
       return result(before, "PUBLICATION_READY", "planned", effects, [], false, [
         facts.finalization.ref,

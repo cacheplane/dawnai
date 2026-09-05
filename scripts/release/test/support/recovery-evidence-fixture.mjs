@@ -11,7 +11,10 @@ const artifactName = (lane) =>
 export async function evidenceRemote() {
   const r = await recoveryWriteRemote()
   r.activate([...r.baseAssets, r.adoption.archive, r.adoptionRef])
-  r.release.body = renderRecoveryReleaseBody({ marker: r.marker, body: "Original notes" })
+  r.release.body = renderRecoveryReleaseBody({
+    marker: r.marker,
+    body: "Original notes",
+  })
   const time = Date.parse("2026-09-04T10:04:00.000Z")
   r.dependencies.authority.now = () => time
   const originalFence = r.dependencies.authority.observeLegacyFence
@@ -35,8 +38,14 @@ export async function evidenceRemote() {
   const archives = new Map()
   const artifacts = Object.values(r.lanes).map((lane, index) => {
     const files = [
-      { name: `${artifactName(lane)}.json`, bytes: canonicalRecoveryBytes(lane) },
-      ...lane.installations.map((d) => ({ name: d.assetName, bytes: r.raws.get(d.assetName) })),
+      {
+        name: `${artifactName(lane)}.json`,
+        bytes: canonicalRecoveryBytes(lane),
+      },
+      ...lane.installations.map((d) => ({
+        name: d.assetName,
+        bytes: r.raws.get(d.assetName),
+      })),
     ]
     const bytes = zip(files)
     archives.set(String(200 + index), { bytes, files })
@@ -101,7 +110,7 @@ export async function evidenceRemote() {
 }
 
 // Stored ZIP fixture: the production shared extractor validates its directory and bounds.
-function zip(files) {
+export function zip(files) {
   const locals = [],
     centrals = []
   let offset = 0

@@ -7,6 +7,16 @@ import { parseReleaseMarker, verifyReleaseAttestationAnchor } from "../metadata.
 import { NPM_AUDIT_VERIFIER } from "../npm-audit.mjs"
 import { canonicalReleaseRecordBytes, parseReleaseRecord } from "../release-record.mjs"
 import {
+  auditArtifactName,
+  auditName,
+  inspectAuditRun,
+  isAuditTerminalFailure,
+  observeAuditRun,
+  verifyAuditEscrowProducer,
+  verifyAuditIntent,
+  verifyAuditResult,
+} from "./audit-proof.mjs"
+import {
   recoveryProvenanceName,
   verifyRecoveryEscrowProducer,
   verifyRecoveryProvenanceBindings,
@@ -94,11 +104,17 @@ function safeInput(input, fields) {
 }
 function readerContext({ github, git }) {
   const now = Date.now
-  const deps = { now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }
+  const deps = {
+    now,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  }
   const phaseDeadline = now() + RECOVERY_RETRY.phaseDeadlineMs
   const envelope = async (fn, key = "value", responseBytes) => {
     const result = await runRecoveryRead(
-      { phaseDeadline, ...(responseBytes === undefined ? {} : { responseBytes }) },
+      {
+        phaseDeadline,
+        ...(responseBytes === undefined ? {} : { responseBytes }),
+      },
       fn,
       deps,
     )
@@ -139,7 +155,11 @@ function readerContext({ github, git }) {
 // operation settles; late results never become proof or trigger another read.
 export function createRecoveryWorkBudget(
   options,
-  dependencies = { now: Date.now, setTimer: setTimeout, clearTimer: clearTimeout },
+  dependencies = {
+    now: Date.now,
+    setTimer: setTimeout,
+    clearTimer: clearTimeout,
+  },
 ) {
   const { phaseDeadline } = snapshotRecoveryData(options, 4096)
   const { now, setTimer, clearTimer } = recoveryMethods(dependencies, [
@@ -257,7 +277,10 @@ export function normalizeRecoveryAssetInventory(values) {
   )
 }
 async function loadAsset(context, ref) {
-  const base64 = await context.download({ assetId: ref.id, maximumBytes: ref.size })
+  const base64 = await context.download({
+    assetId: ref.id,
+    maximumBytes: ref.size,
+  })
   requireThat(typeof base64 === "string", "asset bytes unavailable")
   const bytes = Buffer.from(base64, "base64")
   requireThat(
@@ -299,7 +322,11 @@ async function tagProof(context, c) {
       tag.object.sha === c.candidateSha,
     "exact annotated tag peel differs",
   )
-  return { name: c.tag, objectSha: c.tagObjectSha, candidateSha: c.candidateSha }
+  return {
+    name: c.tag,
+    objectSha: c.tagObjectSha,
+    candidateSha: c.candidateSha,
+  }
 }
 async function baseProof(context, c, refs, bytes, attestations) {
   const get = (name) => {
@@ -313,7 +340,9 @@ async function baseProof(context, c, refs, bytes, attestations) {
     "original manifest or record digest differs",
   )
   const identity = legacyIdentity(c)
-  const manifest = parseSealedReleaseManifest(manifestBytes, { candidate: identity })
+  const manifest = parseSealedReleaseManifest(manifestBytes, {
+    candidate: identity,
+  })
   const record = parseReleaseRecord(recordBytes)
   requireThat(
     manifestBytes.equals(canonicalManifestBytes(manifest)) &&
@@ -381,7 +410,11 @@ async function npmProof(context, c, manifest, npm, npmAuditFactory) {
   try {
     for (const entry of [...manifest.packages].sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const pkg = await context.npm(
-        () => npm.observePackageVersion({ name: entry.name, version: entry.version }),
+        () =>
+          npm.observePackageVersion({
+            name: entry.name,
+            version: entry.version,
+          }),
         "package",
       )
       const url = `https://registry.npmjs.org/${entry.name}/-/${entry.name.split("/").at(-1)}-${entry.version}.tgz`
@@ -467,14 +500,20 @@ async function executorAdmission(context, c, executor, policySha256, cache, role
   const key = `${executor.controllerSha}:${executor.verifierClosureSha256}`
   if (!cache.has(key)) {
     const policy = parseRecoveryPolicy(
-      await context.git("showFile", { ref: executor.controllerSha, path: RECOVERY_POLICY_PATH }),
+      await context.git("showFile", {
+        ref: executor.controllerSha,
+        path: RECOVERY_POLICY_PATH,
+      }),
     )
     requireThat(
       policy.status === "ADMITTED" && hash(canonicalPolicyBytes(policy)) === policySha256,
       "historical recovery policy is not admitted",
     )
     const closure = await hashVerifierClosure(
-      { controllerSha: executor.controllerSha, inputs: policy.verifierClosure.inputs },
+      {
+        controllerSha: executor.controllerSha,
+        inputs: policy.verifierClosure.inputs,
+      },
       (args) => context.git("showFile", args),
     )
     requireThat(
@@ -531,8 +570,12 @@ async function executorAdmission(context, c, executor, policySha256, cache, role
       workflow.id === ci.workflow_id && workflow.path === policy.ci.workflow,
       "CI workflow identity differs",
     )
-    const checks = await context.read("getCommitCheckRuns", { commitSha: executor.controllerSha })
-    const jobs = await context.read("listActionsRunJobs", { runId: String(ci.id) })
+    const checks = await context.read("getCommitCheckRuns", {
+      commitSha: executor.controllerSha,
+    })
+    const jobs = await context.read("listActionsRunJobs", {
+      runId: String(ci.id),
+    })
     requireThat(Array.isArray(checks) && Array.isArray(jobs), "CI checks and jobs unavailable")
     for (const name of policy.ci.checks) {
       const selected = checks.filter(
@@ -592,7 +635,10 @@ async function recoveryChain(
   const adoption = wire(adoptionRef, "recovery-adoption")
   const policySha256 = adoption.policySha256
   const currentPolicy = parseRecoveryPolicy(
-    await context.git("showFile", { ref: controllerRef, path: RECOVERY_POLICY_PATH }),
+    await context.git("showFile", {
+      ref: controllerRef,
+      path: RECOVERY_POLICY_PATH,
+    }),
   )
   requireThat(
     hash(canonicalPolicyBytes(currentPolicy)) === policySha256,
@@ -790,87 +836,159 @@ async function recoveryChain(
     )
     verifyRecoveryObservedPhase({
       ...facts,
-      marker: { ...marker, phase: "VERIFICATION_COMPLETE", verificationSet: verificationRef },
+      marker: {
+        ...marker,
+        phase: "VERIFICATION_COMPLETE",
+        verificationSet: verificationRef,
+      },
     })
   }
-  const auditRef = finalization?.audit ?? marker.audit
+  const bookkeeping = refs
+    .filter((ref) => ref.assetName.startsWith("recovery-v2-audit-"))
+    .map((ref) => ({ ref, receipt: wire(ref) }))
+  facts.auditBookkeeping = bookkeeping
+  facts.audit = null
+  for (const entry of bookkeeping) {
+    requireThat(entry.receipt.kind.startsWith("recovery-audit-"), "unsupported audit bookkeeping")
+    same(entry.ref.assetName, auditName(entry.receipt), "audit bookkeeping name differs")
+    await validateRetained([entry.ref])
+    if (entry.receipt.kind === "recovery-audit-intent") verifyAuditIntent(entry.receipt, facts)
+  }
+  const intents = bookkeeping.filter((e) => e.receipt.kind === "recovery-audit-intent")
+  const dispatches = bookkeeping.filter((e) => e.receipt.kind === "recovery-audit-dispatch")
+  for (const entry of bookkeeping.filter((e) =>
+    ["recovery-audit-dispatch", "recovery-audit-attempt"].includes(e.receipt.kind),
+  )) {
+    const intent = intents.find((e) => e.ref.sha256 === entry.receipt.intentSha256)
+    requireThat(intent, "audit attempt lacks persisted intent")
+    same(entry.receipt.requestId, intent.receipt.requestId, "audit attempt request differs")
+    same(
+      entry.receipt.expectedAuditorSha,
+      intent.receipt.expectedAuditorSha,
+      "audit attempt expected SHA differs",
+    )
+    if (entry.receipt.kind === "recovery-audit-attempt") {
+      if (entry.receipt.classification === "uncorrelated") {
+        requireThat(
+          !dispatches.some((e) => e.receipt.intentSha256 === intent.ref.sha256),
+          "uncorrelated attempt cannot have a selected dispatch",
+        )
+      } else if (entry.receipt.classification === "failed-audit") {
+        const run = await observeAuditRun(c, intent.receipt, entry.receipt.runId, context.read)
+        same(run.head_sha, entry.receipt.observedAuditorSha, "failed attempt observed SHA differs")
+        requireThat(
+          isAuditTerminalFailure(run),
+          "retained audit failure is not independently proven",
+        )
+      } else {
+        const { run, classification } = await inspectAuditRun(
+          c,
+          intent.receipt,
+          entry.receipt.runId,
+          context.read,
+        )
+        same(run.head_sha, entry.receipt.observedAuditorSha, "failed attempt observed SHA differs")
+        same(
+          classification,
+          entry.receipt.classification,
+          "retained audit mismatch is not independently proven",
+        )
+      }
+    }
+  }
+  let auditRef = finalization?.audit ?? marker.audit
+  const partial = !auditRef
+  if (partial) {
+    requireThat(dispatches.length <= 1, "ambiguous partial audit dispatch selection")
+    auditRef = dispatches[0]?.ref
+  }
   if (!auditRef) return facts
-  const pending = marker?.phase === "AUDIT_PENDING" && !finalization
+  const pending = partial || (marker?.phase === "AUDIT_PENDING" && !finalization)
   const selectedAudit = wire(
     auditRef,
     pending ? "recovery-audit-dispatch" : "recovery-audit-result",
   )
-  const audit = pending ? null : selectedAudit
-  const intents = refs
-    .filter((ref) => ref.assetName.startsWith("recovery-v2-audit-intent-"))
-    .map((ref) => ({ ref, value: wire(ref, "recovery-audit-intent") }))
-    .filter((x) => x.value.requestId === selectedAudit.requestId)
-  requireThat(intents.length === 1, "exact selected audit intent required")
-  const dispatches = refs
-    .filter((ref) => ref.assetName.startsWith("recovery-v2-audit-dispatch-"))
-    .map((ref) => ({ ref, value: wire(ref, "recovery-audit-dispatch") }))
-    .filter((x) => x.value.intentSha256 === intents[0].ref.sha256)
-  requireThat(dispatches.length === 1, "exact correlated audit dispatch required")
-  await executorAdmission(context, c, intents[0].value.executor, policySha256, cache)
-  if (pending) {
-    same(dispatches[0].ref, auditRef, "marker selected dispatch differs")
-    facts.audit = {
-      intent: intents[0].value,
-      intentRef: intents[0].ref,
-      dispatch: dispatches[0].value,
-      dispatchRef: dispatches[0].ref,
-      result: null,
-      resultRef: null,
-    }
-    return facts
+  const selectedIntents = intents.filter((e) => e.receipt.requestId === selectedAudit.requestId)
+  requireThat(selectedIntents.length === 1, "exact selected audit intent required")
+  const selectedIntent = selectedIntents[0]
+  const selectedDispatches = dispatches.filter(
+    (e) => e.receipt.intentSha256 === selectedIntent.ref.sha256,
+  )
+  requireThat(selectedDispatches.length === 1, "exact correlated audit dispatch required")
+  const dispatch = selectedDispatches[0]
+  await observeAuditRun(c, selectedIntent.receipt, dispatch.receipt.runId, context.read)
+  facts.audit = {
+    intent: selectedIntent.receipt,
+    intentRef: selectedIntent.ref,
+    dispatch: dispatch.receipt,
+    dispatchRef: dispatch.ref,
+    result: null,
+    resultRef: null,
   }
+  const results = bookkeeping.filter(
+    (e) =>
+      e.receipt.kind === "recovery-audit-result" &&
+      e.receipt.requestId === selectedIntent.receipt.requestId,
+  )
+  requireThat(results.length <= 1, "ambiguous audit result")
+  const audit = pending ? results[0] : { receipt: selectedAudit, ref: auditRef }
+  if (!audit) return facts
+  const escrows = bookkeeping.filter(
+    (e) =>
+      e.receipt.kind === "recovery-audit-escrow" && e.receipt.result.sha256 === audit.ref.sha256,
+  )
+  requireThat(escrows.length <= 1, "ambiguous audit escrow")
+  if (!escrows.length && pending) return facts
+  requireThat(escrows.length === 1, "independently persisted audit escrow required")
+  const auditEscrow = escrows[0].receipt
+  same(auditEscrow.result, audit.ref, "audit escrow reference differs")
   const auditAdmission = await executorAdmission(
     context,
     c,
-    audit.executor,
+    audit.receipt.executor,
     policySha256,
     cache,
     "audit",
   )
-  const run = await context.read("getActionsRunAttempt", {
-    runId: audit.executor.runId,
-    attempt: audit.executor.runAttempt,
+  const run = await observeAuditRun(
+    c,
+    selectedIntent.receipt,
+    dispatch.receipt.runId,
+    context.read,
+    true,
+  )
+  same(auditEscrow.artifact.workflowId, String(run.workflow_id), "audit escrow workflow differs")
+  same(
+    auditEscrow.artifact.name,
+    auditArtifactName(audit.receipt.executor),
+    "audit escrow artifact name differs",
+  )
+  const jobs = await context.read("listActionsRunJobs", {
+    runId: dispatch.receipt.runId,
   })
-  const jobs = await context.read("listActionsRunJobs", { runId: audit.executor.runId })
   requireThat(
-    String(run.id) === audit.executor.runId &&
-      String(run.run_attempt) === audit.executor.runAttempt &&
-      run.head_sha === audit.executor.controllerSha &&
-      run.head_branch === "main" &&
-      run.path === audit.executor.workflow &&
-      run.event === "workflow_dispatch" &&
-      run.status === "completed" &&
-      run.conclusion === "success" &&
-      String(run.repository?.id) === c.repositoryId &&
-      run.repository?.full_name === c.repository,
-    "independent audit run identity differs",
+    jobs.filter(
+      (job) =>
+        String(job.id) === audit.receipt.executor.jobId &&
+        String(job.runAttempt) === "1" &&
+        job.name === "recovery-audit" &&
+        job.status === "completed" &&
+        job.conclusion === "success" &&
+        job.startedAt === auditEscrow.artifact.jobStartedAt &&
+        job.completedAt === auditEscrow.artifact.jobCompletedAt,
+    ).length === 1,
+    "independent audit job differs",
   )
-  requireThat(
-    Array.isArray(jobs) &&
-      jobs.filter(
-        (job) =>
-          String(job.id) === audit.executor.jobId &&
-          String(job.runAttempt) === audit.executor.runAttempt &&
-          job.status === "completed" &&
-          job.conclusion === "success",
-      ).length === 1,
-    "independent audit job identity differs",
-  )
+  await verifyAuditEscrowProducer(auditEscrow, c, context.read, context.now())
+  verifyAuditResult(audit.receipt, selectedIntent.receipt, dispatch.receipt)
   facts.audit = {
-    intent: intents[0].value,
-    intentRef: intents[0].ref,
-    dispatch: dispatches[0].value,
-    dispatchRef: dispatches[0].ref,
-    result: audit,
-    resultRef: auditRef,
-    observedExecutor: audit.executor,
+    ...facts.audit,
+    result: audit.receipt,
+    resultRef: audit.ref,
+    observedExecutor: audit.receipt.executor,
     admission: auditAdmission.admission,
   }
+
   return facts
 }
 
@@ -891,7 +1009,9 @@ export async function observeRecoveryCandidate(input) {
     const c = snapshotRecoveryData(candidate, 16384)
     validateIdentity(c)
     const context = readerContext({ github, git })
-    const release = await context.read("getRelease", { releaseId: c.releaseId })
+    const release = await context.read("getRelease", {
+      releaseId: c.releaseId,
+    })
     exactRelease(release, c)
     const tag = await tagProof(context, c)
     const refs = normalizeRecoveryAssetInventory(
@@ -1046,7 +1166,11 @@ export async function observeRecoveryCandidate(input) {
       } catch {
         facts.marker = null
       }
-      facts.finalization = { receipt: finalization, ref: finalRef, inventory: finalization.assets }
+      facts.finalization = {
+        receipt: finalization,
+        ref: finalRef,
+        inventory: finalization.assets,
+      }
       facts.publication = {
         state: "published",
         immutable: true,
@@ -1111,7 +1235,9 @@ async function readFixedFinalization(context, assets) {
   requireThat(finals.length <= 1, "duplicate finalization assets")
   if (finals.length === 0) return null
   const ref = normalizeRecoveryAssetInventory(finals)[0]
-  return parseRecovery(await loadAsset(context, ref), { kind: "recovery-finalization" })
+  return parseRecovery(await loadAsset(context, ref), {
+    kind: "recovery-finalization",
+  })
 }
 
 // Discover ownership independently of current tags, intents, and display labels.
@@ -1125,7 +1251,9 @@ export async function discoverRecoveryReleaseCandidates(input) {
   for (const release of releases) {
     let assets
     if (release.draft === false) {
-      assets = await context.read("listReleaseAssets", { releaseId: release.id })
+      assets = await context.read("listReleaseAssets", {
+        releaseId: release.id,
+      })
       requireThat(Array.isArray(assets), "published recovery inventory unavailable")
       const final = await readFixedFinalization(context, assets)
       if (final) {
@@ -1151,7 +1279,9 @@ export async function discoverRecoveryReleaseCandidates(input) {
       ownership.set(String(release.id), bodyIdentity)
       continue
     }
-    assets ??= await context.read("listReleaseAssets", { releaseId: release.id })
+    assets ??= await context.read("listReleaseAssets", {
+      releaseId: release.id,
+    })
     requireThat(Array.isArray(assets), "opaque release ownership inventory unavailable")
     const recoveryAssets = assets.filter(
       (asset) => typeof asset.name === "string" && asset.name.startsWith("recovery-v2-"),
@@ -1217,7 +1347,10 @@ export async function routeRecoveryCandidate(input) {
   const context = readerContext({ git, github })
   let reservation = null
   let reservationPath = null
-  const reservations = await readRecoveryReservations({ git, terminalRecordRef })
+  const reservations = await readRecoveryReservations({
+    git,
+    terminalRecordRef,
+  })
   for (const { intent, path } of reservations) {
     if (intent.candidate.version !== candidate.version) continue
     requireThat(
@@ -1284,7 +1417,9 @@ export async function routeRecoveryCandidate(input) {
       }
     }
     // Published display metadata cannot override fixed immutable ownership.
-    const assets = await context.read("listReleaseAssets", { releaseId: release.id })
+    const assets = await context.read("listReleaseAssets", {
+      releaseId: release.id,
+    })
     requireThat(Array.isArray(assets), "ownership asset discovery unavailable")
     const final = await readFixedFinalization(context, assets)
     if (marker && (release.draft !== false || !final)) {
@@ -1366,7 +1501,9 @@ export async function routeRecoveryCandidate(input) {
 export async function assertLegacyAuditCompatibleRelease(input) {
   const { release, github } = safeInput(input, ["release", "github"])
   const context = readerContext({ github })
-  const assets = await context.read("listReleaseAssets", { releaseId: release.id })
+  const assets = await context.read("listReleaseAssets", {
+    releaseId: release.id,
+  })
   requireThat(Array.isArray(assets), "audit ownership asset inventory unavailable")
   let recoveryMarker = false
   try {

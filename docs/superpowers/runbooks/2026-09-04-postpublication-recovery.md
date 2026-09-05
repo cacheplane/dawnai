@@ -620,6 +620,85 @@ missing expected rejection (`/tmp/dawn-recovery-task7-root-mutation.log`).
 Repository source was not weakened. Policy remains dormant; no live
 workflow or Release mutation occurred.
 
+## Independent audit (Task 8, implemented)
+
+The audit controller persists an intent before dispatch and requires
+the direct API-returned run identity. API version `2026-03-10` returns
+`workflow_run_id`, `run_url`, and `html_url`; the existing legacy adapter
+already uses that contract. The recovery adapter must preserve its
+narrow default-branch authority and never search recent runs to guess a
+lost correlation. See the [workflow API](https://docs.github.com/en/rest/actions/workflows?apiVersion=2026-03-10).
+
+Classified attempt records preserve failed and uncorrelated work.
+An audit-escrow receipt binds the result to independently observed
+artifact metadata under the same guarded namespace trust model as lane
+escrow. The auditor gets a separate read-only eligibility role, not the
+metadata writer role. Required audit checks and retained bookkeeping
+must be verified before finalization can select the result.
+
+The required audit checks are `admission`, `annotated-tag`, `asset-inventory`,
+`attestations`, `candidate`, `cleanup`, `dispatch-correlation`,
+`original-payload`, `registry-packages`, and `selected-evidence`.
+The audit job is `recovery-audit`; its ZIP artifact is
+`recovery-v2-audit-result-${runId}-${attempt}-${jobId}` and contains exactly
+one same-basename `.json` file. The owner escrow job is
+`recovery-audit-evidence`. Cleanup must reflect actual verifier disposal.
+A failed selected audit may be replaced at `AUDIT_PENDING` only after
+validated immutable failure bookkeeping and a freshly correlated request;
+the verification selection and phase remain unchanged. Finalization freezes
+this retry path along with other evidence-producing operations.
+
+Review reproduced a guarded-writer classification bug: a transient workflow
+lookup error could be persisted as `foreign-run` for the valid selected run.
+That immutable filename then prevented retaining its later genuine failure.
+The correction rejects the transient claim without writing and shares
+structured mismatch validation with the observer. Independent specification
+rereview passed all 260 focused cases. Quality review then exposed a related
+boundary: completed runs with missing or malformed conclusions must not be
+retained as failures. Shared terminal-failure validation now rejects those
+claims without writing. Quality rereview independently passed all 119
+audit, observer, and writer tests and reproduced recovery to audit success
+after the previously unavailable conclusion. Both review findings are closed.
+
+A temporary byte-reuse experiment still ran the existing metadata and
+proof checks while reducing fixture download calls to 65 Release assets,
+21 npm tarballs, and five Actions archives. Corrupting a cached manifest
+then blocked replay with no new effects
+(`/tmp/dawn-task12-byte-reuse-prototype.json`). This is diagnostic evidence
+for Task 12, not a production cache implementation or latency claim.
+
+A read-only benchmark using the production npm verifier and exact npm
+11.17.0 checked `@dawn-ai/sdk@0.8.24` three times. All signature/provenance
+checks passed: 1,314 ms for the first call, 456 ms for a repeat in that
+verifier, and 737 ms in a fresh verifier. Setup took 149 and 101 ms.
+Evidence: `/tmp/dawn-task12-npm-audit-benchmark.json`. These are three
+single-package samples on macOS with Node 24.20.0, not a full inventory,
+Linux containment test, pipeline latency, or percentile estimate. Task 12
+must examine repeated signature subprocesses as well as payload transfer;
+reusing bytes alone does not remove that cost.
+
+A subsequent full-inventory feasibility probe ran the same official npm
+command over 21 synthetic exact-version leaves. All 21 packages passed
+signature verification and the existing per-package provenance parser in
+both calls: 1,638 ms cold and 716 ms on repeat. Each complete JSON output
+was 373,312 bytes, below the existing 2 MiB bound. Evidence:
+`/tmp/dawn-task12-npm-batch-benchmark.json`. This demonstrates feasibility
+on this macOS host, not implemented batching or production pipeline speed.
+The production batch must additionally enforce exact inventory membership,
+pre/post synthetic-tree integrity, fresh invocation, and settled cleanup.
+The owned npm benchmark installation and temporary consumer were removed.
+
+Task 8's definitive full-controller run passed 2,843 tests with zero
+failures in approximately 163 seconds
+(`/tmp/dawn-recovery-task8-controller-verified.log`). Specification review
+passed 260 focused tests; final quality rereview passed 119. Root passed
+nine targeted correction cases and killed an isolated mutation that
+removed the fresh-intent guard: the recreated writer then made an extra
+dispatch (`/tmp/dawn-recovery-task8-root-mutation.log`). The temporary
+source copy was removed; repository source was never weakened. Scoped
+Biome checked 18 files; inventory, docs, and diff checks passed. Policy
+remains dormant, with no production admission or live recovery effects.
+
 ## Final validation investigation
 
 A bounded investigation independently reproduced a PID-readiness defect in

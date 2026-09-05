@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
 import * as manifest from "../../manifest.mjs"
 import * as metadata from "../../metadata.mjs"
+import { auditName, RECOVERY_AUDIT_CHECKS } from "../../recovery/audit-proof.mjs"
 import { recoveryProvenanceName } from "../../recovery/evidence-proof.mjs"
 import { canonicalPolicyBytes, hashVerifierClosure } from "../../recovery/policy.mjs"
 import { canonicalRecoveryBytes, metadataCheckName } from "../../recovery/schema.mjs"
@@ -26,7 +27,10 @@ export async function recoveryRemote({
   policy.status = "ADMITTED"
   policy.fence.contracts = [digest("fence")]
   policy.verifierClosure.sha256 = await hashVerifierClosure(
-    { controllerSha: executor().controllerSha, inputs: policy.verifierClosure.inputs },
+    {
+      controllerSha: executor().controllerSha,
+      inputs: policy.verifierClosure.inputs,
+    },
     async () => source,
   )
   const policySha256 = digest(canonicalPolicyBytes(policy))
@@ -50,7 +54,10 @@ export async function recoveryRemote({
     phase: "NPM_COMPLETE",
     npmEvidenceSha256: digest("npm evidence"),
   }
-  const legacyBody = metadata.canonicalReleaseBody({ marker: legacyMarker, manifest: null })
+  const legacyBody = metadata.canonicalReleaseBody({
+    marker: legacyMarker,
+    manifest: null,
+  })
   const raws = new Map(
     base.base.assets.map((a) => [a.name, Buffer.from(a.contentBase64, "base64")]),
   )
@@ -66,14 +73,24 @@ export async function recoveryRemote({
   const add = (name, value) => {
     const bytes = typeof value === "string" ? Buffer.from(value) : canonicalRecoveryBytes(value)
     raws.set(name, bytes)
-    const ref = { assetName: name, id: String(nextId++), sha256: digest(bytes), size: bytes.length }
+    const ref = {
+      assetName: name,
+      id: String(nextId++),
+      sha256: digest(bytes),
+      size: bytes.length,
+    }
     refs.set(name, ref)
     return ref
   }
   const all = () => [...refs.values()].sort((a, b) => a.assetName.localeCompare(b.assetName, "en"))
   const sort = (list) =>
     list.sort((a, b) => (a.assetName < b.assetName ? -1 : a.assetName > b.assetName ? 1 : 0))
-  const wire = (kind, fields) => ({ schemaVersion: 2, kind, candidate: c, ...fields })
+  const wire = (kind, fields) => ({
+    schemaVersion: 2,
+    kind,
+    candidate: c,
+    ...fields,
+  })
   const intent = wire("recovery-adoption-intent", {
     policySha256,
     legacyBodySha256: digest(legacyBody),
@@ -245,7 +262,7 @@ export async function recoveryRemote({
     verificationSetSha256: setRef.sha256,
     inventory: sort(all()),
   })
-  const intentRef = add("recovery-v2-audit-intent-903-1-1.json", auditIntent)
+  const intentRef = add(auditName(auditIntent), auditIntent)
   const dispatch = wire("recovery-audit-dispatch", {
     executor: e,
     requestId: auditIntent.requestId,
@@ -253,7 +270,7 @@ export async function recoveryRemote({
     intentSha256: intentRef.sha256,
     runId: "905",
   })
-  const dispatchRef = add("recovery-v2-audit-dispatch-903-1-1.json", dispatch)
+  const dispatchRef = add(auditName(dispatch), dispatch)
   const audit = wire("recovery-audit-result", {
     policySha256,
     executor: {
@@ -265,17 +282,42 @@ export async function recoveryRemote({
     requestId: auditIntent.requestId,
     verificationSetSha256: setRef.sha256,
     inventorySha256: digest(canonical(auditIntent.inventory)),
-    checks: [{ name: "independent-audit", conclusion: "success" }],
+    checks: RECOVERY_AUDIT_CHECKS.map((name) => ({
+      name,
+      conclusion: "success",
+    })),
     conclusion: "success",
   })
-  const auditRef = add("recovery-v2-audit-result-905-1.json", audit)
+  const auditRef = add(auditName(audit), audit)
+  const auditEscrow = wire("recovery-audit-escrow", {
+    policySha256,
+    executor: { ...e, jobId: "907" },
+    result: auditRef,
+    artifact: {
+      id: "999",
+      serviceDigest: `sha256:${digest("audit zip")}`,
+      name: "recovery-v2-audit-result-905-1-906",
+      size: 100,
+      workflowId: "802",
+      createdAt: "2026-09-04T10:03:20.000Z",
+      updatedAt: "2026-09-04T10:03:20.000Z",
+      jobStartedAt: "2026-09-04T10:03:00.000Z",
+      jobCompletedAt: "2026-09-04T10:03:40.000Z",
+    },
+    validatedAt: "2026-09-04T10:04:00.000Z",
+  })
+  const auditEscrowRef = add(auditName(auditEscrow), auditEscrow)
   const finalization = wire("recovery-finalization", {
     policySha256,
     adoption: adoptionRef,
     verificationSet: setRef,
     audit: auditRef,
     assets: sort(all()),
-    metadata: { title: `Dawn ${c.tag}`, body: "Original release notes", markerRevision: 5 },
+    metadata: {
+      title: `Dawn ${c.tag}`,
+      body: "Original release notes",
+      markerRevision: 5,
+    },
   })
   const finalRef = add("recovery-v2-finalization.json", finalization)
   const marker = wire("recovery-marker", {
@@ -346,13 +388,22 @@ export async function recoveryRemote({
     async downloadReleaseAsset({ assetId }) {
       calls.push("download")
       const ref = [...refs.values()].find((a) => a.id === String(assetId))
-      return { status: "PRESENT", contentBase64: raws.get(ref.assetName).toString("base64") }
+      return {
+        status: "PRESENT",
+        contentBase64: raws.get(ref.assetName).toString("base64"),
+      }
     },
     async getRef({ ref }) {
       return present(
         ref === "heads/main"
-          ? { ref: "refs/heads/main", object: { type: "commit", sha: e.controllerSha } }
-          : { ref: `refs/tags/${c.tag}`, object: { type: "tag", sha: c.tagObjectSha } },
+          ? {
+              ref: "refs/heads/main",
+              object: { type: "commit", sha: e.controllerSha },
+            }
+          : {
+              ref: `refs/tags/${c.tag}`,
+              object: { type: "tag", sha: c.tagObjectSha },
+            },
       )
     },
     async getGitTag() {
@@ -380,6 +431,7 @@ export async function recoveryRemote({
           ? {
               ...ci,
               id: 905,
+              workflow_id: 802,
               run_attempt: 1,
               path: audit.executor.workflow,
               event: "workflow_dispatch",
@@ -388,6 +440,12 @@ export async function recoveryRemote({
       )
     },
     async getWorkflow({ workflow } = {}) {
+      if (workflow === "release-postpublication-audit.yml")
+        return present({
+          id: 802,
+          path: audit.executor.workflow,
+          state: "active",
+        })
       if (workflow === e.workflow.split("/").at(-1))
         return present({ id: 801, path: e.workflow, state: "active" })
       return present({ id: 800, path: policy.ci.workflow, state: "active" })
@@ -395,6 +453,14 @@ export async function recoveryRemote({
     async listActionsRunJobs({ runId }) {
       if (String(runId) === e.runId)
         return present([
+          {
+            id: 907,
+            runAttempt: 1,
+            name: "recovery-audit-evidence",
+            status: "in_progress",
+            startedAt: "2026-09-04T10:03:50.000Z",
+            completedAt: null,
+          },
           {
             id: Number(e.jobId),
             runAttempt: Number(e.runAttempt),
@@ -407,7 +473,17 @@ export async function recoveryRemote({
         ])
       return present(
         String(runId) === "905"
-          ? [{ id: 906, runAttempt: 1, status: "completed", conclusion: "success" }]
+          ? [
+              {
+                id: 906,
+                runAttempt: 1,
+                name: "recovery-audit",
+                status: "completed",
+                conclusion: "success",
+                startedAt: auditEscrow.artifact.jobStartedAt,
+                completedAt: auditEscrow.artifact.jobCompletedAt,
+              },
+            ]
           : jobs,
       )
     },
@@ -471,7 +547,10 @@ export async function recoveryRemote({
         async verifyPackage() {
           return {
             status: "verified",
-            signature: { status: "valid", verifier: "npm-audit-signatures@11.17.0" },
+            signature: {
+              status: "valid",
+              verifier: "npm-audit-signatures@11.17.0",
+            },
             provenance: {
               predicateType: "https://slsa.dev/provenance/v1",
               repository: `https://github.com/${c.repository}`,
@@ -509,6 +588,8 @@ export async function recoveryRemote({
     installationReceipts,
     installationAssets,
     audit,
+    auditEscrow,
+    auditEscrowRef,
     auditRef,
     auditIntent,
     intentRef,

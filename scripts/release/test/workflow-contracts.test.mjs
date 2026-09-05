@@ -100,7 +100,7 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for Task 6: shared v1/v2 smoke operations and bounded physical installation evidence.
 // Repinned for Task 7: independently observed Actions escrow and durable provenance selection.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "db0ca9d41ffe24d1c7fbdd7dacf411961f049291e58e9eca5048c671ed5a2965"
+  "aecbdef292ba93f931ebf398a59bab7acfe19623ded9cfe0a9233a775719c069"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

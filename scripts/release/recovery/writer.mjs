@@ -2,6 +2,18 @@
 import { createHash } from "node:crypto"
 import { types } from "node:util"
 import { requestGitHubJson } from "../adapters/github-write-transport.mjs"
+import {
+  auditHasFailed,
+  auditName,
+  inspectAuditRun,
+  isAuditTerminalFailure,
+  observeAuditRun,
+  readAuditArtifact,
+  requireActiveAuditWorkflow,
+  selectAuditDispatch,
+  verifyAuditEscrowProducer,
+  verifyAuditIntent,
+} from "./audit-proof.mjs"
 import { captureRecoveryAuthority, captureRecoveryEligibility } from "./authority.mjs"
 import {
   buildRecoveryVerificationSet,
@@ -17,7 +29,7 @@ import {
   renderRecoveryFinalMetadata,
   renderRecoveryReleaseBody,
 } from "./metadata.mjs"
-import { planRecovery } from "./model.mjs"
+import { planRecovery, verifyRecoveryObservedPhase } from "./model.mjs"
 import { normalizeRecoveryAssetInventory, observeRecoveryCandidate } from "./observe.mjs"
 import { RECOVERY_RETRY, recoveryMethods, runRecoveryRead } from "./policy.mjs"
 import {
@@ -113,7 +125,10 @@ export function createRecoveryWriter(config, dependencies) {
   const base = `https://api.github.com/repos/${config.repository}`
   const uploads = `https://uploads.github.com/repos/${config.repository}`
   const transportIdentity = data(dependencies, "fetchImpl")
-  const shared = unsettled.get(transportIdentity) ?? { pending: new Set(), owner: null }
+  const shared = unsettled.get(transportIdentity) ?? {
+    pending: new Set(),
+    owner: null,
+  }
   unsettled.set(transportIdentity, shared)
   const pending = shared.pending
   const owner = Symbol("recovery transaction")
@@ -154,7 +169,11 @@ export function createRecoveryWriter(config, dependencies) {
       if (wrapped) void wrapped.cancel().catch(() => {})
       throw new Error("Recovery write settled after invocation stopped")
     }
-    return { status: response.status, headers: response.headers, body: wrapped }
+    return {
+      status: response.status,
+      headers: response.headers,
+      body: wrapped,
+    }
   }
   const observe = async (args, override = {}) => {
     active()
@@ -197,7 +216,10 @@ export function createRecoveryWriter(config, dependencies) {
     return args
   }
   const capture = async (args, current, operation) => {
-    const request = { candidate: args.candidate, expectedControllerSha: args.expectedControllerSha }
+    const request = {
+      candidate: args.candidate,
+      expectedControllerSha: args.expectedControllerSha,
+    }
     const proof =
       current.phase === "NPM_COMPLETE"
         ? await captureRecoveryAuthority(
@@ -239,7 +261,9 @@ export function createRecoveryWriter(config, dependencies) {
     )
     same(
       normalizeRecoveryAssetInventory(
-        await read("listReleaseAssets", { releaseId: args.candidate.releaseId }),
+        await read("listReleaseAssets", {
+          releaseId: args.candidate.releaseId,
+        }),
       ),
       current.facts.assets,
       "asset inventory changed before mutation",
@@ -249,7 +273,9 @@ export function createRecoveryWriter(config, dependencies) {
       ref.object?.type === "tag" && ref.object.sha === args.candidate.tagObjectSha,
       "tag changed before mutation",
     )
-    const tag = await read("getGitTag", { tagSha: args.candidate.tagObjectSha })
+    const tag = await read("getGitTag", {
+      tagSha: args.candidate.tagObjectSha,
+    })
     requireThat(
       tag.tag === args.candidate.tag &&
         tag.object?.type === "commit" &&
@@ -257,7 +283,7 @@ export function createRecoveryWriter(config, dependencies) {
       "tag target changed before mutation",
     )
   }
-  const send = async (request) => {
+  const send = async (request, dispatch = false) => {
     active()
     requireThat(shared.owner === owner && pending.size === 0, "unsettled or competing write")
     const timeoutMs = Math.min(RECOVERY_RETRY.readTimeoutMs, deadline - now())
@@ -270,7 +296,7 @@ export function createRecoveryWriter(config, dependencies) {
         timeoutMs,
         maxResponseBytes: RECOVERY_LIMITS.selectionBytes,
       },
-      { ...request, apiVersion: "2022-11-28" },
+      { ...request, apiVersion: dispatch ? "2026-03-10" : "2022-11-28" },
     )
     try {
       const response = await Promise.race([
@@ -285,9 +311,23 @@ export function createRecoveryWriter(config, dependencies) {
       ])
       httpStatus = response.httpStatus
       requireThat(
-        [200, 201].includes(response.httpStatus),
+        dispatch ? response.httpStatus === 200 : [200, 201].includes(response.httpStatus),
         `write uncertain after HTTP ${response.httpStatus}; later resume required`,
       )
+      if (dispatch) {
+        const r = response.body
+        requireThat(
+          r &&
+            Object.keys(r).sort().join(" ") === "html_url run_url workflow_run_id" &&
+            Number.isSafeInteger(r.workflow_run_id) &&
+            r.workflow_run_id > 0 &&
+            r.run_url === `${base}/actions/runs/${r.workflow_run_id}` &&
+            r.html_url ===
+              `https://github.com/${config.repository}/actions/runs/${r.workflow_run_id}`,
+          "direct dispatch identity required",
+        )
+        return String(r.workflow_run_id)
+      }
     } catch {
       stopped = true
       const error = new Error(
@@ -345,7 +385,9 @@ export function createRecoveryWriter(config, dependencies) {
       { phaseDeadline: deadline },
       async () => ({
         status: "PRESENT",
-        value: await observeImmutableReleasePolicy({ candidate: args.candidate }),
+        value: await observeImmutableReleasePolicy({
+          candidate: args.candidate,
+        }),
       }),
       { now, sleep: callbacks.sleep },
     )
@@ -371,7 +413,77 @@ export function createRecoveryWriter(config, dependencies) {
     },
   })
 
+  const auditRead = async (method, input) => {
+    const envelope = await runRecoveryRead(
+      {
+        phaseDeadline: deadline,
+        responseBytes: 2 * RECOVERY_LIMITS.selectionBytes,
+      },
+      () => recoveryMethods(observation.github, [method])[method](input),
+      { now, sleep: callbacks.sleep },
+    )
+    active()
+    requireThat(envelope.status === "PRESENT", "audit API proof unavailable")
+    return method === "downloadActionsArtifact" ? envelope.contentBase64 : envelope.value
+  }
+  const dispatchReceipts = new Map()
+  const freshAuditIntents = new Set()
   return Object.freeze({
+    dispatchRecoveryAudit(input) {
+      return transaction(async () => {
+        const args = validate(input, "intentRef")
+        const current = await observe(args)
+        mutable(args, current)
+        requireThat(
+          ((current.phase === "VERIFICATION_COMPLETE" && !current.facts.audit) ||
+            (current.phase === "AUDIT_PENDING" && auditHasFailed(current.facts))) &&
+            !current.facts.finalization,
+          "audit dispatch forbidden in current phase",
+        )
+        requireThat(
+          freshAuditIntents.has(args.intentRef.sha256) &&
+            !dispatchReceipts.has(args.intentRef.sha256),
+          "fresh intent from this invocation required",
+        )
+        const selected = current.facts.auditBookkeeping.find(
+          (x) => x.ref.assetName === args.intentRef.assetName,
+        )
+        requireThat(
+          selected?.receipt.kind === "recovery-audit-intent",
+          "persisted audit intent required",
+        )
+        same(selected.ref, args.intentRef, "intent reference differs")
+        verifyAuditIntent(selected.receipt, current.facts)
+        await requireActiveAuditWorkflow(auditRead)
+        requireThat(
+          !current.facts.auditBookkeeping.some(
+            (x) => x.receipt.intentSha256 === args.intentRef.sha256,
+          ),
+          "audit intent already attempted",
+        )
+        await compare(args, current)
+        const proof = await capture(args, current, "audit")
+        same(selected.receipt.executor, proof.executor, "dispatch executor differs")
+        const runId = await send(
+          {
+            url: `${base}/actions/workflows/release-postpublication-audit.yml/dispatches`,
+            method: "POST",
+            body: {
+              ref: "main",
+              inputs: {
+                request_id: selected.receipt.requestId,
+                intent_sha256: args.intentRef.sha256,
+                expected_controller_sha: selected.receipt.expectedAuditorSha,
+                release_id: args.candidate.releaseId,
+              },
+            },
+          },
+          true,
+        )
+        dispatchReceipts.set(args.intentRef.sha256, runId)
+        return { runId }
+      })
+    },
     uploadRecoveryAsset(input) {
       return transaction(async () => {
         const args = validate(input, "name contentBase64")
@@ -429,6 +541,18 @@ export function createRecoveryWriter(config, dependencies) {
               "recovery-installation",
               "recovery-provenance",
               "recovery-verification-set",
+            ],
+            VERIFICATION_COMPLETE: [
+              "recovery-audit-intent",
+              "recovery-audit-dispatch",
+              "recovery-audit-attempt",
+            ],
+            AUDIT_PENDING: [
+              "recovery-audit-intent",
+              "recovery-audit-dispatch",
+              "recovery-audit-result",
+              "recovery-audit-escrow",
+              "recovery-audit-attempt",
             ],
             AUDIT_VERIFIED: ["recovery-finalization"],
           }
@@ -522,6 +646,104 @@ export function createRecoveryWriter(config, dependencies) {
               }
             }
           }
+          if (receipt.kind.startsWith("recovery-audit-")) {
+            same(args.name, auditName(receipt), "unique audit receipt name required")
+            if (receipt.kind === "recovery-audit-intent") {
+              requireThat(
+                !current.facts.audit || auditHasFailed(current.facts),
+                "audit already selected",
+              )
+              verifyAuditIntent(receipt, current.facts)
+            } else if (
+              ["recovery-audit-dispatch", "recovery-audit-attempt"].includes(receipt.kind)
+            ) {
+              const entry = current.facts.auditBookkeeping.find(
+                (x) =>
+                  x.ref.sha256 === receipt.intentSha256 &&
+                  x.receipt.kind === "recovery-audit-intent",
+              )
+              requireThat(entry, "attempt intent must be persisted")
+              same(receipt.requestId, entry.receipt.requestId, "attempt request differs")
+              same(
+                receipt.expectedAuditorSha,
+                entry.receipt.expectedAuditorSha,
+                "attempt SHA differs",
+              )
+              if (receipt.kind === "recovery-audit-dispatch") {
+                requireThat(
+                  dispatchReceipts.get(receipt.intentSha256) === receipt.runId,
+                  "direct dispatch receipt required in this invocation",
+                )
+                same(receipt.executor, entry.receipt.executor, "dispatching executor differs")
+                await observeAuditRun(args.candidate, entry.receipt, receipt.runId, auditRead)
+              } else if (receipt.classification === "uncorrelated") {
+                requireThat(
+                  !current.facts.auditBookkeeping.some(
+                    (x) =>
+                      x.receipt.intentSha256 === receipt.intentSha256 &&
+                      x.receipt.kind === "recovery-audit-dispatch",
+                  ),
+                  "correlated intent cannot become uncertain",
+                )
+                requireThat(
+                  !dispatchReceipts.has(receipt.intentSha256),
+                  "direct correlation cannot be discarded",
+                )
+              } else {
+                requireThat(
+                  dispatchReceipts.get(receipt.intentSha256) === receipt.runId ||
+                    current.facts.audit?.dispatch.runId === receipt.runId,
+                  "failed attempt needs direct run correlation",
+                )
+                const { run, classification } = await inspectAuditRun(
+                  args.candidate,
+                  entry.receipt,
+                  receipt.runId,
+                  auditRead,
+                )
+                same(receipt.observedAuditorSha, run.head_sha, "observed failure SHA differs")
+                if (receipt.classification === "failed-audit")
+                  requireThat(
+                    classification === null && isAuditTerminalFailure(run),
+                    "audit did not fail",
+                  )
+                else
+                  same(
+                    receipt.classification,
+                    classification,
+                    "audit failure classification differs from observed identity",
+                  )
+              }
+            } else {
+              requireThat(current.facts.audit, "persisted audit dispatch required")
+              const verified = await readAuditArtifact(
+                args.candidate,
+                current.facts.audit.intent,
+                current.facts.audit.dispatch,
+                auditRead,
+              )
+              requireThat(verified.result, "successful audit artifact required")
+              if (receipt.kind === "recovery-audit-result")
+                same(
+                  receipt,
+                  verified.result,
+                  "audit result differs from independently downloaded artifact",
+                )
+              else {
+                same(receipt.artifact, verified.artifact, "audit artifact descriptor differs")
+                same(
+                  receipt.result,
+                  current.facts.assets.find((a) => a.assetName === auditName(verified.result)),
+                  "audit result must be independently persisted",
+                )
+                requireThat(
+                  Date.parse(receipt.validatedAt) <= now(),
+                  "audit escrow timestamp in future",
+                )
+                await verifyAuditEscrowProducer(receipt, args.candidate, auditRead, now())
+              }
+            }
+          }
           if (receipt.kind === "recovery-adoption") {
             same(receipt.baseAssets, current.facts.baseAssets, "adoption base inventory differs")
             same(receipt.npmEvidence, current.facts.npmEvidence, "adoption npm proof differs")
@@ -598,6 +820,7 @@ export function createRecoveryWriter(config, dependencies) {
           current.facts.assets,
           "unrelated asset mutation",
         )
+        if (receipt?.kind === "recovery-audit-intent") freshAuditIntents.add(ref.sha256)
         return ref
       })
     },
@@ -616,7 +839,10 @@ export function createRecoveryWriter(config, dependencies) {
         requireThat(
           markerStart >= 0 &&
             args.body ===
-              renderRecoveryReleaseBody({ marker, body: args.body.slice(0, markerStart) }),
+              renderRecoveryReleaseBody({
+                marker,
+                body: args.body.slice(0, markerStart),
+              }),
           "canonical v2 body required",
         )
         const current = await observe(args)
@@ -649,13 +875,82 @@ export function createRecoveryWriter(config, dependencies) {
               "verification marker differs",
             )
             const eligibility = await capture(args, current, "verify")
-            const plan = planRecovery({ ...current.facts, ...eligibility, publication: null })
+            const plan = planRecovery({
+              ...current.facts,
+              ...eligibility,
+              publication: null,
+            })
             requireThat(
               plan.outcome === "planned" &&
                 plan.effects.some(
                   (e) => e.operation === "write-marker" && e.target === "VERIFICATION_COMPLETE",
                 ),
               plan.errors.join("; ") || "verification advancement is not admissible",
+            )
+          } else if (current.phase === "AUDIT_PENDING" && marker.phase === "AUDIT_PENDING") {
+            requireThat(
+              auditHasFailed(current.facts) && !current.facts.audit.result,
+              "retained failed audit required before retry",
+            )
+            const selected = selectAuditDispatch(current.facts, marker.audit)
+            requireThat(
+              selected.intent.requestId !== current.facts.audit.intent.requestId,
+              "fresh audit request required",
+            )
+            const run = await auditRead("getActionsRunAttempt", {
+              runId: current.facts.audit.dispatch.runId,
+              attempt: "1",
+            })
+            requireThat(isAuditTerminalFailure(run), "selected audit has not failed")
+            await observeAuditRun(
+              args.candidate,
+              selected.intent,
+              selected.dispatch.runId,
+              auditRead,
+            )
+            verifyRecoveryObservedPhase({
+              ...current.facts,
+              audit: selected,
+              marker,
+            })
+            same(
+              marker,
+              {
+                ...current.facts.marker,
+                revision: current.facts.marker.revision + 1,
+                audit: selected.dispatchRef,
+              },
+              "retry marker differs",
+            )
+          } else if (
+            (current.phase === "VERIFICATION_COMPLETE" && marker.phase === "AUDIT_PENDING") ||
+            (current.phase === "AUDIT_PENDING" && marker.phase === "AUDIT_VERIFIED")
+          ) {
+            const eligibility = await capture(args, current, "audit")
+            const plan = planRecovery({
+              ...current.facts,
+              ...eligibility,
+              publication: null,
+            })
+            requireThat(
+              plan.outcome === "planned" &&
+                plan.effects.some(
+                  (e) => e.operation === "write-marker" && e.target === marker.phase,
+                ),
+              plan.errors.join("; ") || "audit advancement is not admissible",
+            )
+            same(
+              marker,
+              {
+                ...current.facts.marker,
+                revision: current.facts.marker.revision + 1,
+                phase: marker.phase,
+                audit:
+                  marker.phase === "AUDIT_PENDING"
+                    ? current.facts.audit.dispatchRef
+                    : current.facts.audit.resultRef,
+              },
+              "audit marker differs",
             )
           } else {
             requireThat(
@@ -733,7 +1028,10 @@ export function createRecoveryWriter(config, dependencies) {
           current.facts.finalization.ref,
         )
         same(
-          { title: current.facts.release.name, body: current.facts.release.body },
+          {
+            title: current.facts.release.name,
+            body: current.facts.release.body,
+          },
           rendered,
           "publication metadata differs",
         )

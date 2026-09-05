@@ -55,6 +55,9 @@ const FIELDS = {
   "recovery-audit-intent":
     "policySha256 requestId expectedAuditorSha verificationSetSha256 inventory executor",
   "recovery-audit-dispatch": "requestId intentSha256 runId expectedAuditorSha executor",
+  "recovery-audit-attempt":
+    "policySha256 requestId intentSha256 runId expectedAuditorSha observedAuditorSha classification executor",
+  "recovery-audit-escrow": "policySha256 executor result artifact validatedAt",
   "recovery-audit-result":
     "policySha256 requestId verificationSetSha256 inventorySha256 executor checks conclusion",
   "recovery-finalization": "policySha256 adoption verificationSet audit assets metadata",
@@ -657,6 +660,41 @@ function validate(value) {
       text(value.expectedAuditorSha, sha, "auditor SHA")
       requireThat(value.runId !== value.executor.runId, "audit run must be independent")
       break
+    case "recovery-audit-attempt":
+      text(value.requestId, identifier, "request ID")
+      text(value.intentSha256, hash, "intent digest")
+      text(value.expectedAuditorSha, sha, "expected auditor SHA")
+      if (value.runId !== null) text(value.runId, decimal, "audit run ID")
+      if (value.observedAuditorSha !== null)
+        text(value.observedAuditorSha, sha, "observed auditor SHA")
+      enumeration(value.classification, [
+        "uncorrelated",
+        "unexpected-auditor-sha",
+        "foreign-run",
+        "failed-audit",
+      ])
+      requireThat(
+        (value.classification === "uncorrelated") === (value.runId === null),
+        "attempt correlation classification",
+      )
+      break
+    case "recovery-audit-escrow": {
+      ref(value.result, true)
+      timestamp(value.validatedAt)
+      const a = value.artifact
+      exact(
+        a,
+        "id serviceDigest name size workflowId createdAt updatedAt jobStartedAt jobCompletedAt",
+      )
+      text(a.id, decimal, "artifact ID")
+      text(a.serviceDigest, /^sha256:[a-f0-9]{64}$/u, "artifact digest")
+      text(a.name, assetName, "artifact name")
+      text(a.workflowId, decimal, "workflow ID")
+      integer(a.size, 1, RECOVERY_LIMITS.selectionBytes)
+      for (const key of ["createdAt", "updatedAt", "jobStartedAt", "jobCompletedAt"])
+        recoveryApiTimestampRange(a[key])
+      break
+    }
     case "recovery-audit-result":
       text(value.requestId, identifier, "request ID")
       text(value.verificationSetSha256, hash, "selected set digest")

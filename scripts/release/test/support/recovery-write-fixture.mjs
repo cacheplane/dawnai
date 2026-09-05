@@ -32,6 +32,7 @@ export async function recoveryWriteRemote() {
   github.listActionsRunJobs = async (args) =>
     String(args.runId) === execution.runId
       ? present([
+          ...(await originalJobs(args)).value.filter((job) => String(job.id) !== execution.jobId),
           {
             id: Number(execution.jobId),
             runAttempt: Number(execution.runAttempt),

@@ -458,25 +458,43 @@ cost is tracked as required Task 12 work. No live recovery effects occurred.
 **Files:** Create `recovery/audit.mjs`, `test/recovery-audit.test.mjs`.
 Add a narrowly scoped default-branch dispatch method to `recovery/writer.mjs`;
 do not loosen the legacy exact-tag dispatch API.
+Add shared `recovery/audit-proof.mjs`, classified immutable audit-attempt
+bookkeeping, and a durable audit-escrow receipt with exact result and
+independently observed artifact bindings. Extend observer/model admission
+and final inventory to retain permitted prior attempts. Require the
+complete named audit checks, and give the auditor a read-only eligibility
+role without granting owner mutation or fence authority. A failed selected
+audit can be replaced at `AUDIT_PENDING` only after independently validated
+failure bookkeeping and a freshly correlated request ID. Preserve the
+verification selection and phase; finalization freezes retries.
 
-- [ ] Test actual auditor SHA mismatch, main advancing during dispatch, wrong
+- [x] Test actual auditor SHA mismatch, main advancing during dispatch, wrong
   verification-set selection, failed audit, missing result, foreign run, and
   ambiguous dispatch acceptance. Require direct returned run identity.
-- [ ] Run `node --test scripts/release/test/recovery-audit.test.mjs` for red.
-- [ ] Persist uniquely named intent before dispatch. Use the current supported
+- [x] Run `node --test scripts/release/test/recovery-audit.test.mjs` for red.
+- [x] Persist uniquely named intent before dispatch. Use the current supported
   API response to capture run ID; verify actual head SHA equals expected audited
   controller SHA. Uncorrelated attempts are retained but never selected.
-- [ ] The auditor re-downloads registry/release evidence into its own clean
+- [x] The auditor re-downloads registry/release evidence into its own clean
   workspace and performs all spec checks. API provenance must match the
   recovery evidence policy; uploaded JSON's own assertions are insufficient.
-- [ ] Persist and re-read the correlated dispatch before `AUDIT_PENDING`; escrow
+- [x] Persist and re-read the correlated dispatch before `AUDIT_PENDING`; escrow
   a successful matching audit before `AUDIT_VERIFIED`. Never scan recent runs
   to guess a lost identity. A newly dispatched attempt must have a new request ID.
-- [ ] Distinguish admission mismatch from a dispatch-time race. Admission SHA
+- [x] Distinguish admission mismatch from a dispatch-time race. Admission SHA
   mismatch produces zero effects. An unexpected auditor SHA discovered after
   dispatch retains the already-uploaded intent and a classified failed-attempt
   receipt, never selects that audit, and never advances to verification or
   publication. Test both boundaries. Restore mutation tests and commit.
+
+Task 8 is implemented and independently reviewed as dormant code. Root
+passed the definitive controller suite: 2,843 tests, zero failures, about
+163 seconds. Specification review passed 260 cases; final quality rereview
+passed 119 after correcting transient foreign-run classification and
+unavailable terminal conclusions. Root independently reproduced the fresh
+intent guard's necessity in an isolated mutation and passed nine targeted
+correction cases. Scoped Biome checked 18 files; inventory, docs, and diff
+checks passed. No workflow dispatch, activation, or production mutation occurred.
 
 ## Task 9: Final evidence anchor and publication
 
@@ -538,6 +556,12 @@ as a read-only CLI wrapper; keep mutation available only through explicit comman
   equality. Use the existing pinned Node/pnpm/action versions. Avoid injecting
   workflow input strings directly into shell program text; pass environment
   strings or validated canonical request files.
+- [ ] Wire audit job `recovery-audit` and owner escrow job
+  `recovery-audit-evidence` to Task 8's exact provenance contracts. The audit
+  artifact `recovery-v2-audit-result-${runId}-${attempt}-${jobId}` contains
+  exactly one same-basename `.json`. Use API-observed numeric job identity;
+  `GITHUB_JOB` is a symbolic name. Require all ten named checks, including
+  actual verifier cleanup, before accepting a successful result.
 - [ ] Recovery uses `dawn-release-controller`, cancellation false, queue max.
   Independent audit uses a distinct group and bounded timeout; it can run while
   the parent holds the writer group. Set audit polling below parent job budget.
@@ -584,6 +608,11 @@ authority actually requires it; preserve npm's sole owner `release.yml`.
 `test/recovery-github.integration.mjs`, and
 `test/fixtures/recovery-contract-workflow.yml` under `scripts/release/`.
 Update `test:release-fault-harness` to include the new local rehearsal explicitly.
+For measured efficiency work, extend `scripts/release/npm-audit.mjs` with a
+batch API and its tests, wire recovery observation to that API, and add a
+small bounded byte-reuse module plus dedicated tests. Keep legacy verifier
+methods unchanged. Add the bounded eligible-host check to `ci.yml` and its
+workflow contract tests. Maintain actual transitive pins in the same change.
 
 - [ ] Reuse production effects and adapters against disposable local HTTP/npm
   fixtures, with independent readback. Exercise the whole legacy adoption ->
@@ -599,15 +628,17 @@ Update `test:release-fault-harness` to include the new local rehearsal explicitl
   may permit a late or overlapping mutation. Task 5 quality review verified
   these cases with independent probes.
 - [ ] Measure the production-adapter work per complete recovery phase. The
-Task 7 deterministic fixture exposed 2,322 Release-asset downloads, 861
-npm tarball downloads, and 41 npm-audit setups for 19 writes. Reduce
-repeated payload transfer/setup within one invocation before calling the
-pipeline ready. Reuse bounded payload bytes only against independently
-fresh exact identities; caches never authorize a transition. Preserve
-fresh mutation guards, verifier cleanup/settlement, and the independent
-audit workspace. Test changed IDs/digests, cache corruption, expiry,
-deadlines, and interrupted resume, and report measured before/after
-counts without presenting fixture timings as production performance.
+  Task 7 deterministic fixture exposed 2,322 Release-asset downloads, 861
+  npm tarball downloads, and 41 npm-audit setups for 19 writes. Reduce
+  repeated payload transfer/setup within one invocation before calling the
+  pipeline ready. Examine batching the exact inventory in one official npm
+  signature command per fresh observation while preserving every package
+  trust binding and complete-set validation. Reuse bounded payload bytes only
+  against independently fresh exact identities; caches never authorize a transition. Preserve
+  fresh mutation guards, verifier cleanup/settlement, and the independent
+  audit workspace. Test changed IDs/digests, cache corruption, expiry,
+  deadlines, and interrupted resume, and report measured before/after
+  counts without presenting fixture timings as production performance.
 - [ ] Prepare a GitHub contract harness with an explicit disposable repository
   allowlist, fixture-owned ID ledger, and cleanup limited to those resources.
   Require `DAWN_TEST_RECOVERY_GITHUB=1` and a separately supplied authorized test
@@ -630,7 +661,11 @@ counts without presenting fixture timings as production performance.
 - [ ] The future authorized command is
   `DAWN_TEST_RECOVERY_GITHUB=1 node --test scripts/release/test/recovery-github.integration.mjs`.
   Record exact repository/run/attempt/resource IDs and cleanup results.
-  Separately exercise production package/attestation verification read-only;
+- [ ] Wire the gated strict-runner integration into a bounded read-only CI job
+  on actual `ubuntu-24.04`, using pinned checkout and Node actions. It needs
+  neither publication authority nor a production adoption. This supplies the
+  eligible-host evidence that macOS cannot provide; do not spoof host fields.
+- [ ] Separately exercise production package/attestation verification read-only;
   do not weaken repository identity to make disposable npm evidence appear real.
 - [ ] Commit rehearsal code and evidence summary. Distinguish unrun external
   checks from passed local checks in every status report.
@@ -643,12 +678,12 @@ tested admission/fencing/retry operations and references to actual rehearsal
 evidence. Do not add a production adoption record in this commit.
 
 - [ ] Correct the independently reproduced PID-readiness fixture defect before
-final gates: wait for a validated descendant PID, retain it for guarded
-cleanup observation, and add a barrier-based empty-marker regression. Keep
-all descendant-termination and token/cluster cleanup-order assertions. Add
-failure diagnostics that distinguish invalid PID publication from actual
-unconfirmed containment. The earlier full-CI failure is not yet attributed
-to this defect; do not call it resolved solely from the controlled repro.
+  final gates: wait for a validated descendant PID, retain it for guarded
+  cleanup observation, and add a barrier-based empty-marker regression. Keep
+  all descendant-termination and token/cluster cleanup-order assertions. Add
+  failure diagnostics that distinguish invalid PID publication from actual
+  unconfirmed containment. The earlier full-CI failure is not yet attributed
+  to this defect; do not call it resolved solely from the controlled repro.
 - [ ] Run `pnpm ci:validate` at the final implementation head. It includes lint,
   build-cache, build, typecheck, source tests, inventory, controller tests, docs,
   packing, TypeScript tooling, and harness lanes. Run
