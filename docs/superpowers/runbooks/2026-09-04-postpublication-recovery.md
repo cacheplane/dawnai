@@ -969,3 +969,29 @@ unmanaged-read and open-generation mutations failed their intended regressions;
 all 24 targeted tests passed before and after restoration. Logs:
 `/tmp/dawn-recovery-task12b-controller-verified.log` and
 `/tmp/dawn-task12b-root-review.json`. No live effects or activation occurred.
+
+
+## CI fixture corrections before final validation
+
+The Vercel upload allowlist now retains both already-redacted deployment-failure
+logs. Tests run each actual deployment composition through an intentional failure,
+the real diagnostic store, and upload preparation, preserving the cause text and
+redaction. Both tests failed first on the missing uploaded filename; the corrected
+lane unit suite passed 299 tests, with one existing external opt-in test skipped.
+This repairs diagnostic loss; the original live Vercel failure remains unclassified.
+
+The descendant fixture now waits for a nonempty decimal PID in the supported
+positive range, excluding the current process. It retains that validated PID for
+cleanup observation and never converts an empty marker into zero. A real-filesystem
+barrier proves readiness remains pending while the marker is empty; nine invalid
+values reject without a process probe. The original descendant termination and
+token-before-cluster-cleanup assertions remain, with PID, marker, error, and event
+diagnostics. All 115 harness tests and both affected TypeScript projects passed.
+The earlier CI containment failure is still not attributed solely to this defect.
+
+The task's agent limit also prevented further independent agent review; root
+reviewed these narrow changes directly. Full repository gates and real CI are
+still outstanding. Logs: `/tmp/dawn-task13-vercel-red.log`,
+`/tmp/dawn-task13-vercel-green.log`, `/tmp/dawn-task13-pid-red.log`,
+`/tmp/dawn-task13-pid-green.log`, `/tmp/dawn-task13-cli-typecheck.log`, and
+`/tmp/dawn-task13-k8s-typecheck.log`.

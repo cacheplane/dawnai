@@ -156,20 +156,35 @@ async function nextEventLoopTurn(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve))
 }
 
-async function waitForHarnessFile(path: string): Promise<void> {
+async function waitForHarnessPid(
+  path: string,
+  readMarker: (path: string) => Promise<Buffer> = readFile,
+): Promise<number> {
+  let marker = "missing"
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
-      await readFile(path)
-      return
+      const text = (await readMarker(path)).toString("utf8").trim()
+      marker = text.length === 0 ? "empty" : JSON.stringify(text.slice(0, 128))
+      if (text.length > 0) {
+        const pid = Number(text)
+        if (!/^[1-9][0-9]*$/.test(text) || !validHarnessPid(pid))
+          throw new Error(`Invalid harness PID publication ${marker} at ${path}`)
+        return pid
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     }
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
-  throw new Error(`Timed out waiting for harness process marker ${path}`)
+  throw new Error(`Timed out waiting for valid harness PID at ${path}; marker=${marker}`)
+}
+
+function validHarnessPid(pid: number): boolean {
+  return Number.isSafeInteger(pid) && pid > 1 && pid <= 2147483647 && pid !== process.pid
 }
 
 function processIsRunning(pid: number): boolean {
+  if (!validHarnessPid(pid)) throw new Error(`Invalid harness PID probe ${pid}`)
   try {
     process.kill(pid, 0)
     return true
@@ -179,18 +194,62 @@ function processIsRunning(pid: number): boolean {
   }
 }
 
-async function stopHarnessProcess(pidPath: string): Promise<void> {
-  let pid: number
-  try {
-    pid = Number(await readFile(pidPath, "utf8"))
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return
-    throw error
-  }
-  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid || !processIsRunning(pid))
-    return
+async function stopHarnessProcess(pid: number | undefined): Promise<void> {
+  if (pid === undefined || !validHarnessPid(pid) || !processIsRunning(pid)) return
   process.kill(pid, "SIGKILL")
 }
+
+test("PID readiness waits behind empty-marker publication before returning the exact PID", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-harness-pid-readiness-"))
+  const path = join(directory, "pid")
+  const emptyRead = deferred()
+  const expected = process.pid + 1
+  let settled = false
+  await writeFile(path, "")
+  const ready = waitForHarnessPid(path, async (file) => {
+    const bytes = await readFile(file)
+    if (bytes.length === 0) emptyRead.resolve()
+    return bytes
+  }).then((pid) => {
+    settled = true
+    return pid
+  })
+  try {
+    await emptyRead.promise
+    await nextEventLoopTurn()
+    expect(settled).toBe(false)
+    await writeFile(path, String(expected))
+    expect(await ready).toBe(expected)
+  } finally {
+    await writeFile(path, String(expected))
+    await ready
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test.each([
+  "0",
+  "1",
+  "-2",
+  "NaN",
+  "Infinity",
+  "1e3",
+  "2147483648",
+  "9007199254740992",
+  String(process.pid),
+])("PID readiness rejects invalid publication %s without probing a process", async (value) => {
+  const directory = await mkdtemp(join(tmpdir(), "dawn-harness-invalid-pid-"))
+  const path = join(directory, "pid")
+  const kill = vi.spyOn(process, "kill")
+  try {
+    await writeFile(path, value)
+    await expect(waitForHarnessPid(path)).rejects.toThrow(/invalid.*PID/i)
+    expect(kill).not.toHaveBeenCalled()
+  } finally {
+    kill.mockRestore()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 interface FixtureOptions {
   readonly failAt?: string
@@ -1565,6 +1624,8 @@ describe("signal cleanup", () => {
       const sentinelPath = join(directory, "descendant-sentinel")
       const emitter = new EventEmitter()
       const terminated = deferred()
+      let descendantPid: number | undefined
+      let run: Promise<unknown> | undefined
       const descendantScript = [
         'const { writeFileSync } = require("node:fs")',
         `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid))`,
@@ -1589,9 +1650,12 @@ describe("signal cleanup", () => {
             options,
           )
         } finally {
-          const descendantPid = Number(await readFile(pidPath, "utf8"))
           fixture.events.push(
-            processIsRunning(descendantPid) ? "provider.tree.alive" : "provider.tree.confirmed",
+            descendantPid === undefined
+              ? "provider.tree.pid-unavailable"
+              : processIsRunning(descendantPid)
+                ? "provider.tree.alive"
+                : "provider.tree.confirmed",
           )
         }
       })
@@ -1599,7 +1663,7 @@ describe("signal cleanup", () => {
         fixture.dependencies
 
       try {
-        const run = runKubernetesCompatibility(OPTIONS, {
+        run = runKubernetesCompatibility(OPTIONS, {
           ...dependenciesWithoutFakeRegistration,
           execute,
           registerSignalCleanup: registerOwnedResourceSignalCleanup,
@@ -1613,13 +1677,19 @@ describe("signal cleanup", () => {
           },
         }).catch((error: unknown) => error)
 
-        await waitForHarnessFile(pidPath)
+        descendantPid = await waitForHarnessPid(pidPath)
         emitter.emit("SIGTERM")
         await terminated.promise
         const error = await run
 
-        expect(error).toBeInstanceOf(Error)
-        expect(fixture.events).toContain("provider.tree.confirmed")
+        const diagnostic = JSON.stringify({
+          descendantPid,
+          marker: await readFile(pidPath, "utf8").catch(() => "unavailable"),
+          errors: flattenErrorMessages(error),
+          events: fixture.events,
+        })
+        expect(error, diagnostic).toBeInstanceOf(Error)
+        expect(fixture.events, diagnostic).toContain("provider.tree.confirmed")
         expect(fixture.events).not.toContain("provider.tree.alive")
         expect(fixture.events.indexOf("provider.tree.confirmed")).toBeLessThan(
           fixture.events.indexOf("token.destroy.1"),
@@ -1628,7 +1698,11 @@ describe("signal cleanup", () => {
           fixture.events.indexOf("cleanup.destroy"),
         )
       } finally {
-        await stopHarnessProcess(pidPath)
+        if (run !== undefined) {
+          emitter.emit("SIGTERM")
+          await run
+        }
+        await stopHarnessProcess(descendantPid)
         await rm(directory, { recursive: true, force: true })
       }
     },

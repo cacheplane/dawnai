@@ -806,20 +806,32 @@ preserves the read-only boundary, rather than adding another lifecycle manager.
 tested admission/fencing/retry operations and references to actual rehearsal
 evidence. Do not add a production adoption record in this commit.
 
-- [ ] Preserve Vercel deployment-failure diagnostics before the next real CI run.
+- [x] Preserve Vercel deployment-failure diagnostics before the next real CI run.
   `runNativeDeploymentKind` writes `source-deploy-failure.log` and
   `prebuilt-deploy-failure.log`, but `NATIVE_UPLOAD_ARTIFACT_NAMES` currently
   omits both. Add the two already-redacted diagnostics to the bounded upload
   allowlist and exercise writer-to-upload behavior for both kinds, retaining
   secret checks and filesystem guards. This fixes lost diagnostic evidence;
   it does not establish the underlying deployment failure's cause.
-- [ ] Correct the independently reproduced PID-readiness fixture defect before
+- [x] Correct the independently reproduced PID-readiness fixture defect before
   final gates: wait for a validated descendant PID, retain it for guarded
   cleanup observation, and add a barrier-based empty-marker regression. Keep
   all descendant-termination and token/cluster cleanup-order assertions. Add
   failure diagnostics that distinguish invalid PID publication from actual
   unconfirmed containment. The earlier full-CI failure is not yet attributed
   to this defect; do not call it resolved solely from the controlled repro.
+The two confirmed CI fixture defects were corrected before the larger Task 12c
+rehearsal so final validation can retain meaningful failures. Both Vercel modes
+failed first because their written diagnostics were omitted from upload; after
+adding the two names, the complete lane unit suite passed 299 tests (one existing
+external opt-in test skipped). PID readiness failed first for the deterministic
+empty-marker barrier and nine invalid values; all 115 harness tests passed after
+validated PID retention and guarded cleanup. Both affected TypeScript projects
+passed. Logs: `/tmp/dawn-task13-vercel-{red,green}.log`,
+`/tmp/dawn-task13-pid-{red,green}.log`, and the two
+`/tmp/dawn-task13-*-typecheck.log` files. Neither historical CI root cause is
+claimed resolved by these fixture fixes; full CI remains required below.
+
 - [ ] Run `pnpm ci:validate` at the final implementation head. It includes lint,
   build-cache, build, typecheck, source tests, inventory, controller tests, docs,
   packing, TypeScript tooling, and harness lanes. Run

@@ -7592,6 +7592,66 @@ describe("native orchestration and evidence closure", () => {
     ).rejects.toThrow(/symlink|control|regular/)
   })
 
+  test.each(["source", "prebuilt"] as const)(
+    "retains redacted %s deployment failure through diagnostic upload",
+    async (kind) => {
+      const fixture = await makeUploadFixture("source")
+      const artifactDir = await makeTempDir()
+      const store = await createNativeEvidenceStore({ artifactDir, protectedValues })
+      if (kind === "prebuilt") {
+        const executable = join(fixture.root, "node_modules", ".bin", "dawn")
+        await mkdir(dirname(executable), { recursive: true })
+        await writeFile(executable, "#!/usr/bin/env node\n")
+      }
+      const failure = new Error(`deployment failed with ${protectedValues[0]}`, {
+        cause: new Error("BUILD_FAILED before readiness"),
+      })
+      await expect(
+        runNativeDeploymentKind({
+          kind,
+          fixtureRoot: fixture.root,
+          expectedTarballs: fixture.expectedTarballs,
+          orgId: "team_Test123",
+          projectId: "prj_Test456",
+          protectedValues,
+          parentEnv: {},
+          deployAttempt: async () => {
+            throw failure
+          },
+          inspectBuildLogs: async () => {
+            throw new Error("unexpected build-log inspection")
+          },
+          reconcile: async () => {
+            throw new Error("unexpected reconciliation")
+          },
+          runBlackBox: async () => {
+            throw new Error("unexpected black-box run")
+          },
+          runBuildChild: async () => {
+            const output = join(fixture.root, ".vercel", "output")
+            await mkdir(join(output, "functions", "index.func"), { recursive: true })
+            await writeFile(join(output, "config.json"), "{}\n")
+            await writeFile(
+              join(output, "functions", "index.func", "index.mjs"),
+              "export default {}\n",
+            )
+            return { exitCode: 0, stderr: "", stdout: "" }
+          },
+          validateOutput: async () => {},
+          writeDiagnostic: store.writeDiagnostic,
+        }),
+      ).rejects.toThrow(`native Vercel ${kind} deploy attempt failed`)
+      const name = `${kind}-deploy-failure.log`
+      const written = await readFile(join(artifactDir, name), "utf8")
+      expect(written).toContain("BUILD_FAILED before readiness")
+      expect(written).toContain("[REDACTED]")
+      const uploaded = await prepareNativeArtifactUpload({ artifactDir, protectedValues })
+      expect(uploaded.files).toContain(name)
+      expect(await readFile(join(uploaded.uploadDir, name), "utf8")).toBe(written)
+      for (const secret of protectedValues) expect(written).not.toContain(secret)
+    },
+  )
+
   test("prepares only a fixed, whole-directory-rescanned diagnostic upload", async () => {
     const artifactDir = await makeTempDir()
     const store = await createNativeEvidenceStore({ artifactDir, protectedValues })
