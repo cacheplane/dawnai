@@ -179,14 +179,15 @@ Create the minimal fence experiment in
   until Task 12 has validated a real fence for any unsafe replay path.
 - [x] Prepare the minimal disposable workflow-disable/rerun experiment using
   Task 12's repository allowlist and authorization constraints.
-- [ ] Run the prepared experiment as soon as a disposable repository is
+- [x] Run the prepared experiment as soon as a disposable repository is
   authorized, preferably before broad controller implementation. A negative
   result triggers ownership-design revision then;
   do not defer a known feasibility decision until the entire pipeline is built.
 
 Local findings and limits: [feasibility report](../runbooks/2026-09-04-postpublication-recovery.md).
-The local regression slice is implemented; the live feasibility requirement and
-production admission remain unresolved. No production recovery code is enabled.
+The local regression and extended YAML service experiment are verified. Platform
+workflow feasibility and production admission remain unresolved. No production
+recovery code is enabled.
 
 ## Task 2: Add strict schemas and a pure transition model
 
@@ -768,7 +769,7 @@ preserves the read-only boundary, rather than adding another lifecycle manager.
   hashes and stage counts are in `/tmp/dawn-task12-late-phase-cost.json`.
   This sample used a fixture-supplied audit result and the 55347198-based worktree
   during Task 10b; it is not a complete service rehearsal or an npm timing claim.
-- [ ] Prepare a GitHub contract harness with an explicit disposable repository
+- [x] Prepare a GitHub contract harness with an explicit disposable repository
   allowlist, fixture-owned ID ledger, and cleanup limited to those resources.
   Require `DAWN_TEST_RECOVERY_GITHUB=1` and a separately supplied authorized test
   repository; fail before writes if absent or equal to production. Ordinary
@@ -782,21 +783,21 @@ preserves the read-only boundary, rather than adding another lifecycle manager.
   credential, including GitHub workflow-file authorization rules when the
   resolved target differs from the default branch. Do not infer credential
   sufficiency from a local fixture or broaden permissions before this rehearsal.
-- [ ] Specifically disable the disposable legacy workflow and test fresh
+- [x] Specifically disable the disposable legacy workflow and test fresh
   dispatch, whole-run rerun, and job-only rerun. A proposed operational fence is
   accepted only if observed service behavior prevents all unsafe writers and
   active executions are drained. If not, report the ownership design blocked;
   do not invent a successful fence from a disabled status flag.
-- [ ] The future authorized command is
+- [x] Run the separately authorized command
   `DAWN_TEST_RECOVERY_GITHUB=1 node --test scripts/release/test/recovery-github.integration.mjs`.
   Record exact repository/run/attempt/resource IDs and cleanup results.
-- [ ] Wire the gated strict-runner integration into a bounded read-only CI job
+- [x] Wire the gated strict-runner integration into a bounded read-only CI job
   on actual `ubuntu-24.04`, using pinned checkout and Node actions. It needs
   neither publication authority nor a production adoption. This supplies the
   eligible-host evidence that macOS cannot provide; do not spoof host fields.
-- [ ] Separately exercise production package/attestation verification read-only;
+- [x] Separately exercise production package/attestation verification read-only;
   do not weaken repository identity to make disposable npm evidence appear real.
-- [ ] Commit rehearsal code and evidence summary. Distinguish unrun external
+- [x] Commit rehearsal code and evidence summary. Distinguish unrun external
   checks from passed local checks in every status report.
 
 ## Task 13: Run final implementation gates and prepare activation review
@@ -865,7 +866,7 @@ fresh terminal evidence. Keep original tag/tarball/provenance identity visible i
 all three reports.
 
 
-### Task 12c local verification update
+### Task 12c local verification update (historical checkpoint)
 
 The complete production HTTP adapter rehearsal passed 67 tests, including
 interruptions before and after all 32 durable writes (64 fault cases), in
@@ -879,9 +880,10 @@ proof. Log: `/tmp/dawn-task12c-full-rehearsal.log`.
 The real GitHub workflow-fence entrypoint now prepares distinct historical and
 current fixture revisions and tags, retains the pre-advance seed lineage,
 collects the full 36-case matrix with paginated all-SHA inventories, restores
-and drains after ambiguous effects, and projects untouched raw calls through
-the production evidence validator. Its executable closure is pinned as 13
-files. Six new local service-driver tests and the existing fence, policy,
+and drains after ambiguous effects, and projects raw calls through
+the production evidence validator. The projection was subsequently corrected
+after real service execution; see the current checkpoint below. At this historical
+checkpoint its executable closure was pinned as 13 files. Six new local service-driver tests and the existing fence, policy,
 workflow and runner-gate tests passed (224 total). Log:
 `/tmp/dawn-task12c-focused.log`. The external lane is still unrun: no authorized
 disposable repository has been supplied. Publication/credential service
@@ -892,7 +894,7 @@ verified failing against the former skip behavior and passing after the fix.
 A macOS opt-out is reported as skipped, never eligible-runner evidence. Actual
 Linux CI and the complete final implementation gates remain pending.
 
-### Verified checkpoint and remaining service execution
+### Verified checkpoint and remaining service execution (historical checkpoint)
 
 The full local validation at `0464c514` passed (5,664 source tests; 3,171 controller
 tests; pack/tooling and all three harness lanes). The separate fault harness
@@ -926,7 +928,7 @@ measured quota defect before claiming implementation readiness.
 - [x] Extend the owned HTTP rehearsal with ETags and measured primary/304 counts,
   using realistic 100-item pages and isolated phase/auditor state. Verify the
   full arc and fault cases preserve all safety assertions.
-- [ ] Refresh executable closure pins, run focused regressions and full local/CI
+- [x] Refresh executable closure pins, run focused regressions and full local/CI
   gates, and update the draft PR with measured results and outstanding service
   evidence. Do not claim the live quota is proven by a fixture projection.
 
@@ -936,3 +938,28 @@ conditional JSON module in the legacy publisher sparse checkout. The corrected
 checkout and executable allowlist pass all 60 artifact-store/publisher tests.
 The separate correctly pinned fault harness passed all 116 tests. Final gates
 are rerun after refreshing the closure pins.
+
+
+### Current checkpoint: verified service execution at `12e69d67`
+
+The [service results and admission sequence](../runbooks/2026-09-05-release-recovery-service-results.md)
+supersedes the earlier statements that no authorized repository existed.
+The user authorized a personal disposable repository. All 36 extended YAML fence
+cases passed; operator publication passed normal and both response-loss cases;
+the 13-job topology passed full, no-op, publish-only and failed-job rerun checks.
+The repository was archived after preserving raw responses, exact executed source,
+run/job logs and immutable asset readbacks. The user will delete it manually.
+
+Commit `12e69d67` passed all 247 focused checks and all 20 jobs in
+[CI 33976684839](https://github.com/cacheplane/dawnai/actions/runs/33976684839),
+including 3,224 controller tests. Full local validation passed during development,
+not as a frozen final-head run; the final-head CI supplies that exact revision
+evidence. The separately pinned fault harness passed 116 tests.
+
+Task 12's complete service obligation remains open: actual workflow-token
+publication needs a separate Administration(read) credential, the platform-owned
+workflow topology requires a reviewed representation and authority evidence, and
+the full live workflow quota must be measured. The external automated review
+failed before code review because its account lacked credit. Policy remains
+DORMANT, contract directories empty, and production release `382873833` remains
+a mutable draft with 45 assets. No live-recovery completion is claimed.

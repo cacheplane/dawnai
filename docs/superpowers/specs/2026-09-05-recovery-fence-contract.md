@@ -3,7 +3,9 @@
 This implements the missing Task 10 production read boundary. It grants no
 admission on its own: policy remains `DORMANT`, approved contract digests remain
 empty, and both contract/evidence directories contain only `.gitkeep`.
-The existing prepared service probe is not sufficient for this contract.
+The extended service probe passed the 36-case YAML workflow matrix on 2026-09-05.
+That evidence does not cover production platform workflows; see the
+[service results and admission sequence](../runbooks/2026-09-05-release-recovery-service-results.md).
 
 ## Trust and scope
 
@@ -83,9 +85,11 @@ restoration: {workflowCall, finalInventoryCalls}
 `calls` is a canonical proof-witness projection, not the full raw polling/setup
 ledger. The reviewed probe retains that full raw ledger separately and records
 its digest in the rehearsal report. A narrow `projectRecoveryFenceEvidence`
-helper copies exactly the referenced calls by ID in their original order, without
-editing statuses, responses, request bodies or timestamps, then validates the
-witness. Polling observations and setup writes remain in the raw ledger; they
+helper selects exactly the referenced calls by ID in their original order and
+projects successful GET responses onto the fields consumed by the validator.
+It preserves their actual values, every collection item and order, counts,
+identities and timestamps. Request bodies, statuses, and non-GET or unsuccessful
+responses remain unchanged; the resulting witness is validated. Polling observations and setup writes remain in the raw ledger; they
 are not invented into, or required to appear in, the finite witness graph.
 
 References point to unique recorded calls. Use explicit nulls for inapplicable
@@ -96,8 +100,12 @@ be sufficient to derive conclusions; supplied outcome booleans are not proof.
 Validate required proof identities without exact-comparing entire service
 objects: real git/ref and run/attempt responses include additional metadata, and
 inventory/run membership compares the relevant ID/attempt/source/state fields.
-The projector preserves those actual extra fields rather than replacing service
-responses with fabricated minimal objects.
+Unconsumed GET metadata remains in the separately retained raw ledger. Projection
+does not synthesize missing fields, coerce values, truncate collections, or supply
+success assertions. Every raw call is checked, including unreferenced calls:
+plain dense arrays, unique IDs, at most 10,000 calls, 2 MiB per call, and 32 MiB
+aggregate compact JSON. The existing 8 MiB canonical proof and structural bounds
+still apply after projection.
 
 Require exactly 36 cases: contexts `current-default`, `current-tag`, `historical`;
 stages `active-before`, `disabled`, `active-after`; methods `dispatch`, `all`,
@@ -112,7 +120,9 @@ remain at the current SHA throughout the historical cases. Positive controls
 must reach the intended writer step: runner startup failure does not count.
 Returned dispatch run IDs must be direct responses; run IDs, attempts, workflow
 IDs, source SHAs and numeric job IDs must match the requested operations. Rerun targets reference completed pre-request run and
-job observations; dispatch targets are null. Accepted reruns advance exactly one
+job observations; dispatch targets are null. HTTP 201 rerun acknowledgements may
+contain only an empty object or null; acknowledgement is not execution proof.
+Accepted reruns advance exactly one
 attempt, and historical reruns preserve the pre-advance default-branch seed
 lineage independently of historical tag dispatches.
 
@@ -140,8 +150,9 @@ record counts and elapsed time; an exceeded bound produces inconclusive proof.
 Task 12 extends the prepared probe to emit this format and tests its validator
 against damaged correlations, missing pages and negative controls. An old
 12-summary ledger cannot be converted to successful extended evidence by adding
-assertions. Real service evidence remains unrun until the user supplies an
-explicit disposable repository.
+assertions. The extended probe passed against the explicitly authorized personal
+repository, with raw observations and the exact executed closure retained.
+Production topology review and contract admission remain separate obligations.
 
 ## Exhaustive production topology
 
@@ -211,4 +222,5 @@ Independent review on 2026-09-05 identified and corrected undefined closure
 computation, commit/policy digest cycles, incomplete pagination, and missing
 rerun target/lifecycle references. The explicit nonwriter trust root above keeps
 review responsibility separate from the runtime's finite byte/identity checks.
-Actual rehearsal evidence remains absent; no contract is admitted by this design.
+The subsequent YAML service rehearsal is recorded in the linked results report.
+No production contract is admitted by this design or that experiment.

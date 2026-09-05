@@ -853,6 +853,31 @@ test("fence projection bounds each raw response and removes only unconsumed API 
   assert.throws(project, /fixture job identity mismatch|executed source mismatch/)
 })
 
+test("fence raw projection rejects proxied ledgers without invoking traps", async () => {
+  const subject = await import("../recovery/fence-evidence.mjs")
+  const f = await fenceEvidenceFixture()
+  const { calls, ...witness } = f.evidence
+  let traps = 0
+  const handler = Object.fromEntries(
+    ["get", "getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"].map((name) => [
+      name,
+      (...args) => {
+        traps++
+        return Reflect[name](...args)
+      },
+    ]),
+  )
+  assert.throws(
+    () =>
+      subject.projectRecoveryFenceEvidence(new Proxy(calls, handler), witness, {
+        fixtureBytes: f.fixtureBytes,
+        probeClosureSha256: f.evidence.probeClosureSha256,
+      }),
+    /bounded raw ledger/,
+  )
+  assert.equal(traps, 0, "ledger inspection must not execute caller code")
+})
+
 test("fence raw projection rejects accessor array entries without invoking them", async () => {
   const subject = await import("../recovery/fence-evidence.mjs")
   const f = await fenceEvidenceFixture()

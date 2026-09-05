@@ -1,5 +1,6 @@
 // A finite validator of git-reviewed observations; never a service probe or interpreter.
 import { createHash } from "node:crypto"
+import { types } from "node:util"
 import { recoveryId } from "./invocation.mjs"
 import { snapshotRecoveryData } from "./schema.mjs"
 
@@ -641,7 +642,8 @@ export function validateRecoveryFenceEvidence(raw, { fixtureBytes, probeClosureS
 export function projectRecoveryFenceEvidence(rawCalls, witness, options) {
   witness = snapshotRecoveryData(witness, 128 * 1024)
   fenceRequire(
-    Array.isArray(rawCalls) &&
+    !types.isProxy(rawCalls) &&
+      Array.isArray(rawCalls) &&
       Object.getPrototypeOf(rawCalls) === Array.prototype &&
       rawCalls.length <= 10000 &&
       !Object.hasOwn(witness, "calls"),

@@ -3,9 +3,12 @@
 Status on 2026-09-05: dormant version 2 observation, guarded adoption, five-lane
 evidence collection, independent audit, finalization/publication orchestration,
 production read adapters, CLI, and workflow composition are implemented and
-independently reviewed. Efficiency work and the complete rehearsal remain in
-progress. The disposable GitHub experiment is prepared but **not run**.
-Production admission remains
+reviewed in implementation slices. The YAML fence, operator publication, and
+13-job topology experiments have now run against the authorized disposable
+repository. Actual workflow-token publication, platform workflow coverage, and
+complete live quota evidence remain outstanding. See the current
+[service results and admission sequence](./2026-09-05-release-recovery-service-results.md);
+later checkpoints below retain their historical scope. Production admission remains
 `legacy-fence-required`. This report does not authorize or perform recovery.
 
 Design: [post-publication recovery](../specs/2026-09-04-postpublication-recovery-design.md).
@@ -98,18 +101,21 @@ publication, GitHub service races, and all possible in-flight interleavings
 remain outside the local proof. A shared cooperative workflow queue helps
 serialize writers but does not revoke an old writer's authority.
 
-## Prepared disposable GitHub experiment
+## Disposable GitHub experiment
 
-No disposable repository has yet been designated. The plan requires a separately
-authorized repository before any external fixture installation or workflow
-mutation. Production `cacheplane/dawnai` is rejected by name and repository ID
+The extended experiment passed on 2026-09-05 in the authorized repository
+`blove/dawn-release-recovery-test-20260905-baf081db` (ID `1358322370`). It was
+archived after evidence retention. The user owns manual deletion; do not resume
+experiments there. The following instructions describe a future separately
+authorized run, not a request to alter that archived repository. Production `cacheplane/dawnai` is rejected by name and repository ID
 `1210070282`, including a redirected alias resolving to that ID.
 
-After authorization, provision
+After authorization of a new run, provision
 `scripts/release/test/fixtures/recovery-contract-workflow.yml` verbatim as
 `.github/workflows/recovery-fence-probe.yml` on the disposable default branch.
-Use an exclusively controlled disposable repository and keep its default branch
-unchanged throughout the experiment. This fixture has no token permissions,
+Use an exclusively controlled disposable repository. The extended probe advances
+the historical fixture to the current revision and creates both fixture tags;
+no other operator may move the default branch during the run. This fixture has no token permissions,
 checkout, release writes, npm operations, or external action dependencies. Its
 detect job succeeds and emits an eligibility output; its dependent writer step
 deliberately exits 1, making historical retry behavior observable.
@@ -118,10 +124,11 @@ The harness verifies repository identity, the exact fixture bytes at the capture
 SHA, workflow identity/state, and the absence of active fixture runs before
 mutation. It rechecks the branch before dispatch and rejects changed run SHAs.
 This detects branch races; it does not lock the remote branch against another
-operator. The minimal lane refuses inventories larger than 100 runs; fuller
-pagination and production topology coverage belong to Task 12.
+operator. The extended lane records complete paginated inventories for all three
+source contexts and retains the pre-advance historical seed lineage. Bounded
+collection failures are inconclusive, never evidence of drainage.
 
-Future command, after supplying the authorized repository in both variables:
+Command for a future separately authorized repository, supplied in both variables:
 
 ```sh
 DAWN_TEST_RECOVERY_GITHUB=1 \
@@ -292,7 +299,8 @@ The production fence observer is implemented and independently reviewed in
 Task 10a. It accepts only a digest-bound reviewed contract and validated service
 witness, then recaptures the complete workflow mapping, revocation, and all-SHA
 drainage within one original deadline. Both contract/evidence directories remain
-empty; the service rehearsal and runtime wiring are still pending. Canonical
+empty. Runtime wiring is implemented; YAML service proof is recorded in the
+current results report, while production topology admission remains pending. Canonical
 witness validation covers direct run/attempt/job identities and an ordered
 execution consistent with the precision of the original GitHub timestamps.
 
@@ -712,8 +720,8 @@ remains dormant, with no production admission or live recovery effects.
 The production read adapters now observe repository/default-branch and numeric
 job identity, immutability policy, and the complete legacy-workflow inventory.
 The reviewed fence contract connects digest-bound service evidence to fresh
-disabled/drained observations. No real service fence has been demonstrated,
-and the contract inventory remains empty. The complete live inventory also
+disabled/drained observations. The real YAML workflow experiment demonstrated
+the tested disable/rerun behavior; the production contract inventory remains empty. The complete live inventory also
 contains two platform-generated workflows that the current contract cannot
 represent; see the [platform workflow assessment](../specs/2026-09-05-platform-workflow-fence-assessment.md).
 
@@ -1086,7 +1094,9 @@ non-default annotated tag, and verifies immutable publication, public visibility
 and unchanged payload/tag/default-branch identity. The tag and immutable
 prerelease are deliberately retained and listed in the evidence ledger. This
 is an additional authorized experiment beyond harmless workflow fencing.
-It has not been run against GitHub.
+The operator variant has since passed against GitHub, including both response-loss
+cases. The actual workflow-token variant remains unrun; see the current results
+report. The operator credential was used locally and was never uploaded to Actions.
 
 `DAWN_RECOVERY_TEST_DISCARD_RESPONSE=upload|publication` can deliberately discard
 one already-recorded successful response before the driver receives it. The
