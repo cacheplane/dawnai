@@ -26,6 +26,44 @@ function githubExpression(expression: string): string {
 }
 
 describe("metadata-only CI scope", () => {
+  test("infrastructure guards respect cancellation while retaining full coverage on classification failure", () => {
+    const jobs = ciWorkflow.jobs
+    for (const id of [
+      "sandbox-k8s",
+      "sandbox-k8s-e2e",
+      "sandbox-docker-e2e",
+      "chart-apply-smoke",
+    ]) {
+      const expression = String(jobs[id].if).slice(3, -2).trim()
+      // Evaluate the checked-in expression's supported boolean subset, not a
+      // separate implementation of the intended condition.
+      for (const cancelled of [false, true]) {
+        for (const event of ["push", "pull_request"]) {
+          for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
+            for (const metadataOnly of ["true", "false", ""]) {
+              const evaluated = expression
+                .replaceAll("always()", "true")
+                .replaceAll("cancelled()", JSON.stringify(cancelled))
+                .replaceAll("github.event_name", JSON.stringify(event))
+                .replaceAll("needs.metadata_scope.result", JSON.stringify(result))
+                .replaceAll(
+                  "needs.metadata_scope.outputs.metadata_only",
+                  JSON.stringify(metadataOnly),
+                )
+              const actual = Function(`"use strict"; return (${evaluated});`)()
+              const expected =
+                !cancelled &&
+                !(event === "pull_request" && result === "success" && metadataOnly === "true")
+              expect(actual, JSON.stringify({ id, cancelled, event, result, metadataOnly })).toBe(
+                expected,
+              )
+            }
+          }
+        }
+      }
+    }
+  })
+
   test("publishes a single exact generated-metadata allowlist", () => {
     expect(METADATA_ONLY_PATHS).toEqual(["apps/web/app/seo/lastmod.generated.json"])
     expect(Object.isFrozen(METADATA_ONLY_PATHS)).toBe(true)
@@ -224,7 +262,7 @@ describe("CI workflow metadata scope", () => {
 
     const scopedJobs = ["sandbox-k8s", "sandbox-k8s-e2e", "sandbox-docker-e2e", "chart-apply-smoke"]
     const failOpenCondition = githubExpression(
-      "always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true')",
+      "!cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true')",
     )
     for (const id of scopedJobs) {
       expect(jobs[id]?.needs).toBe("metadata_scope")

@@ -98,7 +98,7 @@
             "env": {
               "DAWN_TEST_K8S_CONTEXT": "kind-dawn-chart-apply"
             },
-            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
             "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 15
@@ -1046,7 +1046,7 @@
             "env": {
               "DAWN_TEST_SMOKE_E2E": "1"
             },
-            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
             "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 30
@@ -1132,7 +1132,7 @@
             "env": {
               "DAWN_TEST_K8S_CONTEXT": "kind-dawn-k8s-canonical"
             },
-            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
             "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 35
@@ -1266,7 +1266,7 @@
               "DAWN_TEST_SMOKE_E2E": "1",
               "KIND_CLUSTER": "dawn-smoke"
             },
-            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
             "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 30

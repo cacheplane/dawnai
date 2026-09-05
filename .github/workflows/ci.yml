@@ -792,7 +792,7 @@ jobs:
 
   sandbox-k8s:
     needs: metadata_scope
-    if: ${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -885,7 +885,7 @@ jobs:
     # both Helm charts (cross-namespace: app in dawn-app, sandboxes in
     # dawn-sandboxes). Determinism comes from a baked aimock (no model key).
     needs: metadata_scope
-    if: ${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -1045,7 +1045,7 @@ jobs:
     # adds a Verdaccio-published image build (same mechanism as sandbox-k8s-e2e).
     # Determinism comes from a baked aimock (no model key).
     needs: metadata_scope
-    if: ${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -1127,7 +1127,7 @@ jobs:
 
   chart-apply-smoke:
     needs: metadata_scope
-    if: ${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
