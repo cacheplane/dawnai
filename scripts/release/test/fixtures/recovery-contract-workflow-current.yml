@@ -1,0 +1,28 @@
+# Install verbatim as .github/workflows/recovery-fence-probe.yml ONLY in an
+# explicitly authorized disposable repository. No release or registry effects.
+name: Recovery fence probe
+run-name: recovery-fence-${{ inputs.probe_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      probe_id:
+        required: true
+        type: string
+permissions: {}
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      eligible: ${{ steps.detect.outputs.eligible }}
+    steps:
+      - id: detect
+        run: echo 'eligible=true' >> "$GITHUB_OUTPUT"
+  writer:
+    needs: detect
+    if: needs.detect.outputs.eligible == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Prove current writer reachability without writing
+        run: exit 2

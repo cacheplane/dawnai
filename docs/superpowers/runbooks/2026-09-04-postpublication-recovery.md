@@ -1,8 +1,10 @@
 # Post-publication recovery: feasibility and admission findings
 
-Status on 2026-09-04: local legacy-writer regression and dormant version 2
-schemas, planner, and invocation authority implemented; disposable GitHub
-experiment prepared but **not run**.
+Status on 2026-09-05: dormant version 2 observation, guarded adoption, five-lane
+evidence collection, independent audit, finalization/publication orchestration,
+and production read adapters are implemented and independently reviewed. CLI and
+workflow composition, efficiency work, and the complete rehearsal remain in
+progress. The disposable GitHub experiment is prepared but **not run**.
 Production admission remains
 `legacy-fence-required`. This report does not authorize or perform recovery.
 
@@ -286,7 +288,13 @@ preserving the recorded executor on already accepted receipts. Every future
 writer must recapture current eligibility and fresh fence evidence immediately
 before mutation. A workflow-disable claim alone is insufficient; the fence
 contract must have been reviewed and its writer coverage and drainage observed.
-The production fence observer and service rehearsal are still pending.
+The production fence observer is implemented and independently reviewed in
+Task 10a. It accepts only a digest-bound reviewed contract and validated service
+witness, then recaptures the complete workflow mapping, revocation, and all-SHA
+drainage within one original deadline. Both contract/evidence directories remain
+empty; the service rehearsal and runtime wiring are still pending. Canonical
+witness validation covers direct run/attempt/job identities and an ordered
+execution consistent with the precision of the original GitHub timestamps.
 
 Version 2 lane integration must emit explicit successful cleanup and registry
 obligations. The metadata probe currently records some audit/cleanup checks only
@@ -804,3 +812,14 @@ recorded locally at `/tmp/dawn-recovery-task9-controller-verified.log`.
 Root's metadata-bound and managed-lifecycle mutation experiments both failed the
 intended regression when the guard was removed. These are code and fixture
 checks; production recovery and disposable service rehearsal remain unrun.
+
+## CI diagnostic retention finding (Task 13 preparation)
+
+The latest observed main CI remains run `33947398526` at `67d92077`, failed in
+`vercel-native`. Read-only inspection on 2026-09-05 found a concrete reason the
+uploaded artifact omitted the deeper deployment error: the fixture writer
+allows and writes `source-deploy-failure.log`/`prebuilt-deploy-failure.log`, but
+`NATIVE_UPLOAD_ARTIFACT_NAMES` includes neither. The artifact preparation function
+copies only that allowlist. Task 13 will correct both names and test the full
+redacted diagnostic-to-upload path before the next real CI run. The underlying
+Vercel failure is still unclassified; no live preview or credential was changed.

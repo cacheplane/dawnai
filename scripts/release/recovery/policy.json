@@ -131,7 +131,10 @@
       "scripts/release/recovery/audit.mjs",
       "scripts/release/recovery/authority.mjs",
       "scripts/release/recovery/evidence-proof.mjs",
+      "scripts/release/recovery/fence-evidence.mjs",
+      "scripts/release/recovery/fence.mjs",
       "scripts/release/recovery/finalize.mjs",
+      "scripts/release/recovery/invocation.mjs",
       "scripts/release/recovery/metadata.mjs",
       "scripts/release/recovery/model.mjs",
       "scripts/release/recovery/observe.mjs",
@@ -153,7 +156,7 @@
       "scripts/release/terminal-records.mjs",
       "scripts/release/topology.mjs"
     ],
-    "sha256": "9aa78206f8f50c5240e5d664553aeb8983edd008fff21aeafe5b80b37ad2bbe1"
+    "sha256": "75e437356de3fa09ae3c3b47e3906219c8615c0b388c6189f23d42ddc4448b59"
   },
   "workflows": [
     ".github/workflows/release-postpublication-audit.yml",

@@ -100,8 +100,9 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for Task 6: shared v1/v2 smoke operations and bounded physical installation evidence.
 // Repinned for Task 7: independently observed Actions escrow and durable provenance selection.
 // Repinned for Task 9: frozen finalization observation and canonical metadata reconstruction.
+// Repinned for Task 10a: strict GitHub inventories, bounded exact git reads, and dormant verifier closure.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "5a85967093eb07f6c2154117493e169cf40d5727e454c8f44ef5dc82ba8927d5"
+  "eccc5d00f63e6b35ac1a058b92f629681f1276efd5500b0f6a9291bb44a9a84b"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

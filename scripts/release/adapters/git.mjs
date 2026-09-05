@@ -61,10 +61,33 @@ export function createGitReader({
   }
   const read = (args) => executeGit(run, args, options, maxOutputBytes)
   return {
-    showFile({ ref, path }) {
+    showFile({ ref, path }, request = {}) {
       assertValidRef(ref)
       assertValidPath(path)
-      return read(["show", `${ref}:${path}`])
+      const overrides = {}
+      if (
+        !request ||
+        typeof request !== "object" ||
+        Array.isArray(request) ||
+        Object.keys(request).some((key) => !["signal", "timeoutMs"].includes(key))
+      )
+        throw new GitInputError("Invalid Git read options")
+      if (request.timeoutMs !== undefined) {
+        assertBoundedInteger(request.timeoutMs, 1, MAX_GIT_TIMEOUT_MS, "Git read timeout")
+        overrides.timeout = Math.min(timeoutMs, request.timeoutMs)
+      }
+      if (request.signal !== undefined) {
+        if (!(request.signal instanceof AbortSignal))
+          throw new GitInputError("Invalid Git read abort signal")
+        if (request.signal.aborted) throw gitFailure("ABORTED")
+        overrides.signal = request.signal
+      }
+      return executeGit(
+        run,
+        ["show", `${ref}:${path}`],
+        { ...options, ...overrides },
+        maxOutputBytes,
+      )
     },
     listTree({ ref }) {
       assertValidRef(ref)
@@ -176,24 +199,40 @@ function executeGit(run, args, options, maxOutputBytes) {
 
 function runCommand(command, args, options) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, options, (error, stdout) => {
+    execFile(command, args, { ...options, encoding: "buffer" }, (error, stdout, stderr) => {
       if (error !== null) {
+        if (Buffer.isBuffer(stderr)) {
+          try {
+            error.stderr = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(stderr)
+          } catch {
+            error.stderr = null
+          }
+        }
         reject(error)
         return
       }
-      resolve(stdout)
+      try {
+        // Exact source hashing must not silently replace invalid UTF-8 or strip a BOM.
+        resolve(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(stdout))
+      } catch {
+        reject(gitFailure("MALFORMED_OUTPUT"))
+      }
     })
   })
 }
 
 function normalizeRunError(error, args) {
+  if (error instanceof GitReadError && error.code === "MALFORMED_OUTPUT")
+    return gitFailure("MALFORMED_OUTPUT")
   const exitCode = Number.isInteger(error?.exitCode)
     ? error.exitCode
     : Number.isInteger(error?.code)
       ? error.code
       : undefined
   let code = "SPAWN_ERROR"
-  if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+  if (error?.code === "ABORT_ERR") {
+    code = "ABORTED"
+  } else if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
     code = "OUTPUT_TOO_LARGE"
   } else if (
     error?.code === "ETIMEDOUT" ||

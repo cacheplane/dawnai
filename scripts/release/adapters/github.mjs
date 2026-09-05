@@ -87,6 +87,65 @@ export function createGitHubReader({
   }
 
   return {
+    getRepository(args = {}, options = {}) {
+      exactArguments(args, [])
+      return readObject(recoveryContext(context, options), { url: base, operation: "repository" })
+    },
+    listRepositoryWorkflowsComplete(args = {}, options = {}) {
+      exactArguments(args, [])
+      return readPaginated(recoveryContext(context, options), {
+        initialUrl: `${base}/actions/workflows?per_page=100`,
+        operation: "repository-workflows-complete",
+        extract: objectArray("workflows"),
+        compare: compareIdThenName,
+        strictTotal: true,
+      })
+    },
+    getWorkflowById(args, options = {}) {
+      exactArguments(args, ["workflowId"])
+      return readObject(recoveryContext(context, options), {
+        url: `${base}/actions/workflows/${normalizeId(args.workflowId)}`,
+        operation: "workflow-by-id",
+      })
+    },
+    listWorkflowRunsAllShasComplete(args, options = {}) {
+      exactArguments(args, ["workflowId"])
+      return readPaginated(recoveryContext(context, options), {
+        initialUrl: `${base}/actions/workflows/${normalizeId(args.workflowId)}/runs?per_page=100`,
+        operation: "workflow-runs-all-shas-complete",
+        extract: objectArray("workflow_runs"),
+        compare: compareIdThenName,
+        strictTotal: true,
+      })
+    },
+    async listActionsRunJobsComplete(args, options = {}) {
+      exactArguments(args, ["runId"])
+      const raw = await readPaginated(recoveryContext(context, options), {
+        initialUrl: `${base}/actions/runs/${normalizeId(args.runId)}/jobs?filter=all&per_page=100`,
+        operation: "actions-run-jobs-complete",
+        extract: objectArray("jobs"),
+        compare: compareRunAttemptThenId,
+        strictTotal: true,
+      })
+      const normalized = normalizeAllAttemptJobs(raw)
+      if (normalized.status !== "PRESENT") return normalized
+      for (const job of normalized.value) {
+        const original = raw.value.find((value) => value.id === job.id)
+        if (
+          String(original.run_id) !== normalizeId(args.runId) ||
+          !SHA_PATTERN.test(original.head_sha)
+        )
+          return failure(
+            "ERROR",
+            normalized.operation,
+            normalized.httpStatus,
+            "JOB_SOURCE_MISMATCH",
+          )
+        job.run_id = original.run_id
+        job.head_sha = original.head_sha
+      }
+      return normalized
+    },
     getCommitCheckRuns({ commitSha }) {
       assertCommitSha(commitSha)
       return readPaginated(context, {
@@ -96,10 +155,11 @@ export function createGitHubReader({
         compare: compareIdThenName,
       })
     },
-    getRef({ ref }) {
+    getRef({ ref }, options = {}) {
       assertRef(ref, "GitHub ref")
       return readObject(context, {
         url: `${base}/git/ref/${encodeURIComponent(ref)}`,
+        requestBudget: readOptions(context, options),
         operation: "ref",
       })
     },
@@ -202,11 +262,12 @@ export function createGitHubReader({
         operation: "actions-run",
       })
     },
-    getActionsRunAttempt({ runId, attempt }) {
+    getActionsRunAttempt({ runId, attempt }, options = {}) {
       const id = normalizeId(runId)
       const attemptNumber = normalizeId(attempt)
       return readObject(context, {
         url: `${base}/actions/runs/${id}/attempts/${attemptNumber}`,
+        requestBudget: readOptions(context, options),
         operation: "actions-run-attempt",
       })
     },
@@ -308,8 +369,8 @@ export function createGitHubReader({
   }
 }
 
-async function readObject(context, { url, operation, validate = isObject }) {
-  const result = await readJson(context, { url, operation })
+async function readObject(context, { url, operation, validate = isObject, requestBudget = {} }) {
+  const result = await readJson(context, { url, operation, requestBudget })
   if (result.status !== "PRESENT") {
     return publicResult(result)
   }
@@ -335,9 +396,11 @@ async function readObject(context, { url, operation, validate = isObject }) {
 
 async function readPaginated(
   context,
-  { initialUrl, operation, extract, compare, cursorPagination = false },
+  { initialUrl, operation, extract, compare, cursorPagination = false, strictTotal = false },
 ) {
   const records = []
+  let total = null
+  const ids = new Set()
   const budget = createOperationBudget(context)
   let url = initialUrl
   const seenUrls = new Set([new URL(initialUrl).href])
@@ -364,6 +427,21 @@ async function readPaginated(
       return publicResult(result)
     }
     budget.remainingBytes -= result.bodyBytes
+    if (strictTotal && budget.now() >= budget.deadline)
+      return failure("AMBIGUOUS", operation, result.httpStatus, "TIMEOUT")
+    if (strictTotal) {
+      if (!strictPaginationLinks(result.linkHeader, initialUrl, page + 1, context))
+        return failure("ERROR", operation, result.httpStatus, "AMBIGUOUS_PAGINATION")
+      const count = result.body?.total_count
+      if (
+        !Number.isSafeInteger(count) ||
+        count < 0 ||
+        count > context.maxRecords ||
+        (total !== null && total !== count)
+      )
+        return failure("ERROR", operation, result.httpStatus, "INCOMPLETE_INVENTORY")
+      total = count
+    }
     const pageRecords = extract(result.body)
     if (pageRecords === null) {
       return failure("ERROR", operation, result.httpStatus, "MALFORMED_SCHEMA")
@@ -386,9 +464,27 @@ async function readPaginated(
       if (!isObject(normalized)) {
         return failure("ERROR", operation, result.httpStatus, "MALFORMED_SCHEMA")
       }
+      if (strictTotal) {
+        let id
+        try {
+          id = normalizeId(normalized.id)
+        } catch {
+          return failure("ERROR", operation, result.httpStatus, "MALFORMED_ID")
+        }
+        if (ids.has(id)) return failure("ERROR", operation, result.httpStatus, "DUPLICATE_ID")
+        ids.add(id)
+      }
       records.push(normalized)
     }
+    if (
+      strictTotal &&
+      (records.length > total ||
+        (result.nextUrl !== null && (pageRecords.length === 0 || records.length >= total)))
+    )
+      return failure("ERROR", operation, result.httpStatus, "INCOMPLETE_INVENTORY")
     if (result.nextUrl === null) {
+      if (strictTotal && records.length !== total)
+        return failure("ERROR", operation, result.httpStatus, "INCOMPLETE_INVENTORY")
       records.sort(compare)
       return { ...publicResult(result), value: records }
     }
@@ -403,7 +499,12 @@ async function readPaginated(
       context.repositoryPath,
       context.repositoryId,
     )
-    if (nextUrl === null) {
+    if (
+      nextUrl === null ||
+      (strictTotal &&
+        (new URL(nextUrl).searchParams.get("page") !== String(page + 2) ||
+          new URL(nextUrl).searchParams.get("per_page") !== "100"))
+    ) {
       return failure("ERROR", operation, result.httpStatus, "UNSAFE_PAGINATION_URL")
     }
     if (seenUrls.has(nextUrl)) {
@@ -418,7 +519,12 @@ async function readPaginated(
 async function readJson(context, { url, operation, requestBudget = {} }) {
   const response = await context.http.getJson({
     url,
-    headers: requestHeaders(context.token, JSON_ACCEPT),
+    headers: {
+      ...requestHeaders(context.token, JSON_ACCEPT),
+      ...(context.apiVersion ? { "X-GitHub-Api-Version": context.apiVersion } : {}),
+    },
+    ...(context.signal ? { signal: context.signal } : {}),
+    timeoutMs: context.timeoutMs,
     ...requestBudget,
   })
   const classification = classifyGitHubResponse(response, operation)
@@ -434,6 +540,7 @@ async function readJson(context, { url, operation, requestBudget = {} }) {
     body: response.body,
     bodyBytes: response.bodyBytes,
     nextUrl: link.nextUrl,
+    linkHeader: response.headers.link,
   }
 }
 
@@ -524,7 +631,7 @@ function normalizeSignedDownloadUrl(value) {
   }
 }
 
-function classifyGitHubResponse(result, operation) {
+export function classifyGitHubResponse(result, operation) {
   const httpStatus = result.httpStatus
   // HTTP status is not evidence that its body was read successfully. Preserve
   // timeout/cancellation and deterministic transport failures before classifying
@@ -1013,4 +1120,62 @@ function assertBoundedInteger(value, minimum, maximum, label) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     throw new TypeError(`Invalid ${label}`)
   }
+}
+
+function exactArguments(value, keys) {
+  if (!isObject(value) || Object.keys(value).sort().join(" ") !== keys.sort().join(" "))
+    throw new TypeError("Exact GitHub read arguments required")
+}
+function readOptions(context, options) {
+  if (
+    !isObject(options) ||
+    Object.keys(options).some((key) => !["signal", "timeoutMs"].includes(key))
+  )
+    throw new TypeError("Invalid GitHub read options")
+  const result = {}
+  if (options.timeoutMs !== undefined) {
+    assertBoundedInteger(options.timeoutMs, 1, MAX_HTTP_READ_TIMEOUT, "GitHub read timeout")
+    result.timeoutMs = Math.min(context.timeoutMs, options.timeoutMs)
+  }
+  if (options.signal !== undefined) result.signal = options.signal
+  return result
+}
+const MAX_HTTP_READ_TIMEOUT = 300_000
+function recoveryContext(context, options) {
+  return { ...context, ...readOptions(context, options), apiVersion: "2026-03-10" }
+}
+
+function strictPaginationLinks(header, initialUrl, page, context) {
+  if (header === null) return true
+  const relations = new Map()
+  for (const part of header.split(",")) {
+    const match = /^\s*<([^<>\s]+)>((?:\s*;[^;]*)+)\s*$/u.exec(part)
+    if (!match) return false
+    const parameters = parseLinkParameters(match[2])
+    const next = normalizeNextUrl(
+      match[1],
+      initialUrl,
+      false,
+      context.apiOrigin,
+      context.repositoryPath,
+      context.repositoryId,
+    )
+    if (!parameters?.has("rel") || next === null) return false
+    const url = new URL(next)
+    if (url.searchParams.get("per_page") !== "100") return false
+    const number = Number(url.searchParams.get("page"))
+    if (!Number.isSafeInteger(number) || number < 1) return false
+    for (const relation of parameters.get("rel").split(/\s+/u)) {
+      if (!["next", "prev", "first", "last"].includes(relation) || relations.has(relation))
+        return false
+      relations.set(relation, number)
+    }
+  }
+  return (
+    (!relations.has("next") || relations.get("next") === page + 1) &&
+    (!relations.has("prev") || relations.get("prev") === page - 1) &&
+    (!relations.has("first") || relations.get("first") === 1) &&
+    (!relations.has("last") ||
+      (relations.get("last") >= page && (relations.get("last") === page || relations.has("next"))))
+  )
 }

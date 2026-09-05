@@ -35,7 +35,7 @@
       "sha256": "3f3ca348de38259fad2dd361cc336af47c57e8c3a95908c63604cfed3e62094f"
     },
     "scripts/release/adapters/git.mjs": {
-      "sha256": "6b0faca41ea2fd83aa9f0bb9347fd9a844fefceb0ec093736a3bb507db5e465b"
+      "sha256": "3a6f2029e58da9db08f3d9bdd85cf28892df300c35a563d3694c279918155b08"
     },
     "scripts/release/adapters/github-write-transport.mjs": {
       "sha256": "c9c20a293690eeffa83c6fe59e2a0638653d16c51a249353551990032b8a2955"
@@ -44,7 +44,7 @@
       "sha256": "0c4d42920d9ba00d1a3778eab64e9623a18663fdcf302cdda48d67b01dc3ea84"
     },
     "scripts/release/adapters/github.mjs": {
-      "sha256": "96447fe1f7341b1d1d0e7fe81e37fb6d9d3dbff758889be7583a81d191ef97c7"
+      "sha256": "ac0f03c9393a5ec1ecc906d17a15cdae013bed200980f634cfd1da90078ebedc"
     },
     "scripts/release/adapters/http.mjs": {
       "sha256": "86e03a6cd1536bd57983c27256694bb281d83dfc7efd09181a299b7f351f9510"
@@ -143,7 +143,7 @@
       "sha256": "c09f53400dde37d22e7859cb59cac01f27d23473787b1ecc96a29a8c6fbf19e4"
     },
     "scripts/release/recovery/policy.json": {
-      "sha256": "5c0e12e71794a28183b47985afd5886b934a301c177bdc79fa38a6f9be2cdfc7"
+      "sha256": "b5c392b2464f53809913a9d2c916008d2ca974dd9ba1d6d7359078c43508b21f"
     },
     "scripts/release/recovery/policy.mjs": {
       "sha256": "77e3651e87b6964b84333a6c324087e855035a77987054e4fc73a412ff148ad2"

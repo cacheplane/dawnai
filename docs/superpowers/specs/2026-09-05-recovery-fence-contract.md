@@ -80,11 +80,24 @@ cases: [{context, stage, method, requestId,
 restoration: {workflowCall, finalInventoryCalls}
 ```
 
+`calls` is a canonical proof-witness projection, not the full raw polling/setup
+ledger. The reviewed probe retains that full raw ledger separately and records
+its digest in the rehearsal report. A narrow `projectRecoveryFenceEvidence`
+helper copies exactly the referenced calls by ID in their original order, without
+editing statuses, responses, request bodies or timestamps, then validates the
+witness. Polling observations and setup writes remain in the raw ledger; they
+are not invented into, or required to appear in, the finite witness graph.
+
 References point to unique recorded calls. Use explicit nulls for inapplicable
 run/job references; store no authentication headers. The parser recognizes a
 finite set of repository, content, ref, workflow, run/attempt/job, inventory,
 dispatch/rerun and enable/disable endpoint shapes. Retained response fields must
 be sufficient to derive conclusions; supplied outcome booleans are not proof.
+Validate required proof identities without exact-comparing entire service
+objects: real git/ref and run/attempt responses include additional metadata, and
+inventory/run membership compares the relevant ID/attempt/source/state fields.
+The projector preserves those actual extra fields rather than replacing service
+responses with fabricated minimal objects.
 
 Require exactly 36 cases: contexts `current-default`, `current-tag`, `historical`;
 stages `active-before`, `disabled`, `active-after`; methods `dispatch`, `all`,
@@ -106,6 +119,15 @@ lineage independently of historical tag dispatches.
 Require finite chronology: historical seed dispatch/execution; advanced branch
 and both lightweight tags; twelve positive-before cases; disable/readback;
 twelve denied cases; enable/readback; twelve positive-after cases; final drainage.
+Seed and positive writer execution must be consistent with occurring after the
+tested request starts. Preserve the precision of the raw API timestamp: a
+second-only timestamp represents that second's interval, whereas an explicit
+millisecond timestamp has only millisecond precision. Reject an execution whose
+entire represented interval predates the request. Require an ordered start and
+completion consistent with both recorded intervals, the request's start, and
+the observing GET's finish. This accounts for GitHub's
+second-precision job responses without allowing general clock skew, rewriting
+recorded times, or relaxing direct run/attempt/job correlation.
 
 For disabled cases, accepted requests invalidate the mechanism. A supported
 HTTP denial is insufficient without a settled, unchanged complete run/attempt

@@ -73,6 +73,7 @@ Avoid adding the new protocol to the large version 1 `metadata.mjs`.
 | `schema.mjs` | Canonical wire objects, exact fields, bounds, receipt/marker/finalization parsing |
 | `policy.mjs`, `policy.json` | Required checks, approved verifier closure, environments, bounded retry policy |
 | `authority.mjs` | Invocation CI/SHA checks, git adoption records, ownership and replay-fence admission |
+| `invocation.mjs`, `fence.mjs`, `fence-evidence.mjs` | Trusted read adapters, reviewed legacy-fence contracts, and service-evidence validation |
 | `observe.mjs` | Independently verified candidate/registry/asset facts, version 2 discovery |
 | `metadata.mjs` | Version 2 marker envelope and pure canonical display reconstruction |
 | `model.mjs` | Pure transition planning, terminal completion and display-drift classification |
@@ -555,11 +556,38 @@ Implement Task 10 in two sequential reviewed slices: first the missing read
 adapters and [fence contract](../specs/2026-09-05-recovery-fence-contract.md), then
 runtime/CLI/workflows. This keeps source ownership and review boundaries clear.
 
+- [x] Implement and independently review the production read-adapter slice:
+  repository/run/numeric-job identity, a confined immutable-policy credential,
+  complete all-SHA workflow drainage, and canonical fence contract/evidence
+  validation. Keep policy dormant and contract/evidence directories empty.
+  Spec and quality reviews approved the final implementation. The final focused
+  adapter/policy run passed 162 tests, pin checks passed 18 tests, and the root
+  interval-guard mutation made all three seed/dispatch/rerun causality regressions
+  fail. Recorded timestamp precision is handled through feasible ordered
+  execution intervals, without general clock-skew tolerance. This completes
+  Task 10a only; actual service proof and runtime wiring remain outstanding.
+  The final full controller run passed all 2,973 tests in 149.51 seconds. Scoped
+  Biome (14 files), release inventory, docs completeness, and whitespace checks
+  passed. Final controller evidence is retained at
+  `/tmp/dawn-recovery-task10a-controller-verified.log`; independent final spec and
+  quality runs passed 83 and 142 focused tests respectively.
 - [ ] Implement strict subcommands: `inspect`, `adopt`, `smoke`,
   `reconcile-verification`, `dispatch-audit`, `audit`, `reconcile-audit`,
   `finalize`, `publish`, and `report`. Each accepts bounded named input paths,
   parses canonical objects, and rechecks authority relevant to its effects.
   `inspect --request <path> --output <path>` never constructs a write adapter.
+  Provide a distinct read-only pre-adoption inspection path: the strict writer
+  observer currently requires an already committed adoption record even for
+  `NPM_COMPLETE`. Empty admission must yield useful original-payload evidence
+  and an explicitly unreserved/blocked report, without injecting a proposed
+  record into trusted git reads or authorizing a writer. Proposed records remain
+  outside the active admission path for the later activation review.
+  Keep pre-adoption output in a distinct diagnostic envelope with an
+  `originalPayload` proof section, rather than returning the writer model's
+  `facts`. Share the original artifact/tag/npm verification internally; do not
+  add a permissive mode to `observeRecoveryCandidate`. A proposed intent binds
+  the inspected policy digest and must be regenerated after any admission-policy
+  change; its presence is never evidence of a committed reservation.
 - [ ] Test every wrong/missing input, early failed guard, writer-unavailable phase,
   skipped required job, audit failure, and actual completed observation.
   Test report output even when command execution fails. Sanitize failure detail.
@@ -706,6 +734,13 @@ workflow contract tests. Maintain actual transitive pins in the same change.
 tested admission/fencing/retry operations and references to actual rehearsal
 evidence. Do not add a production adoption record in this commit.
 
+- [ ] Preserve Vercel deployment-failure diagnostics before the next real CI run.
+  `runNativeDeploymentKind` writes `source-deploy-failure.log` and
+  `prebuilt-deploy-failure.log`, but `NATIVE_UPLOAD_ARTIFACT_NAMES` currently
+  omits both. Add the two already-redacted diagnostics to the bounded upload
+  allowlist and exercise writer-to-upload behavior for both kinds, retaining
+  secret checks and filesystem guards. This fixes lost diagnostic evidence;
+  it does not establish the underlying deployment failure's cause.
 - [ ] Correct the independently reproduced PID-readiness fixture defect before
   final gates: wait for a validated descendant PID, retain it for guarded
   cleanup observation, and add a barrier-based empty-marker regression. Keep
