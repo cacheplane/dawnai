@@ -430,6 +430,65 @@ that integration must expose independently verified finalization facts to the
 finalizer even when the unpublished draft marker is missing or corrupt. Task 4
 preserves ownership and blocks that case; no repair writer is implemented here.
 
+## Bounded writer and adoption (Task 5)
+
+The recovery writer has three effects: upload a permitted recovery asset to the
+identified release, update that draft's canonical recovery metadata, and publish
+that same draft after final verification. Adoption archives the exact legacy
+body and stores npm and authority proofs inside the attempt-qualified adoption
+receipt. It re-downloads these assets before writing revision 1. Original assets
+remain the independently verified base inventory.
+
+Each mutation compares current release metadata, assets, and annotated tag,
+then captures fresh authority immediately before the request. An uncertain
+response stops the invocation; a later invocation must observe the result.
+The comparison is cooperative under the verified fence, not an atomic GitHub
+compare-and-swap. The phase deadline spans the writer instance. Unsettled
+write-transport operations and concurrent transactions exclude another transaction
+sharing the same trusted transport function. A late read from an expired
+transaction cannot resume into a mutation; independent read-only observation
+may start again after that transaction ends.
+
+Publication sends `{ tag_name: candidate.tag, draft: false }` to the same release
+after verifying that the annotated tag already exists, then verifies its original
+object and commit again. GitHub documents this tag association and additional
+workflow-file authorization rules for some resolved targets. Task 12 must test
+those rules with the intended credential in an authorized disposable repository;
+a local fixture cannot establish permission sufficiency. See GitHub's
+[update-release API](https://docs.github.com/en/rest/releases/releases?apiVersion=2022-11-28#update-a-release).
+
+Current new uploads are limited to the legacy archive, adoption receipt, and an
+independently validated fixed finalization receipt. Later lane, verification-set,
+audit, and run-result uploads and intermediate marker transitions fail closed
+until their controllers supply the corresponding admission checks. An observed
+finalization is validated even when the marker lags, and freezes new uploads.
+
+Root independently passed all 178 focused writer, adoption, observer, model, and
+legacy-writer tests. In an isolated copy, removing the same-name asset byte check
+made its regression fail with a missing expected rejection; the repository was
+not weakened (`/tmp/dawn-recovery-task5-root-mutation.log`). The specification
+review found a bypass when a legacy marker coexisted with a finalization asset:
+neither partial-adoption nor finalization validation ran. The correction rejects
+this contradictory state, including equal-byte reuse, while preserving published
+finalization verification after display edits. Three regressions reproduced the
+bypass before the correction. Both independent reviews passed, each verifying
+318 affected tests including workflow contracts. The quality review also used
+deterministic probes for unsettled cancellation across writer recreation and
+late observations after deadline expiry, and confirmed that the extracted
+transport preserves the legacy implementation. Task 12 will retain those two
+additional probes as permanent fault-rehearsal cases.
+
+The definitive full-controller run on the reviewed files passed all 2,713 tests
+with zero failures in approximately 162 seconds
+(`/tmp/dawn-recovery-task5-controller-verified.log`). Scoped Biome passed for all
+12 changed source/test/data files; release inventory, docs, and diff checks passed.
+The earlier build, typecheck, package, and harness results remain recorded below;
+these lanes were not repeated for this repository-script slice. The unresolved
+source-suite failure still prevents a full-CI-green claim.
+
+Policy activation, the live fence experiment, workflow integration, production
+adoption, and the later smoke/audit/finalization controllers remain pending.
+
 ## Implementation validation
 
 - Node 24.20.0; Corepack pnpm 10.33.0; frozen install passed.

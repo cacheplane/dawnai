@@ -354,3 +354,20 @@ test("canonical published recovery metadata is terminal without display drift", 
   assert.equal(result.facts.publication.metadata, "matching")
   assert.equal(result.displayDrift, false)
 })
+
+for (const omitArchive of [false, true])
+  test(`legacy NPM_COMPLETE with fixed finalization blocks even with ${omitArchive ? "invalid" : "valid"} final inventory`, async () => {
+    const r = await recoveryRemote()
+    const finalization = omitArchive
+      ? {
+          ...r.finalization,
+          assets: r.finalization.assets.filter((a) => a.assetName !== r.adoption.archive.assetName),
+        }
+      : r.finalization
+    const finalRef = r.add("recovery-v2-finalization.json", finalization)
+    r.setAssets([...r.allAssets.filter((a) => a.assetName !== finalRef.assetName), finalRef])
+    const result = await observe(r.args)
+    assert.equal(result.outcome, "blocked")
+    assert.equal(result.terminal, false)
+    assert.match(result.errors.join("; "), /legacy.*finalization|finalization.*legacy/)
+  })

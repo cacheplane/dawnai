@@ -37,8 +37,11 @@
     "scripts/release/adapters/git.mjs": {
       "sha256": "6b0faca41ea2fd83aa9f0bb9347fd9a844fefceb0ec093736a3bb507db5e465b"
     },
+    "scripts/release/adapters/github-write-transport.mjs": {
+      "sha256": "c9c20a293690eeffa83c6fe59e2a0638653d16c51a249353551990032b8a2955"
+    },
     "scripts/release/adapters/github-write.mjs": {
-      "sha256": "fbb45e2c728a67da52ea168ed2f3aab67a67165642bc774b474500d8d2c80790"
+      "sha256": "0c4d42920d9ba00d1a3778eab64e9623a18663fdcf302cdda48d67b01dc3ea84"
     },
     "scripts/release/adapters/github.mjs": {
       "sha256": "96447fe1f7341b1d1d0e7fe81e37fb6d9d3dbff758889be7583a81d191ef97c7"
@@ -128,10 +131,10 @@
       "sha256": "8464dfe3d7e4f93d9c0a028a9bf48cc8d17b5ba8d8683c86c72c7c05fcf7f76c"
     },
     "scripts/release/recovery/model.mjs": {
-      "sha256": "fc50d723c868bbc4a0dc5c43c92186073f9738fd822b347927140733cd6dd81e"
+      "sha256": "019831f962bd9ae306b5a8822cb817927b78ecbe783839c8300af9eb34e6655c"
     },
     "scripts/release/recovery/observe.mjs": {
-      "sha256": "b48b762287c621d7473049ffd729e791431c38dcaf8ca15526fa972396e841df"
+      "sha256": "239a931c3af70707d20809467b3b2a09f633f7b5ce27223b595667ded5e9938e"
     },
     "scripts/release/recovery/policy.json": {
       "sha256": "bea768b322456d08e7bbadd606676682a5f303158ec413e830dcc7a791bc476f"

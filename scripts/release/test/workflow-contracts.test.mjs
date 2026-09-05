@@ -94,8 +94,11 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // to those readers, so the declaration fails as a stale pin if they stop naming it.
 // Repinned for GitHub transport-error precedence: body timeouts and deterministic read
 // failures retain their cause before HTTP status can classify them as retryable responses.
+// Repinned for recovery Task 5: shared bounded write transport, strict partial adoption
+// observations, and finalization proof validation even before the readiness marker. Legacy
+// NPM_COMPLETE plus finalization is an invalid mixed state, never a resumable adoption.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "033a170ad5abb70d7150df94e6424265870b946c27ae9b45f6b7b0e6e56f625c"
+  "7088b766d3fc92f05e39f653a051d81ef197b17926171a5d282e1d413a6a7e5e"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

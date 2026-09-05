@@ -320,27 +320,45 @@ no adoption record or production fence. See the runbook for validation details.
 ## Task 5: Implement the bounded version 2 writer and adoption
 
 **Files:** Create `recovery/writer.mjs`, `recovery/adopt.mjs`,
-`test/recovery-writer.test.mjs`, `test/recovery-adopt.test.mjs`.
-Use `adapters/github.mjs` reads and existing normalization/HTTP transport.
+`test/recovery-writer.test.mjs`, `test/recovery-adopt.test.mjs`, and
+`test/support/recovery-write-fixture.mjs`. Extract the existing HTTP transport to
+`adapters/github-write-transport.mjs`; retain the legacy writer interface.
+Update `recovery/observe.mjs` for persisted partial adoption and
+`recovery/model.mjs` to validate finalization when the marker lags. Refresh the
+reachable-source pins and aggregate contract hash. Use `adapters/github.mjs`
+reads and existing normalization/HTTP transport.
 
-- [ ] Write failing transport tests that enumerate the only allowed effects:
+- [x] Write failing transport tests that enumerate the only allowed effects:
   upload a permitted recovery asset to the exact Release ID, update that draft's
   canonical version 2 body, and publish that same draft after final verification.
-  Forbid draft creation/deletion, tag changes, arbitrary URLs, npm calls, and
+  Publication explicitly associates the draft with the already verified candidate
+  tag through `{ tag_name: candidate.tag, draft: false }`. Forbid draft
+  creation/deletion, Git ref creation/movement, arbitrary URLs, npm calls, and
   overwriting differing bytes. Do not broaden the legacy writer.
-- [ ] Run `node --test scripts/release/test/recovery-writer.test.mjs scripts/release/test/recovery-adopt.test.mjs`.
-- [ ] Implement read-compare-write-read under the verified fence; validate
+- [x] Run `node --test scripts/release/test/recovery-writer.test.mjs scripts/release/test/recovery-adopt.test.mjs`.
+- [x] Implement read-compare-write-read under the verified fence; validate
   argument identity and phase before any write. Treat uncertain responses as
   re-observation, never proof that the write did not happen.
-- [ ] Adoption validates exact legacy `NPM_COMPLETE`, archives its raw body,
-  uploads attempt-qualified npm/authority/adoption receipts, re-downloads them,
-  then writes revision 1 `RECOVERY_ADOPTED`. Derive base inventory from the
-  verified original record; do not modify original assets.
-- [ ] Interrupt after each upload and body update. Resume with same and changed
-  controller/run identities; select existing canonical timestamps when replaying
+- [x] Adoption validates exact legacy `NPM_COMPLETE`, archives its raw body,
+  uploads an attempt-qualified adoption receipt containing the npm and authority
+  proofs, re-downloads the exact assets, then writes revision 1 `RECOVERY_ADOPTED`.
+  The existing adoption wire embeds these proofs; no separate untyped npm or
+  authority receipt is introduced. Derive base inventory from the verified
+  original record; do not modify original assets.
+- [x] Interrupt after each upload and body update. Resume with same and changed
+  controller/run identities; reuse existing canonical receipt bytes when replaying
   an attempt, retain valid earlier attempts, reject foreign recovery assets.
-- [ ] Prove a fence lost before mutation, changed legacy body, or incomplete npm
+  The adoption schema has no timestamp field.
+- [x] Prove a fence lost before mutation, changed legacy body, or incomplete npm
   inventory produces zero effects. Restore mutation tests and commit.
+
+Task 5 is implemented as dormant code. Both independent reviews passed after
+closing the legacy-marker/finalization validation bypass. Each reviewer verified
+318 affected tests and workflow contracts. The final full-controller run passed
+all 2,713 tests with zero failures; scoped Biome (12 files), release inventory,
+docs, and diff checks passed. Root also verified an isolated mutation of the
+existing-asset byte guard. No policy activation, workflow integration, live fence
+experiment, production adoption, or production publication occurred.
 
 ## Task 6: Reuse actual probes with version 2 receipts
 
@@ -531,7 +549,11 @@ Update `test:release-fault-harness` to include the new local rehearsal explicitl
 - [ ] Run `node --test --test-concurrency=1 scripts/release/test/recovery-rehearsal.test.mjs`.
   Expected: each fault resumes with unchanged payload bytes or an intentional,
   specifically classified conflict. Require zero duplicate drafts or republish
-  attempts, and exact retained evidence inventory.
+  attempts, and exact retained evidence inventory. Retain deterministic regressions
+  for cancellation that remains unsettled after a write timeout across writer
+  recreation, and a late observation resolving after the phase deadline; neither
+  may permit a late or overlapping mutation. Task 5 quality review verified
+  these cases with independent probes.
 - [ ] Prepare a GitHub contract harness with an explicit disposable repository
   allowlist, fixture-owned ID ledger, and cleanup limited to those resources.
   Require `DAWN_TEST_RECOVERY_GITHUB=1` and a separately supplied authorized test
@@ -542,6 +564,10 @@ Update `test:release-fault-harness` to include the new local rehearsal explicitl
   job skip behavior, and failed-job-only reruns. Use the production job topology
   and validate any fixture command substitutions explicitly. These are GitHub
   API/workflow contracts, not proof that synthetic packages have npm provenance.
+  Rehearse publication against an existing annotated tag using the intended
+  credential, including GitHub workflow-file authorization rules when the
+  resolved target differs from the default branch. Do not infer credential
+  sufficiency from a local fixture or broaden permissions before this rehearsal.
 - [ ] Specifically disable the disposable legacy workflow and test fresh
   dispatch, whole-run rerun, and job-only rerun. A proposed operational fence is
   accepted only if observed service behavior prevents all unsafe writers and

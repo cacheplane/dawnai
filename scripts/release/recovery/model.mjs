@@ -540,6 +540,6 @@ export function verifyRecoveryObservedPhase(input) {
   if (index >= 1) verificationProof(facts)
   if (index >= 2) dispatchProof(facts)
   if (index >= 3) auditProof(facts)
-  if (index >= 4) finalProof(facts, facts.finalization)
+  if (index >= 4 || facts.finalization) finalProof(facts, facts.finalization)
   return marker.phase
 }

@@ -838,6 +838,10 @@ export async function observeRecoveryCandidate(input) {
           "reserved legacy marker identity differs",
         )
         phase = "NPM_COMPLETE"
+        requireThat(
+          finalization === null,
+          "legacy NPM_COMPLETE cannot contain recovery finalization",
+        )
         const path = intentPath ?? `scripts/release/recovery-adoptions/${c.version}.json`
         requireThat(
           /^scripts\/release\/recovery-adoptions\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.json$/u.test(path),
@@ -862,6 +866,72 @@ export async function observeRecoveryCandidate(input) {
       manifestPackages: npmEvidence.packages.map((p) => p.name),
       npmEvidence,
       baseAssets: base.baseAssets,
+      release,
+      assets: refs,
+      tag,
+    }
+    if (!marker && !finalization) {
+      const archiveName = `recovery-v2-legacy-${c.version}-${hash(Buffer.from(release.body))}.txt`
+      const recovery = refs.filter((ref) => ref.assetName.startsWith("recovery-v2-"))
+      const archive = recovery.find((ref) => ref.assetName === archiveName) ?? null
+      if (archive)
+        requireThat(
+          bytes.get(archiveName).equals(Buffer.from(release.body)),
+          "partial archive differs",
+        )
+      const attempts = []
+      for (const ref of recovery) {
+        if (ref === archive) continue
+        const receipt = parseRecovery(bytes.get(ref.assetName), {
+          kind: "recovery-adoption",
+          candidate: c,
+        })
+        requireThat(
+          ref.assetName ===
+            `recovery-v2-adoption-${receipt.executor.controllerSha}-${receipt.executor.runId}-${receipt.executor.runAttempt}-${receipt.executor.jobId}.json`,
+          "partial adoption attempt name differs",
+        )
+        requireThat(archive !== null, "partial adoption archive missing")
+        same(receipt.archive, archive, "partial adoption archive differs")
+        const proof = await recoveryChain(
+          context,
+          c,
+          refs,
+          bytes,
+          base,
+          npmEvidence,
+          {
+            schemaVersion: 2,
+            kind: "recovery-marker",
+            candidate: c,
+            policySha256: receipt.policySha256,
+            revision: 1,
+            phase: "RECOVERY_ADOPTED",
+            adoption: ref,
+            verificationSet: null,
+            audit: null,
+            finalization: null,
+          },
+          null,
+          controllerRef,
+        )
+        verifyRecoveryObservedPhase(proof)
+        for (const retained of receipt.retainedAttempts)
+          requireThat(
+            retained.assetName !== ref.assetName &&
+              recovery.some(
+                (r) => r.assetName === retained.assetName && r.assetName !== archiveName,
+              ),
+            "partial retained attempt differs",
+          )
+        attempts.push({ ref, receipt })
+      }
+      facts.legacy = {
+        phase: "NPM_COMPLETE",
+        candidate: c,
+        bodySha256: hash(Buffer.from(release.body)),
+      }
+      facts.partialAdoption = { archive, attempts }
     }
     if (marker || finalization)
       facts = {
