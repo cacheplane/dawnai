@@ -614,7 +614,8 @@ async function inspectManagedReleases({
       release,
       assets,
       tagIdentity,
-      github,
+      // The final terminal boundary must revalidate assets with the service.
+      github: originalGithub,
       verifyTerminalAbandonment,
     })
     if (abandonmentState !== null) {

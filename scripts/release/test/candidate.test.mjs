@@ -819,6 +819,60 @@ test("scheduled recovery keeps both abandonment runner-loss boundaries nontermin
   }
 })
 
+test("terminal abandonment revalidates assets through the original reader", async (t) => {
+  for (const mode of ["stable", "replaced", "deleted", "unavailable", "rejected"]) {
+    await t.test(mode, async () => {
+      const repository = repositoryFixture([
+        commit(BASE_SHA, "0.8.20"),
+        commit(CUTOVER_SHA, "0.8.20", { parent: BASE_SHA, marker: true }),
+        commit(SHA_21, "0.8.21", { parent: CUTOVER_SHA, marker: true }),
+        commit(SHA_22, "0.8.22", { parent: SHA_21, marker: true }),
+      ])
+      const abandoned = managedRelease(21, "0.8.21", SHA_21, {
+        abandoned: true,
+        releaseRecord: false,
+      })
+      const github = githubFixture({ tags: [tagRef("0.8.21", SHA_21)], releases: [abandoned] })
+      const listAssets = github.listReleaseAssets
+      let targetReads = 0
+      github.listReleaseAssets = async (args) => {
+        const response = await listAssets(args)
+        if (args.releaseId !== abandoned.id) return response
+        targetReads++
+        if (targetReads < 2 || mode === "stable") return response
+        if (mode === "rejected") throw new Error("fresh terminal assets unavailable")
+        if (mode === "unavailable") return { status: "UNKNOWN" }
+        return present(
+          "release-assets",
+          mode === "deleted"
+            ? []
+            : response.value.map((asset) => ({
+                ...asset,
+                id: asset.id + 1,
+              })),
+        )
+      }
+      const discover = () =>
+        discoverScheduledCandidate({
+          terminalRecordRef: RECORD_REF,
+          inventory: repository.inventory,
+          git: repository.git,
+          github,
+          marker: ACTIVE_MARKER,
+        })
+      if (mode === "stable") {
+        assert.deepEqual(
+          await discover(),
+          selectedCandidate("0.8.22", SHA_22, "CANDIDATE_VALIDATED"),
+        )
+      } else {
+        await assert.rejects(discover(), /assets.*(?:changed|unavailable)|final assets/iu)
+      }
+      assert.equal(targetReads, 2, "final terminal verification must reach the original reader")
+    })
+  }
+})
+
 test("terminal abandonment requires exact canonical bytes, marker digest, metadata, and namespace", async () => {
   const cases = [
     [
