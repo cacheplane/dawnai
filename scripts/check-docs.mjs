@@ -3222,6 +3222,14 @@ const expectedDawnConfigSchemaPaths = [
   "sandbox.security.runAsNonRoot",
   "sandbox.security.runAsNonRoot.gid",
   "sandbox.security.runAsNonRoot.uid",
+  "server",
+  "server.cors",
+  "server.cors.credentials",
+  "server.cors.exposeHeaders",
+  "server.cors.headers",
+  "server.cors.maxAgeSeconds",
+  "server.cors.methods",
+  "server.cors.origins",
   "summarization",
   "summarization.enabled",
   "summarization.keepRecentTurns",
@@ -3240,7 +3248,7 @@ const expectedDawnConfigSchemaPaths = [
 ].sort()
 
 const dawnConfigSchemaPaths = collectConfigSchemaPaths({
-  expandInterfaces: ["DawnConfig", "SandboxConfig", "SandboxSecurityPolicy"],
+  expandInterfaces: ["CorsConfig", "DawnConfig", "SandboxConfig", "SandboxSecurityPolicy"],
   rootInterface: "DawnConfig",
   sources: [
     readFileSync(resolve(repoRoot, "packages/core/src/types.ts"), "utf8"),

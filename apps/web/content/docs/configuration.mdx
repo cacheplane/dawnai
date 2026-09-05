@@ -61,6 +61,14 @@ export default config({
 
   build: { targets: ["node", "langsmith"] },
 
+  // Cross-origin access. Omit and the runtime sends no `Access-Control-*`
+  // header at all, so a browser on another origin cannot call it — the
+  // default, because opening a server to other origins is a deployment
+  // decision. `localhost` and `127.0.0.1` are different origins to a browser.
+  server: {
+    cors: { origins: ["https://app.example.com"] },
+  },
+
   // sandbox: {
   //   provider: dockerSandbox({ image: "node:24-slim" }),
   //   network: { mode: "allow", denylist: ["169.254.169.254"] },
@@ -384,7 +392,7 @@ Retrieval](/docs/memory/retrieval) for ranking, [Episodes](/docs/memory/episodes
 for run history, and [Distillation](/docs/memory/distillation) for explicit
 consolidation and reflection.
 
-### `server.cors`
+### `server`
 
 ```ts
 server?: {
