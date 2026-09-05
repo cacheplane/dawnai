@@ -57,9 +57,9 @@
       "recordDigest": "d0e6f710b402ab091c2a142b9b3de8156039f4fac117eed878af7e1ff153c130"
     },
     "/docs/api/core": {
-      "lastModified": "2026-08-12T13:00:08.000Z",
-      "sourceDigest": "b7b195ee1789e29067a9f65402dd9d2c11485b9f918b76b850d9c5df02306be5",
-      "recordDigest": "31d090f8881510eecd52cdbe08f8444c334f36295136af411f804e35ccf12aac"
+      "lastModified": "2026-09-05T04:14:24.132Z",
+      "sourceDigest": "b8a7659186ad4161bd6c175d537f55f45182f7a77db9b3b83bb71a293cc1aca1",
+      "recordDigest": "9fe64df85de747f01005260a0d23a3ec0e55b1f92a311b37811ede85e92e305b"
     },
     "/docs/api/evals": {
       "lastModified": "2026-08-12T12:57:08.000Z",
@@ -137,9 +137,9 @@
       "recordDigest": "ed5d6b70b61f6e75bbbb9c465757131740fe4abdf4b3745b1bdd22649ee8fb03"
     },
     "/docs/configuration": {
-      "lastModified": "2026-08-11T18:35:09.000Z",
-      "sourceDigest": "7533f89c2d1929a543b80b88f39272ee1d37d9700ed140887c4a9bd47bf4e556",
-      "recordDigest": "fa62a074676d2e031248f290497fb51ea55a55a681661aee5a8ddef65ebf8045"
+      "lastModified": "2026-09-05T04:14:24.132Z",
+      "sourceDigest": "80284badafaf462fd6bc72bd39d31fb095555492ad4b265a13eb97c89b7768f4",
+      "recordDigest": "b8fc46792dbd6da810ab7b2d18ebc1cf01a9d4d4d7e3b16b4402b58abbf1249b"
     },
     "/docs/context-management": {
       "lastModified": "2026-08-11T18:35:09.000Z",
@@ -307,9 +307,9 @@
       "recordDigest": "6cd9fb8b4b1a8a78cc48ab11101a3bd5ca6eb946d0e3f4404f1112ea44c5506b"
     },
     "/docs/recipes/research-web-ui": {
-      "lastModified": "2026-08-26T16:03:21.000Z",
-      "sourceDigest": "9aaa4da9f64bc8f720d492478356e59c11acb4b6db4be64384973a036acaa180",
-      "recordDigest": "6427d6e8bc0ad2cbd3568a406beb5b325da7742dd992592d71afbbe2dd79a7ab"
+      "lastModified": "2026-09-05T04:14:24.132Z",
+      "sourceDigest": "8b8babfbfac63a63f3c8ec9336305cfd7eb4ca087a21c8a14185633b103efaeb",
+      "recordDigest": "e676ee59690704cd870a936d026bfadf4daf9e3dc522b9131e5c955e0971f451"
     },
     "/docs/recipes/retry-flaky-tools": {
       "lastModified": "2026-08-12T13:00:08.000Z",
