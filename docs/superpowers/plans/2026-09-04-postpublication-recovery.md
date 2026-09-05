@@ -891,3 +891,20 @@ The bounded read-only Ubuntu job is wired. The negative-host regression was
 verified failing against the former skip behavior and passing after the fix.
 A macOS opt-out is reported as skipped, never eligible-runner evidence. Actual
 Linux CI and the complete final implementation gates remain pending.
+
+### Verified checkpoint and remaining service execution
+
+The full local validation at `0464c514` passed (5,664 source tests; 3,171 controller
+tests; pack/tooling and all three harness lanes). The separate fault harness
+passed 116 tests. CI run `33962137902` concluded success, including Vercel and
+CopilotKit. Read-only inspection verified 45 assets and 21 packages; no production
+write occurred. The PR reviewer is blocked by service-account credit, independently
+of the green CI run.
+
+The publication service probe and the 13-job topology fixture are now prepared
+locally with explicit additional opt-in and disposable credential requirements.
+Eleven publication-driver regressions and one topology contract test pass. Actual
+service execution remains unrun: no authorized repository has been supplied, the
+publication credential experiment must use the intended workflow token, and the
+platform-owned workflow fence representation still needs resolution. Completion
+of the implementation checkpoint does not complete the live-recovery objective.

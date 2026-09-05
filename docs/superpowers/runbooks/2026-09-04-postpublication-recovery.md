@@ -1039,3 +1039,65 @@ on Ubuntu 24.04 with pinned checkout/Node actions. An opted-in ineligible host
 fails, preventing a skipped check from being mistaken for containment proof.
 The local macOS integration remains explicitly skipped; actual Linux evidence
 must come from CI. No production activation or release writes were performed.
+
+## Verified implementation checkpoint and publication service preparation
+
+Commit `0464c51430216d10748d6e9dfe1f489b9dc72f19` passed the complete local
+`pnpm ci:validate` lane: 5,664 source tests (218 skips), 3,171 controller tests,
+packing, TypeScript tooling and all three harness lanes. The separately invoked
+fault harness passed 116 tests. Logs: `/tmp/dawn-task13-ci-0464c514.log` and
+`/tmp/dawn-task13-fault-0464c514.log`.
+[CI run 33962137902](https://github.com/cacheplane/dawnai/actions/runs/33962137902)
+concluded success, including real Vercel, CopilotKit, Kubernetes and the new
+Ubuntu containment check (one pass, zero skips). PR #572 remains draft. Its
+separate automated reviewer failed before review due to insufficient service
+account credit; that failure was not bypassed. A new local reviewer was also
+unavailable because the app rejected the request at its agent thread limit.
+
+Read-only inspection at that controller commit independently verified the 45
+original assets and all 21 production packages using npm 11.17.0 in 32.762 seconds.
+The candidate remained unreserved at NPM_COMPLETE; the policy remained DORMANT.
+Evidence lives under
+`/var/folders/_b/0t5_pyt94n7dlqkv1gmt29300000gn/T/dawn-recovery-final-read-lqy8dta0/evidence/`.
+Its inspection SHA256 is
+`f9bc7073b060b6221f64c65fcd42346870a79b1aafd66960b8eec87d7abc4036`.
+The temporary verifier installation and frozen source were removed after the
+inspection; evidence and the diagnostic-only proposal remain. Regenerate the
+proposal at the reviewed activation commit.
+
+A separately gated `recovery-publication-github.integration.mjs` now prepares
+actual publication-credential testing. It requires BOTH the original disposable
+repository authorization variables and `DAWN_TEST_RECOVERY_PUBLICATION_GITHUB=1`,
+an explicit `DAWN_RECOVERY_PUBLICATION_TOKEN`, separate
+`DAWN_RECOVERY_TEST_POLICY_TOKEN`, `DAWN_RECOVERY_TEST_SOURCE_SHA`, and credential
+kind `DAWN_RECOVERY_TEST_CREDENTIAL_KIND=operator|workflow`. It refuses production
+name/ID aliases, private test repositories, disabled immutable-release policy,
+and a source equal to the current default branch. The two revisions must have
+different copies of the harmless fence workflow. It never enables policy itself.
+
+The probe creates a UUID-named annotated tag and prerelease, checks anonymous
+draft invisibility and authenticated visibility, uploads one exact small asset,
+reads it through the production download adapter, publishes against the existing
+non-default annotated tag, and verifies immutable publication, public visibility
+and unchanged payload/tag/default-branch identity. The tag and immutable
+prerelease are deliberately retained and listed in the evidence ledger. This
+is an additional authorized experiment beyond harmless workflow fencing.
+It has not been run against GitHub.
+
+`DAWN_RECOVERY_TEST_DISCARD_RESPONSE=upload|publication` can deliberately discard
+one already-recorded successful response before the driver receives it. The
+probe must recover through exact readback without repeating the mutation. This
+is labelled injected client response loss, not represented as an observed GitHub
+transport failure. Unknown draft creation stops without an inferred release ID
+or a second draft. Operator credentials do not establish workflow-token authority.
+
+The optional `test/fixtures/recovery-topology-workflow.yml` keeps all 13 production
+job IDs, dependency lists, conditions and admission outputs. Its fixed harmless
+commands support `full`, `published-noop`, `publish-only` and a selected first-attempt
+job failure for real skip/rerun checks. A local contract test detects topology drift.
+By default it publishes nothing. Only its optional publication step receives the
+disposable repository's actual workflow token; a separately reviewed controller
+SHA selects probe source, `RECOVERY_AUTHORIZED_REPOSITORY` selects the repository,
+and `RECOVERY_POLICY_READ_TOKEN` supplies the separate policy-read credential.
+All other jobs have no permissions. This fixture is not installed in production
+or a substitute for real five-lane recovery evidence.
