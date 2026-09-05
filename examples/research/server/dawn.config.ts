@@ -35,6 +35,21 @@ export default config({
   // Persistence (SQLite checkpointer + Agent Protocol) is on by default — no
   // config needed. Threads survive a restart.
 
+  // --- Capability seam (documented, inactive): cross-origin access ---
+  // Dawn sends no `Access-Control-*` header unless this block exists, and
+  // `web/` deliberately does not need it: its browser client reaches Dawn
+  // through a same-origin Next proxy (`web/app/api/dawn/[...path]/route.ts`),
+  // so Dawn's address never leaves the server.
+  //
+  // Uncomment when a browser talks to Dawn DIRECTLY — a client on another
+  // origin, or one that has dropped the proxy. `localhost` and `127.0.0.1` are
+  // different origins to a browser, so list both if your dev client may be
+  // opened at either. See /docs/configuration#servercors.
+  //
+  // server: {
+  //   cors: { origins: ["http://localhost:3010", "http://127.0.0.1:3010"] },
+  // },
+
   // --- Capability seam: Docker execution sandbox ---
   // Default runs use the local workspace so the bundled corpus works without
   // Docker. Run `npm run test:sandbox:docker` to dogfood the same scaffold with

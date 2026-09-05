@@ -112,6 +112,7 @@ export type { RouteStateFields } from "./typegen/render-state-types.js"
 export { renderStateTypes } from "./typegen/render-state-types.js"
 export { renderToolTypes } from "./typegen/render-tool-types.js"
 export type {
+  CorsConfig,
   DawnConfig,
   DiscoveredDawnApp,
   DiscoverRoutesOptions,
