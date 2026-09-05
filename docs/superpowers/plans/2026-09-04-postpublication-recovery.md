@@ -149,35 +149,42 @@ read-only report in `docs/superpowers/runbooks/2026-09-04-postpublication-recove
 Create the minimal fence experiment in
 `scripts/release/test/recovery-github.integration.mjs`; Task 12 extends it.
 
-- [ ] Run `pnpm install --frozen-lockfile`, `pnpm build`, then
+- [x] Run `pnpm install --frozen-lockfile`, `pnpm build`, then
   `pnpm test:release-controller`. Record actual baseline failures separately;
   investigate relevant failures before changing behavior. Inspect open #568 for
   the known process-tree test issue; do not assume it has merged.
-- [ ] Extract the exact candidate's workflow and full imported executable closure
+- [x] Extract the exact candidate's workflow and full imported executable closure
   through `git show` into a temporary fixture, preserving original imports. Never
   execute a production entrypoint with live write credentials during this test.
-- [ ] Create a recording HTTP transport that accepts real GitHub request shapes,
+  Implementation packages the extracted closure as a pinned archive so shallow
+  CI checkouts can run without Git history or network access.
+- [x] Create a recording HTTP transport that accepts real GitHub request shapes,
   models the opaque-tag draft and exact annotated tag, and records every attempted
   POST/PATCH/upload. Exercise escrow, npm reconciliation, smoke reconciliation,
   audit recording/correlation, and release publication with historical inputs.
-- [ ] First demonstrate that the unsafe assumption is false: an assertion of zero
+- [x] First demonstrate that the unsafe assumption is false: an assertion of zero
   legacy escrow effects must fail on the frozen implementation with a version 2
   opaque-tag draft. Preserve the real attempted request as fixture evidence.
-- [ ] Change the regression to require classification `legacy-fence-required`
+- [x] Change the regression to require classification `legacy-fence-required`
   when any writer can mutate. Do not alter the frozen implementation. Enumerate
   which historical run/job output paths make that writer reachable. Classification
   here is a recording-fixture report; production admission consumes and verifies
   the corresponding authority evidence in Task 3.
-- [ ] Run `node --test scripts/release/test/recovery-legacy-fence.test.mjs`.
+- [x] Run `node --test scripts/release/test/recovery-legacy-fence.test.mjs`.
   Expected: the hazard is reproduced and admission denies it, never a fake claim
   that all old code rejects version 2.
-- [ ] Commit these tests and the admission finding. Activation cannot proceed
+- [x] Commit these tests and the admission finding. Activation cannot proceed
   until Task 12 has validated a real fence for any unsafe replay path.
-- [ ] Prepare the minimal disposable workflow-disable/rerun experiment using
-  Task 12's repository allowlist and authorization constraints. Run it as soon
-  as a disposable repository is authorized, preferably before broad controller
-  implementation. A negative result triggers ownership-design revision then;
+- [x] Prepare the minimal disposable workflow-disable/rerun experiment using
+  Task 12's repository allowlist and authorization constraints.
+- [ ] Run the prepared experiment as soon as a disposable repository is
+  authorized, preferably before broad controller implementation. A negative
+  result triggers ownership-design revision then;
   do not defer a known feasibility decision until the entire pipeline is built.
+
+Local findings and limits: [feasibility report](../runbooks/2026-09-04-postpublication-recovery.md).
+The local regression slice is implemented; the live feasibility requirement and
+production admission remain unresolved. No production recovery code is enabled.
 
 ## Task 2: Add strict schemas and a pure transition model
 
