@@ -690,3 +690,99 @@ for (const body of ["", "corrupt <!-- DAWN_RELEASE_CONTROLLER_MARKER\n{"])
     assert.equal(observed.facts.release.body, body)
     assert.deepEqual(observed.facts.finalization.ref, r.finalRef)
   })
+
+async function largeLegacyReleaseHistory() {
+  const r = await recoveryRemote()
+  r.args.git.listTree = async () => ""
+  const records = Array.from({ length: 476 }, (_, index) => ({
+    id: 10000 + index,
+    draft: false,
+    tag_name: `historical-package-${index}`,
+    name: `Historical package ${index}`,
+    body: "Historical release notes. ".repeat(225),
+  }))
+  records.push(r.release)
+  const readAssets = r.args.github.listReleaseAssets
+  r.args.github.listReleases = async () => ({ status: "PRESENT", value: records })
+  r.args.github.listReleaseAssets = async (args) =>
+    String(args.releaseId) === r.c.releaseId ? readAssets(args) : { status: "PRESENT", value: [] }
+  assert.ok(Buffer.byteLength(JSON.stringify(records)) > 2 * 1024 * 1024)
+  return { r, records }
+}
+
+test("production resolver preserves legacy selection with 477 complete release records above 1 MiB", async () => {
+  const { r, records } = await largeLegacyReleaseHistory()
+  assert.equal(
+    await routing.routeRecoveryCandidate({
+      ...r.args,
+      candidate: legacy(r),
+      terminalRecordRef: r.e.controllerSha,
+      releaseRecords: records,
+    }),
+    null,
+  )
+  const selected = {
+    candidate: legacy(r),
+    state: "CANDIDATE_VALIDATED",
+    disposition: "selected",
+    tag: r.c.tag,
+    conflicts: [],
+  }
+  const result = await resolveProductionCandidate({
+    ...r.args,
+    event: { ref: "refs/heads/main", after: r.c.candidateSha },
+    terminalRecordRef: r.e.controllerSha,
+    inventory: { read: async () => ({}) },
+    discovery: {
+      discoverManagedCandidate: async () => selected,
+      discoverScheduledCandidate: async () => selected,
+    },
+  })
+  assert.deepEqual(result, selected)
+})
+
+for (const supplied of [false, true])
+  test(`release inventory still rejects over 16 MiB with supplied=${supplied}`, async () => {
+    const { r, records } = await largeLegacyReleaseHistory()
+    records[0].body = "x".repeat(16 * 1024 * 1024)
+    await assert.rejects(
+      routing.routeRecoveryCandidate({
+        ...r.args,
+        candidate: legacy(r),
+        terminalRecordRef: r.e.controllerSha,
+        ...(supplied ? { releaseRecords: records } : {}),
+      }),
+      /snapshot byte limit/,
+    )
+  })
+
+test("large release inventory preserves duplicate candidate rejection at the end of history", async () => {
+  const { r, records } = await largeLegacyReleaseHistory()
+  records.push({ ...r.release, id: 903 })
+  await assert.rejects(route(r), /duplicate candidate releases/)
+})
+
+test("large release inventory rejects accessors without evaluating them", async () => {
+  const { r, records } = await largeLegacyReleaseHistory()
+  let calls = 0
+  Object.defineProperty(records.at(-2), "unexpected", {
+    enumerable: true,
+    get() {
+      calls++
+      return "ignored metadata"
+    },
+  })
+  await assert.rejects(route(r), /accessors\/hidden fields forbidden/)
+  assert.equal(calls, 0)
+})
+
+test("release inventory allowance does not enlarge unrelated asset inventory reads", async () => {
+  const { r } = await largeLegacyReleaseHistory()
+  let reads = 0
+  r.args.github.listReleaseAssets = async () => {
+    reads++
+    return { status: "PRESENT", value: [{ name: "notes", metadata: "x".repeat(1024 * 1024) }] }
+  }
+  await assert.rejects(route(r), /snapshot byte limit/)
+  assert.equal(reads, 1)
+})

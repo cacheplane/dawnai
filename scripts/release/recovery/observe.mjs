@@ -48,6 +48,8 @@ export const RECOVERY_FINALIZATION_ASSET = "recovery-v2-finalization.json"
 const requireThat = (ok, message) => {
   if (!ok) throw new TypeError(`Recovery observation blocked: ${message}`)
 }
+// Complete release histories use the same nominal allowance whether supplied or fetched.
+const RELEASE_INVENTORY_BYTES = 16 * 1024 * 1024
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex")
 const stable = (value) =>
   Array.isArray(value)
@@ -127,7 +129,12 @@ function readerContext({ github, git }) {
   const budget = createRecoveryWorkBudget({ phaseDeadline })
   return {
     now,
-    read: (name, args) => envelope(() => recoveryMethods(github, [name])[name](args)),
+    read: (name, args) =>
+      envelope(
+        () => recoveryMethods(github, [name])[name](args),
+        "value",
+        name === "listReleases" ? RELEASE_INVENTORY_BYTES : undefined,
+      ),
     download: (args) =>
       envelope(
         () => recoveryMethods(github, ["downloadReleaseAsset"]).downloadReleaseAsset(args),
@@ -1390,7 +1397,7 @@ async function readFixedFinalization(context, assets) {
 // This only supplies routing subjects; observation must still prove each identity.
 export async function discoverRecoveryReleaseCandidates(input) {
   const { github, releaseRecords } = safeInput(input, ["github", "releaseRecords"])
-  const releases = snapshotRecoveryData(releaseRecords, 16 * 1024 * 1024)
+  const releases = snapshotRecoveryData(releaseRecords, RELEASE_INVENTORY_BYTES)
   requireThat(Array.isArray(releases), "release discovery unavailable")
   const context = readerContext({ github })
   const ownership = new Map()
