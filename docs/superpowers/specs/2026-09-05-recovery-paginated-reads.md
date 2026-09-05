@@ -108,3 +108,26 @@ budget, token limits and reset windows remain separate live evidence obligations
 Independent spec review confirmed the design and service body hashes after the
 200/304 eligibility distinction above was clarified. No production admission
 follows from that review.
+
+
+## Reviewed history projection
+
+Replaying the actual six GitHub responses exposed a pre-existing structural
+limit: 514 fully normalized run records fit the byte budget but exceed the
+fence snapshot's 100,000-node bound. The all-SHA history adapter has one
+production consumer, the fence. After complete raw pagination and normalization,
+it now retains only the exact fields consumed by `fenceTerminalRuns`:
+`id`, `run_attempt`, `workflow_id`, `path`, `repository.id`,
+`repository.full_name`, `head_sha`, `status`, and `conclusion`.
+
+No run is filtered. Missing or malformed authority values stay missing or
+malformed, and the fence still rejects them. Unsafe keys in unused metadata
+still fail raw normalization. The original responses remain the conditional
+cache representations and consume the original byte budget. Global byte, node
+and deadline limits are unchanged. Returned records and projected repository
+objects remain immutable.
+
+The retained service replay verified identical authority identities for all
+514 records through six 200 and six 304 reads. Compact raw inventory size was
+7,005,673 bytes; projected inventory size was 133,175 bytes. This demonstrates
+the structural fix, not live whole-fence authority or deadline feasibility.

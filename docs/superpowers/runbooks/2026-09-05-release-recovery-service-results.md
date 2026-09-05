@@ -69,7 +69,12 @@ passed all 20 jobs at baseline `12e69d67`, including 3,224 controller tests.
 Full local validation passed during that development interval; it is not a
 frozen baseline run. The separately pinned fault harness passed 116 tests,
 including interruptions before and after all 32 writes. The subsequent Proxy
-fix requires its own validation results; earlier CI is not claimed for new code.
+fix at `baf50196` passed all 20 jobs in
+[CI 33979456327](https://github.com/cacheplane/dawnai/actions/runs/33979456327),
+including 3,225 controller tests. Its local full source-test run had four timing
+failures; all four passed in an isolated serial rerun, and all remaining local
+gates passed separately. The failed full run remains recorded as failed.
+These results do not cover the subsequent pagination change.
 
 ## Admission sequence
 
@@ -91,10 +96,17 @@ fix requires its own validation results; earlier CI is not claimed for new code.
    with a reviewed exact-identity representation and authority or revocation
    evidence. Filtering the two entries or treating unknown services as harmless
    would invalidate the fence. The YAML matrix does not satisfy this step.
-4. **Measure the complete workflow budget.** The HTTP fixture records 866
-   non-304 responses and 2,193 authenticated 304 responses, but excludes fence
-   callbacks and bootstrap. Measure the shared live quota across all metadata
-   and smoke jobs, with actual history pagination, before claiming headroom.
+4. **Measure the complete workflow budget.** The earlier fixture recorded 866
+   non-304 responses and 2,193 authenticated 304 responses while omitting fence
+   calls. An extended model executes the real fence with 514 legacy release
+   runs and 16 audit runs, including both complete passes on every observation.
+   Its initial compact-record comparison retained all 7,947 HTTP requests and
+   60 fence observations while reducing primary-consuming GitHub responses
+   from 4,499 to 932 (3,567 fresh 304 responses). This leaves only 68 requests
+   against a 1,000-request allowance, and excludes bootstrap, actual lane
+   traffic and competing jobs. Larger-metadata fixture validation and actual
+   workflow-token measurements remain separate evidence. Never infer shared
+   production headroom from the model alone.
 5. **Prepare exact production admission.** At the reviewed controller revision,
    re-inspect candidate, tag, manifest, all 45 assets and all 21 packages. Prepare
    a diagnostic proposal outside the active admission path. Bind the complete
@@ -155,3 +167,25 @@ Latest read-only production metadata still reports release `382873833` as
 `untagged-a4a022eb7414255884bc`, last update `2026-09-04T17:33:11Z`.
 Policy is `DORMANT`; no contract or adoption was admitted. These are observations,
 not fresh authority for a later write.
+
+
+## Paginated read verification
+
+A read-only run of the production adapter on 2026-09-05 followed GitHub's
+numeric repository Link URLs, validating and canonicalizing each request path.
+It read all 514 runs across six pages, then received six authenticated 304s with
+empty bodies and absent Link headers. Revalidated navigation metadata remains
+separate from actual response headers. Evidence is retained under
+`production-pagination-adapter-30s/` in the local evidence root. The first run
+hit the reader's default 10-second deadline after five pages and failed closed;
+it remains under `production-pagination-adapter/`. The successful run used the
+existing 30-second fence limit, without changing production deadlines.
+
+Independent review reproduced an additional structural failure using those
+real responses: full run metadata exceeded the fence snapshot's 100,000-node
+bound. The reviewed adapter projection preserves every authority field after
+full raw validation. Replaying all 12 recorded responses produced identical
+fence run identities, shrinking the compact inventory from 7,005,673 to 133,175
+bytes without raising global limits. Raw cache bodies and byte accounting stay
+unchanged. This is a local replay of real service bytes, not a live production
+fence or admission result.

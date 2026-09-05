@@ -10,7 +10,7 @@ export function createConditionalJsonReader({ http, now = Date.now }) {
     closed = false
   const remove = (key) => {
     const previous = entries.get(key)
-    if (previous) retainedBytes -= previous.bytes
+    if (previous) retainedBytes -= previous.cost
     entries.delete(key)
   }
   const dispose = () => {
@@ -33,7 +33,7 @@ export function createConditionalJsonReader({ http, now = Date.now }) {
   }
   return Object.freeze({
     dispose,
-    async getJson(request, { canRetain = () => false } = {}) {
+    async getJson(request, { canRetain = () => false, canRetainPage } = {}) {
       if (!live()) return failed("CONDITIONAL_READ_CLOSED")
       const headers = new Headers(request.headers)
       const eligible =
@@ -41,8 +41,14 @@ export function createConditionalJsonReader({ http, now = Date.now }) {
         headers.has("authorization") &&
         !headers.has("if-none-match") &&
         !headers.has("if-modified-since")
+      const pageMode = typeof canRetainPage === "function"
+      const acceptable = (body, link) =>
+        pageMode
+          ? (link === null || (typeof link === "string" && Buffer.byteLength(link) <= 8192)) &&
+            canRetainPage(body, link)
+          : link === null && canRetain(body)
       const key = createHash("sha256")
-        .update(JSON.stringify([request.url, [...headers]]))
+        .update(JSON.stringify([request.url, [...headers], pageMode]))
         .digest("hex")
       if (pending.size >= 128) return failed("CONDITIONAL_READ_CAPACITY")
       const generation = {}
@@ -63,15 +69,29 @@ export function createConditionalJsonReader({ http, now = Date.now }) {
           !previous ||
           !etagValue(result.headers?.etag) ||
           etagValue(result.headers.etag) !== etagValue(previous.etag) ||
-          result.headers.link !== null ||
+          (result.headers.link !== null &&
+            (!pageMode || result.headers.link !== previous.paginationLink)) ||
           result.headers.location !== null ||
           result.bodyBytes !== 0
         )
           return failed("INVALID_NOT_MODIFIED", 304)
         if (previous.bytes > (request.maxResponseBytes ?? Infinity))
           return failed("RESPONSE_TOO_LARGE", 304)
-        const resolved = { ...result, bodyBytes: previous.bytes, body: JSON.parse(previous.text) }
-        if (!canRetain(resolved.body)) return failed("INVALID_NOT_MODIFIED", 304)
+        const resolved = {
+          ...result,
+          bodyBytes: previous.bytes,
+          body: JSON.parse(previous.text),
+          ...(pageMode
+            ? {
+                revalidatedPage: {
+                  link: previous.paginationLink,
+                  source: "retained-200-confirmed-by-304",
+                },
+              }
+            : {}),
+        }
+        if (!acceptable(resolved.body, pageMode ? previous.paginationLink : null))
+          return failed("INVALID_NOT_MODIFIED", 304)
         keep(key, previous)
         return resolved
       }
@@ -80,23 +100,33 @@ export function createConditionalJsonReader({ http, now = Date.now }) {
         result.status === "OK" &&
         result.httpStatus === 200 &&
         etagValue(result.headers?.etag) &&
-        result.headers.link === null &&
         result.headers.location === null &&
-        canRetain(result.body)
+        acceptable(result.body, result.headers.link)
       ) {
         const text = JSON.stringify(result.body)
         const bytes = Math.max(Buffer.byteLength(text), result.bodyBytes)
-        if (bytes <= 2 * 1024 * 1024) keep(key, { text, bytes, etag: result.headers.etag })
+        const cost =
+          bytes +
+          Buffer.byteLength(result.headers.etag) +
+          (pageMode ? Buffer.byteLength(result.headers.link ?? "") : 0)
+        if (bytes <= 2 * 1024 * 1024)
+          keep(key, {
+            text,
+            bytes,
+            cost,
+            etag: result.headers.etag,
+            ...(pageMode ? { paginationLink: result.headers.link } : {}),
+          })
       }
       return result
     },
   })
   function keep(key, entry) {
     remove(key)
-    while (entries.size >= 128 || retainedBytes + entry.bytes > 16 * 1024 * 1024)
+    while (entries.size >= 128 || retainedBytes + entry.cost > 16 * 1024 * 1024)
       remove(entries.keys().next().value)
     entries.set(key, entry)
-    retainedBytes += entry.bytes
+    retainedBytes += entry.cost
   }
 }
 function etagValue(value) {

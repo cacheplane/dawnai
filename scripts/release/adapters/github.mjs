@@ -121,6 +121,35 @@ export function createGitHubReader({
         extract: objectArray("workflow_runs"),
         compare: compareIdThenName,
         strictTotal: true,
+      }).then((result) => {
+        if (result.status !== "PRESENT") return result
+        // Keep all records and fence authority values after full raw validation.
+        // Unused GitHub metadata must not consume the downstream proof node budget.
+        const fields = [
+          "id",
+          "run_attempt",
+          "workflow_id",
+          "path",
+          "repository",
+          "head_sha",
+          "status",
+          "conclusion",
+        ]
+        const value = result.value.map((record) => {
+          const selected = Object.fromEntries(
+            fields.filter((key) => Object.hasOwn(record, key)).map((key) => [key, record[key]]),
+          )
+          if (isObject(selected.repository))
+            selected.repository = Object.freeze(
+              Object.fromEntries(
+                ["id", "full_name"]
+                  .filter((key) => Object.hasOwn(selected.repository, key))
+                  .map((key) => [key, selected.repository[key]]),
+              ),
+            )
+          return Object.freeze(selected)
+        })
+        return { ...result, value: Object.freeze(value) }
       })
     },
     async listActionsRunJobsComplete(args, options = {}) {
@@ -430,6 +459,24 @@ async function readPaginated(
         body.total_count >= 0 &&
         Array.isArray(extract(body)) &&
         extract(body).length === body.total_count,
+      ...(strictTotal && !cursorPagination
+        ? {
+            conditionalPage: (body, link) => {
+              const count = body?.total_count
+              const items = extract(body)
+              return (
+                isObject(body) &&
+                Number.isSafeInteger(count) &&
+                count >= 0 &&
+                count <= context.maxRecords &&
+                Array.isArray(items) &&
+                (count === 0 ? page === 0 : page * 100 < count) &&
+                items.length === Math.min(100, Math.max(0, count - page * 100)) &&
+                strictPaginationLinks(link, initialUrl, page + 1, context, count)
+              )
+            },
+          }
+        : {}),
     })
     if (result.code === "RESPONSE_TOO_LARGE") {
       return failure("ERROR", operation, result.httpStatus, "OPERATION_TOO_LARGE")
@@ -441,7 +488,7 @@ async function readPaginated(
     if (strictTotal && budget.now() >= budget.deadline)
       return failure("AMBIGUOUS", operation, result.httpStatus, "TIMEOUT")
     if (strictTotal) {
-      if (!strictPaginationLinks(result.linkHeader, initialUrl, page + 1, context))
+      if (!strictPaginationLinks(result.paginationLinkHeader, initialUrl, page + 1, context))
         return failure("ERROR", operation, result.httpStatus, "AMBIGUOUS_PAGINATION")
       const count = result.body?.total_count
       if (
@@ -529,7 +576,7 @@ async function readPaginated(
 
 async function readJson(
   context,
-  { url, operation, requestBudget = {}, conditionalBody = isObject },
+  { url, operation, requestBudget = {}, conditionalBody = isObject, conditionalPage },
 ) {
   const response = await (context.conditional ?? context.http).getJson(
     {
@@ -542,13 +589,16 @@ async function readJson(
       timeoutMs: context.timeoutMs,
       ...requestBudget,
     },
-    { canRetain: conditionalBody },
+    { canRetain: conditionalBody, ...(conditionalPage ? { canRetainPage: conditionalPage } : {}) },
   )
   const classification = classifyGitHubResponse(response, operation)
   if (classification.status !== "PRESENT") {
     return classification
   }
-  const link = parseNextLink(response.headers.link)
+  const paginationLinkHeader = response.revalidatedPage
+    ? response.revalidatedPage.link
+    : response.headers.link
+  const link = parseNextLink(paginationLinkHeader)
   if (link.status === "ERROR") {
     return failure("ERROR", operation, response.httpStatus, "MALFORMED_LINK_HEADER")
   }
@@ -558,6 +608,7 @@ async function readJson(
     bodyBytes: response.bodyBytes,
     nextUrl: link.nextUrl,
     linkHeader: response.headers.link,
+    paginationLinkHeader,
   }
 }
 
@@ -1169,8 +1220,8 @@ function recoveryContext(context, options) {
   return { ...context, ...readOptions(context, options), apiVersion: "2026-03-10" }
 }
 
-function strictPaginationLinks(header, initialUrl, page, context) {
-  if (header === null) return true
+function strictPaginationLinks(header, initialUrl, page, context, total = null) {
+  if (header === null) return total === null || page * 100 >= total
   const relations = new Map()
   for (const part of header.split(",")) {
     const match = /^\s*<([^<>\s]+)>((?:\s*;[^;]*)+)\s*$/u.exec(part)
@@ -1196,6 +1247,10 @@ function strictPaginationLinks(header, initialUrl, page, context) {
     }
   }
   return (
+    (total === null || relations.has("next") === page * 100 < total) &&
+    (total === null ||
+      !relations.has("last") ||
+      relations.get("last") === Math.max(1, Math.ceil(total / 100))) &&
     (!relations.has("next") || relations.get("next") === page + 1) &&
     (!relations.has("prev") || relations.get("prev") === page - 1) &&
     (!relations.has("first") || relations.get("first") === 1) &&

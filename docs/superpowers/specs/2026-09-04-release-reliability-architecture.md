@@ -199,6 +199,43 @@ the still-open [PR #568](https://github.com/cacheplane/dawnai/pull/568) in that
 workstream. Update AGENTS.md's serial-validate description when documenting the
 already split CI topology.
 
+## 2026-09-05 implementation findings
+
+The post-publication controller now has full HTTP recovery rehearsals with
+immutable payload checks, five lane obligations, independent audit, all 32
+write boundaries, zero-write replay and next-version arbitration. The disposable
+service experiment verified YAML disable/re-enable behavior and operator
+publication. These are distinct evidence layers; neither establishes production
+admission. See the [service results and admission sequence](../runbooks/2026-09-05-release-recovery-service-results.md).
+
+Keep the observer small by returning explicit authority projections from
+validated service data. Actual GitHub workflow history contained enough unused
+metadata to exceed the recovery snapshot's structural bound even while fitting
+its byte budget. Projecting after complete raw validation preserves every run
+and every checked authority field without raising global limits.
+
+Optimize repeated reads through fresh authenticated conditional requests. Retain
+raw page bytes, ETags and separately identified pagination metadata only within
+one reader lifetime; revalidate every page on both complete fence passes.
+A new job or resume starts with cold readers. This reduces primary consumption
+and transfer volume without turning cache entries into permission to write.
+The [paginated-read contract](./2026-09-05-recovery-paginated-reads.md) records
+these invariants and actual 200/304 behavior.
+
+The current topology still has two platform-generated workflows that the
+Git-YAML fence cannot represent. Resolve their authority explicitly before
+admitting recovery. A dedicated release-control repository remains a possible
+future isolation boundary, but requires scoped cross-repository credentials,
+exact source/controller identity, independent audit and revocation of old
+writers. Moving orchestration alone does not resolve the existing candidate.
+
+The next performance experiment should split controller validation from source
+tests while retaining a required aggregate check that fails on every missing,
+failed or unexpectedly skipped lane. Measure runner queue time and added setup
+cost before claiming faster releases. Keep a complete test inventory across
+shards; historical green checks and missing shards cannot satisfy the aggregate.
+This is a proposed subsequent change, not part of the pagination implementation.
+
 ## Other publication surfaces
 
 The current chart workflow is a separate push/path-triggered publisher; it is

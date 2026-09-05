@@ -8,8 +8,8 @@ const present = (value) => ({ status: "PRESENT", value })
 const artifactName = (lane) =>
   `recovery-v2-lane-${lane.lane}-${lane.executor.runId}-${lane.executor.runAttempt}-${lane.executor.jobId}`
 
-export async function evidenceRemote() {
-  const r = await recoveryWriteRemote()
+export async function evidenceRemote(options = {}) {
+  const r = await recoveryWriteRemote(options)
   r.activate([...r.baseAssets, r.adoption.archive, r.adoptionRef])
   r.release.body = renderRecoveryReleaseBody({
     marker: r.marker,
@@ -18,11 +18,12 @@ export async function evidenceRemote() {
   const time = Date.parse("2026-09-04T10:04:00.000Z")
   r.dependencies.authority.now = () => time
   const originalFence = r.dependencies.authority.observeLegacyFence
-  r.dependencies.authority.observeLegacyFence = async () => ({
-    ...(await originalFence()),
-    observedAt: time,
-    expiresAt: time + 30000,
-  })
+  if (!r.fence)
+    r.dependencies.authority.observeLegacyFence = async () => ({
+      ...(await originalFence()),
+      observedAt: time,
+      expiresAt: time + 30000,
+    })
   const github = r.args.github
   const originalJobs = github.listActionsRunJobs
   const originalRun = github.getActionsRunAttempt

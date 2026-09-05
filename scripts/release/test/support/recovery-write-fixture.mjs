@@ -1,8 +1,8 @@
 import { digest } from "./recovery-fixture.mjs"
 import { recoveryRemote } from "./recovery-observe-fixture.mjs"
 
-export async function recoveryWriteRemote() {
-  const r = await recoveryRemote()
+export async function recoveryWriteRemote(options = {}) {
+  const r = await recoveryRemote(options)
   const effects = []
   const events = []
   let assets = [...r.baseAssets]

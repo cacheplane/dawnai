@@ -15,10 +15,12 @@ import {
   runRecoveryAudit,
 } from "../../recovery/audit.mjs"
 import { collectRecoveryEvidence } from "../../recovery/evidence.mjs"
+import { createRecoveryFenceReader } from "../../recovery/fence.mjs"
 import { finalizeRecoveryCandidate, publishRecoveryCandidate } from "../../recovery/finalize.mjs"
 import { routeRecoveryCandidate } from "../../recovery/observe.mjs"
 import { canonicalRecoveryBytes } from "../../recovery/schema.mjs"
 import { evidenceRemote, zip } from "./recovery-evidence-fixture.mjs"
+import { configureRehearsalFence } from "./recovery-rehearsal-fence.mjs"
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex")
 const TEST_SEAMS = Object.freeze([
@@ -29,7 +31,12 @@ const TEST_SEAMS = Object.freeze([
   "canonical-host mapping to owned loopback HTTP",
 ])
 
-export async function createRecoveryHttpRehearsal({ fault = null, conditionalReads = true } = {}) {
+export async function createRecoveryHttpRehearsal({
+  fault = null,
+  conditionalReads = true,
+  realFence = false,
+  malformedFence = false,
+} = {}) {
   assert.ok(
     fault === null ||
       (Number.isInteger(fault.at) &&
@@ -42,7 +49,13 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
     faultTriggered = false,
     retryAvailable = false
   const resumes = []
-  const r = await evidenceRemote()
+  const r = await evidenceRemote(realFence ? { configureFence: configureRehearsalFence } : {})
+  const fenceObservations = []
+  let fenceActive = false
+  if (malformedFence) {
+    assert.ok(realFence)
+    r.fence.histories.get("803")[0].status = "in_progress"
+  }
   r.activate(r.baseAssets)
   r.release.body = r.legacyBody
   const backend = r.args.github
@@ -67,6 +80,8 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
     const pathname = decodeURIComponent(url.pathname)
     const entry = {
       stage,
+      fence: fenceActive,
+      conditional: request.headers["if-none-match"] !== undefined,
       method: request.method,
       origin: request.headers["x-rehearsal-origin"],
       path: url.pathname,
@@ -178,6 +193,14 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
           result.status,
         )
       }
+      if (realFence && pathname === base)
+        return json({
+          id: Number(r.c.repositoryId),
+          full_name: r.c.repository,
+          default_branch: "main",
+        })
+      if (realFence && pathname === `${base}/actions/workflows`)
+        return page(r.fence.workflows, "workflows")
       if (pathname === `${base}/releases`) return page(await raw("listReleases"))
       if (
         pathname === `${base}/releases/${r.c.releaseId}` ||
@@ -233,6 +256,8 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
         )
       }
       match = pathname.match(/\/actions\/workflows\/([^/]+)\/runs$/u)
+      if (match && realFence && r.fence.histories.has(match[1]))
+        return page(r.fence.histories.get(match[1]), "workflow_runs")
       if (match)
         return page(
           await raw("listWorkflowRuns", {
@@ -242,6 +267,8 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
           "workflow_runs",
         )
       match = pathname.match(/\/actions\/workflows\/([^/]+)$/u)
+      if (match && realFence && r.fence.workflows.some((w) => String(w.id) === match[1]))
+        return json(r.fence.workflows.find((w) => String(w.id) === match[1]))
       if (match) return json(await raw("getWorkflow", { workflow: match[1] }))
       if (pathname.endsWith("/check-runs"))
         return page(await raw("getCommitCheckRuns"), "check_runs")
@@ -346,10 +373,37 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
     authority: { ...r.dependencies.authority, github: observation.github },
     fetchImpl: mappedFetch,
   }
+  const bindFence = (authority) => {
+    if (!realFence) return
+    const fence = createRecoveryFenceReader({
+      github: authority.github,
+      git: r.args.git,
+      now: authority.now,
+    })
+    authority.observeLegacyFence = async (request, options) => {
+      const start = requests.length
+      fenceActive = true
+      try {
+        const proof = await fence.observeLegacyFence(request, options)
+        fenceObservations.push({
+          stage,
+          complete: proof.inventoryComplete,
+          writers: proof.writers.length,
+          pages: requests.slice(start).filter((q) => q.path.endsWith("/runs")).length,
+          executor: proof.executor,
+        })
+        return proof
+      } finally {
+        fenceActive = false
+      }
+    }
+  }
+  bindFence(dependencies.authority)
   const resetReads = () => {
     observation.github.dispose?.()
     Object.assign(observation, readers())
     dependencies.authority.github = observation.github
+    bindFence(dependencies.authority)
   }
   const startPhase = (name) => {
     stage = name
@@ -419,6 +473,7 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
           }),
         },
       }
+      bindFence(auditor.authority)
       let result
       try {
         result = await runRecoveryAudit(auditRequest, auditor)
@@ -501,6 +556,10 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
         .filter((e) => e.method === "POST" && new URL(e.url).pathname.endsWith("/dispatches"))
         .map((e) => JSON.parse(e.bytes).inputs.request_id)
       return {
+        fenceObservations,
+        fenceHistoryNotModified: requests.filter(
+          (q) => q.fence && q.path.endsWith("/runs") && q.httpStatus === 304,
+        ).length,
         faultTriggered,
         mutationAttempts,
         resumes,
@@ -540,7 +599,13 @@ export async function createRecoveryHttpRehearsal({ fault = null, conditionalRea
           ]),
         ),
         effects: r.effects.map((e) => ({ method: e.method, url: e.url, stage: e.stage })),
-        testSeams: TEST_SEAMS,
+        testSeams: realFence
+          ? TEST_SEAMS.map((s) =>
+              s === "fixture git policy, invocation and legacy fence"
+                ? "fixture git policy, invocation and synthetic fence admission"
+                : s,
+            )
+          : TEST_SEAMS,
       }
     } catch (error) {
       throw new Error(

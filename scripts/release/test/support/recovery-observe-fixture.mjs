@@ -18,6 +18,7 @@ export async function recoveryRemote({
   mutateLane = () => {},
   mutateInstallation = () => {},
   mutateSet = () => {},
+  configureFence = null,
 } = {}) {
   const base = candidateFixture({ modules: { metadata, manifest, record } })
   const source = "reviewed source\n"
@@ -33,7 +34,6 @@ export async function recoveryRemote({
     },
     async () => source,
   )
-  const policySha256 = digest(canonicalPolicyBytes(policy))
   const c = {
     repository: "cacheplane/dawnai",
     repositoryId: "901",
@@ -49,6 +49,10 @@ export async function recoveryRemote({
     verifierClosureSha256: policy.verifierClosure.sha256,
     workflow: ownerWorkflow,
   })
+  const fence = configureFence
+    ? await configureFence({ candidate: c, executor: e, policy, source })
+    : null
+  const policySha256 = digest(canonicalPolicyBytes(policy))
   const legacyMarker = {
     ...base.marker,
     phase: "NPM_COMPLETE",
@@ -505,7 +509,8 @@ export async function recoveryRemote({
     async isAncestor() {
       return true
     },
-    async showFile({ path }) {
+    async showFile({ ref, path }) {
+      if (fence?.files.has(`${ref}:${path}`)) return fence.files.get(`${ref}:${path}`)
       if (path === intentPath) return canonicalRecoveryBytes(intent).toString()
       if (path === "scripts/release/recovery/policy.json")
         return canonicalPolicyBytes(policy).toString()
@@ -569,6 +574,7 @@ export async function recoveryRemote({
     },
   }
   return {
+    fence,
     c,
     e,
     base,
