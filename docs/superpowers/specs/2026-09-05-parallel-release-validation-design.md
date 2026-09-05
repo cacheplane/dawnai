@@ -19,3 +19,24 @@ Keep `validate` as the required public check name. It becomes an unconditional a
 Update the preflight wiring test to inspect source validation. Add assertions for the controller lane's complete command, source-only ordering, unconditional aggregate, exact dependencies and dependency-result environment bindings. Execute the aggregate shell in tests with success and each non-success result in each position. Keep tests in the early suite so invalid gates fail early.
 
 Update exact workflow entrypoint and executable fixtures for renamed/new jobs. Keep the comprehensive controller workflow checks unchanged. Update AGENTS.md/CONTRIBUTORS.md to describe CI concurrency and the local sequential validation command. Run focused tests and all CI lanes; specifically require a green full controller job without any build step. Record elapsed and runner durations without presenting one run as a robust performance benchmark.
+
+## Kubernetes report lifetime correction
+
+The corrected CI graph passed every core lane, but Kubernetes compatibility failed
+with a reserved report identity. Report accounting stores device/inode identities
+while unlinking and closing each accepted report. A filesystem may reuse that freed
+inode for the next phase, incorrectly rejecting a fresh report. The job artifact
+has no inode numbers, so the observed instance is consistent with this defect rather
+than a forensic proof of reuse.
+
+Keep each accepted report's open descriptor until accounting-session disposal.
+There are exactly two provider phases, bounding retained descriptors to two. Reports
+remain unlinked immediately after validation; hard-link aliases remain rejected by
+the existing identity set even when their content or timestamps change. Failed
+records close immediately and release reservations for retries.
+
+Add awaited, idempotent session disposal that seals the session, drains in-flight
+records and closes retained descriptors. Harness cleanup runs it on success and
+failure, preserving both the original error and any disposal error. Finish remains
+the synchronous completeness check. Tests observe real descriptors through a test
+spy, avoiding a probabilistic inode-allocation test or a production filesystem seam.

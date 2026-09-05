@@ -387,6 +387,10 @@ function createHarnessFixture(options: FixtureOptions = {}): HarnessFixture {
         finish(): void {
           mark("provider.finish")
         },
+        async dispose(): Promise<void> {
+          await Promise.resolve()
+          mark("provider.dispose")
+        },
       }
     },
     assertStepAccounting: (expected, observed) => {
@@ -667,6 +671,7 @@ describe("portable compatibility lifecycle", () => {
       "probe.app.service-ready.after-application-upgrade",
       "provider.finish",
       "probe.accounting",
+      "provider.dispose",
       "report.persist",
       "cleanup.verify",
       "network.cleanup",
@@ -960,6 +965,7 @@ describe("failure boundaries and cleanup", () => {
     "probe.app.service-ready.after-application-upgrade",
     "provider.finish",
     "probe.accounting",
+    "provider.dispose",
   ] as const
 
   test.each(mutationBoundaries)("cleans safely when %s fails", async (boundary) => {
@@ -970,6 +976,7 @@ describe("failure boundaries and cleanup", () => {
     )
 
     expect(fixture.events).toContain("report.persist")
+    expect(fixture.events).toContain("provider.dispose")
     if (
       fixture.events.includes("management.create") ||
       fixture.events.includes("management.recover")
@@ -997,7 +1004,7 @@ describe("failure boundaries and cleanup", () => {
     )
 
     expect(flattenErrorMessages(error)).toContain("management.create failed")
-    expect(fixture.events.slice(0, 8)).toEqual([
+    expect(fixture.events.slice(0, 9)).toEqual([
       "policy.load",
       "preflight",
       "permissions",
@@ -1005,6 +1012,7 @@ describe("failure boundaries and cleanup", () => {
       "signal.register",
       "management.create",
       "management.recover",
+      "provider.dispose",
       "diagnostics.collect",
     ])
     const destructiveInput = fixture.cleanupInputs.at(-1) as {
@@ -1220,6 +1228,28 @@ describe("failure boundaries and cleanup", () => {
     )
     expect(fixture.events).toContain("cleanup.destroy")
     expect(fixture.reports.at(-1)?.cleanup.status).toBe("failed")
+  })
+
+  test("preserves the original failure alongside accounting disposal failure", async () => {
+    const fixture = createHarnessFixture({ failAt: "provider.account.provider-before-upgrade" })
+    const createSession = fixture.dependencies.createProviderAccountingSession
+    if (createSession === undefined) throw new Error("Missing fixture accounting factory")
+    const error = await runKubernetesCompatibility(OPTIONS, {
+      ...fixture.dependencies,
+      createProviderAccountingSession: async (options) => ({
+        ...(await createSession(options)),
+        async dispose() {
+          throw new Error("accounting descriptor close failed")
+        },
+      }),
+    }).catch((cause: unknown) => cause)
+    expect(flattenErrorMessages(error)).toEqual(
+      expect.arrayContaining([
+        "provider.account.provider-before-upgrade failed",
+        "accounting descriptor close failed",
+      ]),
+    )
+    expect(fixture.events).toContain("cleanup.destroy")
   })
 
   test("accounts a provider report before destroying its directory even when later accounting fails", async () => {
