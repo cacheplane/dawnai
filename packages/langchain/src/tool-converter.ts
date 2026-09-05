@@ -181,7 +181,7 @@ function objectToZod(prop: JsonSchemaProperty, depth: number): z.ZodTypeAny {
 function jsonSchemaFieldToZod(prop: JsonSchemaProperty, depth = 0): z.ZodTypeAny {
   if (depth > MAX_ZOD_DEPTH) return z.string()
 
-  // Object unions are emitted as anyOf (no `type`); map to z.union.
+  // Unions are emitted as anyOf (no `type`); map to z.union.
   if (prop.anyOf && prop.anyOf.length > 0) {
     const members = prop.anyOf.map((m) => jsonSchemaFieldToZod(m, depth + 1))
     if (members.length === 1) return members[0] ?? z.unknown()
@@ -198,6 +198,8 @@ function jsonSchemaFieldToZod(prop: JsonSchemaProperty, depth = 0): z.ZodTypeAny
       return z.number()
     case "boolean":
       return z.boolean()
+    case "null":
+      return z.null()
     case "array": {
       const items = prop.items
       return items ? z.array(jsonSchemaFieldToZod(items, depth + 1)) : z.array(z.unknown())

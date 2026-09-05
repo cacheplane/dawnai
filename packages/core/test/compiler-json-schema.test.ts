@@ -220,6 +220,21 @@ describe("typeInfoToToolParameters", () => {
     expect(typeInfoToToolParameters(parameter).properties.unknown).toEqual({ type: "string" })
   })
 
+  test("preserves the fallback for non-nullable primitive unions", () => {
+    const parameter: TypeInfo = {
+      kind: "object",
+      properties: [
+        {
+          name: "value",
+          type: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] },
+          optional: false,
+        },
+      ],
+    }
+
+    expect(typeInfoToToolParameters(parameter).properties.value).toEqual({ type: "string" })
+  })
+
   test("falls back at the first object beyond the schema depth limit", () => {
     let deepType: TypeInfo = { kind: "string" }
     for (let index = 0; index < 10; index += 1) {
