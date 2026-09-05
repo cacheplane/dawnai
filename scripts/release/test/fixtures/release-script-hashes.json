@@ -173,13 +173,13 @@
       "sha256": "0da8451d732545c08386ee90015c7fabf9d1e5a1855a5546fcdad4c0a54538d2"
     },
     "scripts/release/recovery/observe.mjs": {
-      "sha256": "818caff803f53d3926f7328356ff7c19b99b30df919ff90e0d565362e3acb1d0"
+      "sha256": "0891ae4aad631a38ca9700bc7706da557318eecbc908af3d0a5aaded17a414d2"
     },
     "scripts/release/recovery/payload-reuse.mjs": {
       "sha256": "bfe8d23eb87cb31afc474f77fa4742784508e20d985b44717479f22ad918c517"
     },
     "scripts/release/recovery/policy.json": {
-      "sha256": "c3551e4230ab0c1109086556937b4d38494c18adcf3e094d9791013188d7d27b"
+      "sha256": "64e7b001cf967046bb7023a13a4a459942e9eeabe590e6fbf88ed8ec70396d00"
     },
     "scripts/release/recovery/policy.mjs": {
       "sha256": "77e3651e87b6964b84333a6c324087e855035a77987054e4fc73a412ff148ad2"
