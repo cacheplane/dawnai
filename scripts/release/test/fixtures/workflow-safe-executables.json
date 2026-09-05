@@ -1729,6 +1729,994 @@
         "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
       }
     ],
+    "release-postpublication-audit.yml": [
+      {
+        "job": "recovery-audit",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit",
+        "stepIndex": 5,
+        "step": "Resolve and bind immutable audit dispatch",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command audit --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit",
+        "stepIndex": 6,
+        "step": "Run independent read-only audit",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs audit --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit",
+        "stepIndex": 7,
+        "step": "Retain exact audit result",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit",
+        "stepIndex": 8,
+        "step": "Retain audit diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      }
+    ],
+    "release-postpublication.yml": [
+      {
+        "job": "recovery-admit",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-admit",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-admit",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-admit",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-admit",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-admit",
+        "stepIndex": 5,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command admit --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-admit",
+        "stepIndex": 6,
+        "step": "Transfer verified original manifest",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-admit",
+        "stepIndex": 7,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-adopt",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-adopt",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-adopt",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-adopt",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-adopt",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-adopt",
+        "stepIndex": 5,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command adopt --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-adopt",
+        "stepIndex": 6,
+        "step": "Execute adopt",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs adopt --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\"",
+        "classification": "recovery-publication"
+      },
+      {
+        "job": "recovery-adopt",
+        "stepIndex": 7,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 5,
+        "step": "Download manifest selected by admission",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 6,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 7,
+        "step": "Execute smoke",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 8,
+        "step": "Retain exact lane and installation evidence",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-metadata",
+        "stepIndex": 9,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 5,
+        "step": "Download manifest selected by admission",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 6,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 7,
+        "step": "Execute smoke",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 8,
+        "step": "Retain exact lane and installation evidence",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-published-harness",
+        "stepIndex": 9,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 5,
+        "step": "Download manifest selected by admission",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 6,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 7,
+        "step": "Execute smoke",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 8,
+        "step": "Retain exact lane and installation evidence",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-runtime-targets",
+        "stepIndex": 9,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 5,
+        "step": "Download manifest selected by admission",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 6,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 7,
+        "step": "Execute smoke",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 8,
+        "step": "Retain exact lane and installation evidence",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-scaffold",
+        "stepIndex": 9,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 5,
+        "step": "Download manifest selected by admission",
+        "kind": "step-uses",
+        "value": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 6,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 7,
+        "step": "Execute smoke",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 8,
+        "step": "Retain exact lane and installation evidence",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-storage",
+        "stepIndex": 9,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-evidence",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-evidence",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-evidence",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-evidence",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-evidence",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-evidence",
+        "stepIndex": 5,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command reconcile-verification --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-evidence",
+        "stepIndex": 6,
+        "step": "Execute reconcile-verification",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs reconcile-verification --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\"",
+        "classification": "recovery-publication"
+      },
+      {
+        "job": "recovery-evidence",
+        "stepIndex": 7,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-dispatch-audit",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-dispatch-audit",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-dispatch-audit",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-dispatch-audit",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-dispatch-audit",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-dispatch-audit",
+        "stepIndex": 5,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command dispatch-audit --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-dispatch-audit",
+        "stepIndex": 6,
+        "step": "Execute dispatch-audit",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs dispatch-audit --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\"",
+        "classification": "recovery-publication"
+      },
+      {
+        "job": "recovery-dispatch-audit",
+        "stepIndex": 7,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit-evidence",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit-evidence",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit-evidence",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit-evidence",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit-evidence",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit-evidence",
+        "stepIndex": 5,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command reconcile-audit --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-audit-evidence",
+        "stepIndex": 6,
+        "step": "Execute reconcile-audit",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs reconcile-audit --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\"",
+        "classification": "recovery-publication"
+      },
+      {
+        "job": "recovery-audit-evidence",
+        "stepIndex": 7,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-finalize",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-finalize",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-finalize",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-finalize",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-finalize",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-finalize",
+        "stepIndex": 5,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command finalize --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-finalize",
+        "stepIndex": 6,
+        "step": "Execute finalize",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs finalize --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\"",
+        "classification": "recovery-publication"
+      },
+      {
+        "job": "recovery-finalize",
+        "stepIndex": 7,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-publish",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-publish",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-publish",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-publish",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-publish",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-publish",
+        "stepIndex": 5,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command publish --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-publish",
+        "stepIndex": 6,
+        "step": "Execute publish",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs publish --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\"",
+        "classification": "recovery-publication"
+      },
+      {
+        "job": "recovery-publish",
+        "stepIndex": 7,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-report",
+        "stepIndex": 0,
+        "step": "Checkout exact reviewed controller",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-report",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-report",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-report",
+        "stepIndex": 3,
+        "step": "Assert bundled npm",
+        "kind": "run",
+        "value": "test \"$(npm --version)\" = \"11.17.0\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-report",
+        "stepIndex": 4,
+        "step": "Install controller dependencies without lifecycles",
+        "kind": "run",
+        "value": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-report",
+        "stepIndex": 5,
+        "step": "Prepare exact committed request",
+        "kind": "run",
+        "value": "node scripts/release/recovery/workflow-request.mjs --command report --output \"$RUNNER_TEMP/request.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-report",
+        "stepIndex": 6,
+        "step": "Execute report",
+        "kind": "run",
+        "value": "node scripts/release/recovery/cli.mjs report --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --needs \"$RUNNER_TEMP/needs.json\"",
+        "classification": "safe"
+      },
+      {
+        "job": "recovery-report",
+        "stepIndex": 7,
+        "step": "Retain command diagnostic",
+        "kind": "step-uses",
+        "value": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "classification": "safe"
+      }
+    ],
     "release.yml": [
       {
         "classification": "safe",

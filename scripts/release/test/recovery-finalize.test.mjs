@@ -325,3 +325,24 @@ test("final inventory retains permitted earlier uncorrelated audit bookkeeping",
       .sort((a, b) => (a.assetName < b.assetName ? -1 : a.assetName > b.assetName ? 1 : 0)),
   )
 })
+
+for (const field of ["title", "body"])
+  test(`diagnostic recommends finalization repair for publication-ready ${field} drift`, async () => {
+    const { recoveryDiagnosticContext } = await import("../recovery/diagnostics.mjs")
+    const r = await remote()
+    await finalize(r)
+    assert.equal(recoveryDiagnosticContext(r.request, await observed(r)).nextAction, "publish")
+    if (field === "title") r.release.name = "Changed title"
+    else {
+      assert.ok(r.release.body.includes("Original notes"))
+      r.release.body = r.release.body.replace("Original notes", "Changed notes")
+    }
+    const drifted = await observed(r)
+    assert.equal(drifted.phase, "PUBLICATION_READY")
+    assert.equal(recoveryDiagnosticContext(r.request, drifted).nextAction, "finalize")
+    r.effects.length = 0
+    await assert.rejects(publish(r), /publication metadata differs/)
+    assert.equal(r.effects.length, 0)
+    await finalize(r)
+    assert.equal(recoveryDiagnosticContext(r.request, await observed(r)).nextAction, "publish")
+  })

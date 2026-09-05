@@ -597,3 +597,40 @@ test("all known non-success Actions terminal conclusions remain admissible failu
   }
   assert.equal(r.effects.length, 1)
 })
+
+test("bounded audit wait retains one controller deadline while missing artifact becomes available", async () => {
+  const r = await resultRemote()
+  const artifacts = r.auditArtifacts
+  r.auditArtifacts = []
+  let sleeps = 0
+  const sleep = r.dependencies.authority.sleep
+  r.dependencies.authority.sleep = async (ms) => {
+    sleeps++
+    r.auditArtifacts = artifacts
+    await sleep(ms)
+  }
+  assert.equal(typeof module.waitForRecoveryAudit, "function")
+  const result = await module.waitForRecoveryAudit(r.request, r.config, r.dependencies)
+  assert.equal(result.phase, "AUDIT_VERIFIED")
+  assert.equal(sleeps, 1)
+})
+
+test("audit wait expires one original phase budget with no writes or controller restart", async () => {
+  const r = await resultRemote()
+  r.auditArtifacts = []
+  let now = r.dependencies.authority.now(),
+    sleeps = 0
+  const started = now
+  r.dependencies.authority.now = () => now
+  r.dependencies.authority.sleep = async (milliseconds) => {
+    now += milliseconds
+    sleeps++
+  }
+  await assert.rejects(
+    module.waitForRecoveryAudit(r.request, r.config, r.dependencies),
+    /deadline|budget|expired/,
+  )
+  assert.equal(now - started, 1200000)
+  assert.ok(sleeps > 1 && sleeps < 100)
+  assert.equal(r.effects.length, 0)
+})

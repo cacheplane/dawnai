@@ -2,8 +2,8 @@
 
 Status on 2026-09-05: dormant version 2 observation, guarded adoption, five-lane
 evidence collection, independent audit, finalization/publication orchestration,
-and production read adapters are implemented and independently reviewed. CLI and
-workflow composition, efficiency work, and the complete rehearsal remain in
+production read adapters, CLI, and workflow composition are implemented and
+independently reviewed. Efficiency work and the complete rehearsal remain in
 progress. The disposable GitHub experiment is prepared but **not run**.
 Production admission remains
 `legacy-fence-required`. This report does not authorize or perform recovery.
@@ -707,26 +707,49 @@ source copy was removed; repository source was never weakened. Scoped
 Biome checked 18 files; inventory, docs, and diff checks passed. Policy
 remains dormant, with no production admission or live recovery effects.
 
-## Runtime integration findings (Task 10 preparation)
+## Runtime integration (Task 10)
 
-The production runtime still needs trusted repository/default-branch and
-numeric job identity observation, immutability-policy observation, and an
-operational legacy-fence adapter. The current policy contains approved fence
-digests only; a bounded contract format and fixed git locator must connect
-reviewed service evidence to fresh disabled/drained observations. No real
-service fence has been demonstrated, and the contract inventory remains empty.
+The production read adapters now observe repository/default-branch and numeric
+job identity, immutability policy, and the complete legacy-workflow inventory.
+The reviewed fence contract connects digest-bound service evidence to fresh
+disabled/drained observations. No real service fence has been demonstrated,
+and the contract inventory remains empty. The complete live inventory also
+contains two platform-generated workflows that the current contract cannot
+represent; see the [platform workflow assessment](../specs/2026-09-05-platform-workflow-fence-assessment.md).
+
+CLI and workflow composition is implemented and independently reviewed.
+The owner workflow admits the exact committed intent, adopts or observes the
+candidate, runs five lanes when durable evidence is absent, escrows their
+results, dispatches and reconciles the independent audit, finalizes, publishes,
+and always reports. A resume with valid finalization uses that evidence even
+when the display marker needs repair. Job outputs select work; fresh observation
+establishes completion.
+
+Admission transfers the verified original manifest through an Actions artifact.
+Each smoke parent independently checks its canonical bytes and candidate digest
+before launching the strict child. Smoke jobs have read-only contents permission;
+their child environment excludes GitHub, npm, OIDC, and policy credentials.
+The independent auditor uses a separate concurrency group so the owner can wait
+without holding up its own audit. Only the dispatch job needs Actions write.
+
+The read-only `release:recover:inspect` command accepts a canonical request and
+absolute output path. Omitting `intentPath` selects original-payload inspection
+and returns an explicitly unreserved diagnostic with a proposed intent. It does
+not construct a writer or insert a reservation. Retain this diagnostic outside
+`scripts/release/recovery-adoptions/`; regenerate the proposal after a policy
+change because its policy digest is part of the proposed identity.
 
 Root independently read the repository immutability endpoint on 2026-09-05:
 `enabled: true`, `enforced_by_owner: false`
 (`/tmp/dawn-recovery-immutable-policy-current.json`). This proves the setting
 under the existing local operator credential, not access from a workflow token.
-GitHub documents Administration(read) for this GET. Runtime wiring must keep
-a separate policy-read credential/channel out of smoke processes; unavailable
+GitHub documents Administration(read) for this GET. Runtime wiring keeps
+a separate policy-read credential/channel out of smoke and attestation subprocesses; unavailable
 proof must block publication. See the [GitHub endpoint contract](https://docs.github.com/en/rest/repos/repos?apiVersion=2026-03-10#check-if-immutable-releases-are-enabled-for-a-repository).
 
 The dormant recovery profile originally names Node 24.17.0, whose bundled npm
 is 11.13.0. Existing release workflows now pin Node 24.19.0 and assert npm
-11.17.0. Task 10 will align the dormant profile and its fixtures with that
+11.17.0. Task 10 aligns the dormant profile and its fixtures with that
 existing pair, preserving the exact official npm verifier contract and avoiding
 an additional tooling installation. The [Node 24.19.0 release](https://nodejs.org/id/blog/release/v24.19.0)
 records the npm 11.17.0 update. No active recovery evidence is being migrated.
@@ -823,3 +846,20 @@ allows and writes `source-deploy-failure.log`/`prebuilt-deploy-failure.log`, but
 copies only that allowlist. Task 13 will correct both names and test the full
 redacted diagnostic-to-upload path before the next real CI run. The underlying
 Vercel failure is still unclassified; no live preview or credential was changed.
+
+## Workflow integration verification (Task 10b)
+
+Independent specification and quality reviews approved the corrected integration.
+The final full controller suite passed 3,023 tests, zero failures, in 152.09
+seconds. Scoped Biome checked 23 files; release inventory, docs, and whitespace
+checks passed. Root independently removed the attestation environment projection
+in an isolated copy: the credential-boundary regression failed, and passed again
+after restoration. Logs: `/tmp/dawn-recovery-task10b-controller-verified.log` and
+`/tmp/dawn-recovery-task10b-env-mutation.log`.
+
+Inspection now distinguishes empty admission from an existing committed
+reservation. Final diagnostics report requested identity, current verified
+phase, selected receipt locations, and the next action. Starting phase and
+completed mutation history are explicitly unavailable; successful job results
+are never converted into a fictitious mutation journal. Readiness metadata drift
+recommends finalization repair before publication. Live recovery remains dormant.

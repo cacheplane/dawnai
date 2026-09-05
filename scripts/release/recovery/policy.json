@@ -7,7 +7,7 @@
     "architecture": "x64",
     "containment": "systemd-cgroup-v2",
     "dockerImages": ["node:22-slim", "pgvector/pgvector:pg16", "postgres:16"],
-    "node": "24.17.0",
+    "node": "24.19.0",
     "packageManager": "npm@11.17.0",
     "platform": "linux",
     "profile": "recovery-linux-v2"
@@ -111,12 +111,15 @@
   "status": "DORMANT",
   "verifierClosure": {
     "inputs": [
+      ".github/workflows/release-postpublication-audit.yml",
+      ".github/workflows/release-postpublication.yml",
       "scripts/lib/published-artifacts.mjs",
       "scripts/lib/readme-contracts.mjs",
       "scripts/lib/typescript-tooling-probe.mjs",
       "scripts/published-artifact-smoke.mjs",
       "scripts/published-artifact-verify.mjs",
       "scripts/release/adapter-normalize.mjs",
+      "scripts/release/adapters/git.mjs",
       "scripts/release/adapters/github-write-transport.mjs",
       "scripts/release/adapters/github.mjs",
       "scripts/release/adapters/http.mjs",
@@ -127,10 +130,15 @@
       "scripts/release/metadata.mjs",
       "scripts/release/npm-audit.mjs",
       "scripts/release/npm-evidence.mjs",
+      "scripts/release/process-runner.mjs",
+      "scripts/release/recovery/adopt.mjs",
       "scripts/release/recovery/audit-proof.mjs",
       "scripts/release/recovery/audit.mjs",
       "scripts/release/recovery/authority.mjs",
+      "scripts/release/recovery/cli.mjs",
+      "scripts/release/recovery/diagnostics.mjs",
       "scripts/release/recovery/evidence-proof.mjs",
+      "scripts/release/recovery/evidence.mjs",
       "scripts/release/recovery/fence-evidence.mjs",
       "scripts/release/recovery/fence.mjs",
       "scripts/release/recovery/finalize.mjs",
@@ -139,8 +147,13 @@
       "scripts/release/recovery/model.mjs",
       "scripts/release/recovery/observe.mjs",
       "scripts/release/recovery/policy.mjs",
+      "scripts/release/recovery/requests.mjs",
+      "scripts/release/recovery/runtime.mjs",
       "scripts/release/recovery/schema.mjs",
+      "scripts/release/recovery/smoke-child.mjs",
       "scripts/release/recovery/smoke.mjs",
+      "scripts/release/recovery/workflow-request.mjs",
+      "scripts/release/recovery/workflow.mjs",
       "scripts/release/recovery/writer.mjs",
       "scripts/release/release-record.mjs",
       "scripts/release/semver.mjs",
@@ -156,7 +169,7 @@
       "scripts/release/terminal-records.mjs",
       "scripts/release/topology.mjs"
     ],
-    "sha256": "75e437356de3fa09ae3c3b47e3906219c8615c0b388c6189f23d42ddc4448b59"
+    "sha256": "e7ddeefb6a37d07c6d5080afe19e5bb060e1ccabdfcc6f6410fd046dcc3550e7"
   },
   "workflows": [
     ".github/workflows/release-postpublication-audit.yml",

@@ -571,7 +571,7 @@ runtime/CLI/workflows. This keeps source ownership and review boundaries clear.
   passed. Final controller evidence is retained at
   `/tmp/dawn-recovery-task10a-controller-verified.log`; independent final spec and
   quality runs passed 83 and 142 focused tests respectively.
-- [ ] Implement strict subcommands: `inspect`, `adopt`, `smoke`,
+- [x] Implement strict subcommands: `inspect`, `adopt`, `smoke`,
   `reconcile-verification`, `dispatch-audit`, `audit`, `reconcile-audit`,
   `finalize`, `publish`, and `report`. Each accepts bounded named input paths,
   parses canonical objects, and rechecks authority relevant to its effects.
@@ -588,50 +588,64 @@ runtime/CLI/workflows. This keeps source ownership and review boundaries clear.
   add a permissive mode to `observeRecoveryCandidate`. A proposed intent binds
   the inspected policy digest and must be regenerated after any admission-policy
   change; its presence is never evidence of a committed reservation.
-- [ ] Test every wrong/missing input, early failed guard, writer-unavailable phase,
+- [x] Test every wrong/missing input, early failed guard, writer-unavailable phase,
   skipped required job, audit failure, and actual completed observation.
   Test report output even when command execution fails. Sanitize failure detail.
-- [ ] Use this explicit recovery graph with phase predicates generated/tested
+- [x] Use this explicit recovery graph with phase predicates generated/tested
   against `model.mjs`: `admit -> adopt-or-observe -> five smoke jobs ->
   reconcile-verification -> dispatch-audit -> reconcile-audit -> finalize ->
   publish -> report`. Resume paths consume durable evidence, not outputs from
   jobs skipped on that invocation. Audit-ready resumes do not rerun smoke.
-- [ ] Keep jobs that receive publication contents-write separate from smoke
+- [x] Keep jobs that receive publication contents-write separate from smoke
   subprocesses. Recovery admission/metadata/audit-reader jobs may require
   contents-write for draft visibility; no tokens flow into smoke commands.
   Audit dispatch alone needs actions-write. No OIDC, npm token, build, pack, or
   package lifecycle script runs in the metadata writer jobs.
-- [ ] Supply the immutability-policy GET through a separate read-only policy
+- [x] Supply the immutability-policy GET through a separate read-only policy
   credential/channel, confined to that adapter and metadata jobs. The endpoint
   requires Administration(read), which ordinary contents-write alone does not
   document. Never grant administration-write or pass this credential to smoke
   processes. Missing/denied policy proof blocks before publication effects.
-- [ ] Every checkout uses `github.sha`; each workflow requires expected SHA
+- [x] Every checkout uses `github.sha`; each workflow requires expected SHA
   equality. Align dormant recovery policy and fixtures with the repository's
   actual Node 24.19.0 / bundled npm 11.17.0 pair, pnpm 10.33.0, and pinned
   actions. The earlier Node 24.17.0 profile bundles npm 11.13.0 and would
   fail the required npm verifier check. Avoid injecting
   workflow input strings directly into shell program text; pass environment
   strings or validated canonical request files.
-- [ ] Wire audit job `recovery-audit` and owner escrow job
+- [x] Wire audit job `recovery-audit` and owner escrow job
   `recovery-audit-evidence` to Task 8's exact provenance contracts. The audit
   artifact `recovery-v2-audit-result-${runId}-${attempt}-${jobId}` contains
   exactly one same-basename `.json`. Use API-observed numeric job identity;
   `GITHUB_JOB` is a symbolic name. Require all ten named checks, including
   actual verifier cleanup, before accepting a successful result.
-- [ ] Recovery uses `dawn-release-controller`, cancellation false, queue max.
+- [x] Recovery uses `dawn-release-controller`, cancellation false, queue max.
   Independent audit uses a distinct group and bounded timeout; it can run while
   the parent holds the writer group. Set audit polling below parent job budget.
   Phase budgets live in policy; workflow timeout literals are generous outer
   bounds enforced by contract tests, never independent retry rules.
-- [ ] Final report uses `always()` and explicit result checks. Missing required
+- [x] Final report uses `always()` and explicit result checks. Missing required
   work cannot imply completion. Exit 0 only for proven completion (with optional
   display-drift warning) or an explicitly labeled dispatch-only handoff; waiting
   or blocked recovery reports remain non-success. Hard runner loss is identified
   on the next observation.
-- [ ] Run `node --test scripts/release/test/recovery-cli.test.mjs scripts/release/test/recovery-workflow.test.mjs`.
+- [x] Run `node --test scripts/release/test/recovery-cli.test.mjs scripts/release/test/recovery-workflow.test.mjs`.
   Mutate a required dependency or remove an `always()` recovery guard, require
   failure, restore, then commit with workflows dormant through empty admission.
+
+Task 10b is implemented and independently reviewed as dormant code. The final
+controller suite passed 3,023 tests with zero failures in 152.09 seconds;
+scoped Biome checked 23 files, and inventory, docs, and diff checks passed.
+Final specification checks passed 75 tests; independent quality review passed
+94. Review corrections made reservation status truthful, retained bounded
+outcome context, corrected metadata-repair guidance, and excluded the policy
+credential from attestation subprocesses. Historical starting phase and completed
+mutation telemetry are explicitly unavailable in the diagnostic envelope;
+current durable evidence and receipt locations are independently observed.
+Root's isolated environment-projection mutation failed its regression, then
+passed after restoration. The definitive controller log is
+`/tmp/dawn-recovery-task10b-controller-verified.log`. No live dispatch, activation,
+policy credential provisioning, or release mutation occurred.
 
 ## Task 11: Extend workflow policy and release closure pins
 
@@ -642,21 +656,41 @@ runtime/CLI/workflows. This keeps source ownership and review boundaries clear.
 fixtures under `scripts/release/`. Modify owner checks only where new workflow
 authority actually requires it; preserve npm's sole owner `release.yml`.
 
-- [ ] Add tests for the two new workflow identities, exact allowed methods,
+- [x] Add tests for the two new workflow identities, exact allowed methods,
   scopes, SHA guards, empty adoption defaults, and independent-audit group.
   Distinguish allowed version 2 GitHub publication from npm publication ownership.
-- [ ] Extend closure discovery to every new static/dynamic entrypoint and
+- [ ] Resolve the live platform-workflow topology gap before claiming fence
+  feasibility. A complete 15-workflow API response also includes
+  `342414828` / `dynamic/agents/copilot-pull-request-reviewer` and `272837823` /
+  `dynamic/dependabot/dependabot-updates`; neither has workflow bytes in Git.
+  The current contract cannot represent them. Do not filter these entries or
+  infer absent write authority from their names. Any platform-owned contract
+  variant needs explicit reviewed identity, service/configuration trust, and
+  applicable fencing evidence; unsupported authority keeps admission blocked.
+  See the [platform workflow assessment](../specs/2026-09-05-platform-workflow-fence-assessment.md)
+  for observed permissions, configuration boundaries, and required service tests.
+  The raw read-only inventory is retained at
+  `/tmp/dawn-recovery-live-workflows-20260905.json`.
+- [x] Extend closure discovery to every new static/dynamic entrypoint and
   `recovery/policy.json`. Adoption data is independently git-reviewed and bound
   by its digest; unknown/unreviewed records still confer no runtime authority.
-- [ ] Recompute each content pin from actual final bytes using SHA-256; update
+- [x] Recompute each content pin from actual final bytes using SHA-256; update
   the fixture's aggregate hash and readable execution allowlist together.
   Preserve existing workflow contracts instead of broadening catch-all patterns.
-- [ ] Run `node --test scripts/release/test/workflow-contracts.test.mjs` and then
+- [x] Run `node --test scripts/release/test/workflow-contracts.test.mjs` and then
   `pnpm test:release-controller`. As earlier tasks change imported source,
   maintain affected pins in those commits too; this task verifies complete
   final reachability and ownership coverage.
-- [ ] Add an unpinned imported module and a forbidden npm command in a fixture,
+- [x] Add an unpinned imported module and a forbidden npm command in a fixture,
   verify both fail, restore, and commit the final pin/policy changes.
+
+The software closure and ownership checks were completed with Task 10b and
+included in both independent reviews. Root's isolated source-copy experiment
+passed its baseline, rejected an unpinned transitive import and an npm publish
+command in the recovery workflow for their intended reasons, then passed after
+restoration. Evidence is in `/tmp/dawn-recovery-task10b-root-mutations.log`.
+The platform-workflow representation and service proof remain unresolved;
+these passing code checks do not establish live fence feasibility.
 
 ## Task 12: Local fault rehearsal and real GitHub contract lane
 
@@ -670,6 +704,16 @@ batch API and its tests, wire recovery observation to that API, and add a
 small bounded byte-reuse module plus dedicated tests. Keep legacy verifier
 methods unchanged. Add the bounded eligible-host check to `ci.yml` and its
 workflow contract tests. Maintain actual transitive pins in the same change.
+
+Execute this task in sequential reviewed slices: first fresh complete-inventory
+npm verification; then invocation-scoped payload reuse and the initial managed
+observation settlement gap; then the full fault rehearsal and dedicated service
+and Linux entrypoints. This separates performance changes from rehearsal
+infrastructure without weakening any final gate. Keep the same underlying writer
+transport identity across retries; a read-cache wrapper must not create a new
+identity that discards unsettled-write exclusion. Prefer reusing the existing
+writer transaction and verifier lease for initial controller reads when that
+preserves the read-only boundary, rather than adding another lifecycle manager.
 
 - [ ] Reuse production effects and adapters against disposable local HTTP/npm
   fixtures, with independent readback. Exercise the whole legacy adoption ->
@@ -696,6 +740,13 @@ workflow contract tests. Maintain actual transitive pins in the same change.
   audit workspace. Test changed IDs/digests, cache corruption, expiry,
   deadlines, and interrupted resume, and report measured before/after
   counts without presenting fixture timings as production performance.
+  A separate late-phase fixture baseline recorded audit escrow at 546 Release
+  downloads / 168 npm tarballs / 8 verifier factories for 3 writes; finalization
+  at 418 / 126 / 6 for 2 writes; publication at 210 / 63 / 3 for 1 write; and
+  published no-op at 70 / 21 / 1 for zero writes. The exact observed source
+  hashes and stage counts are in `/tmp/dawn-task12-late-phase-cost.json`.
+  This sample used a fixture-supplied audit result and the 55347198-based worktree
+  during Task 10b; it is not a complete service rehearsal or an npm timing claim.
 - [ ] Prepare a GitHub contract harness with an explicit disposable repository
   allowlist, fixture-owned ID ledger, and cleanup limited to those resources.
   Require `DAWN_TEST_RECOVERY_GITHUB=1` and a separately supplied authorized test

@@ -102,7 +102,7 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for Task 9: frozen finalization observation and canonical metadata reconstruction.
 // Repinned for Task 10a: strict GitHub inventories, bounded exact git reads, and dormant verifier closure.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "eccc5d00f63e6b35ac1a058b92f629681f1276efd5500b0f6a9291bb44a9a84b"
+  "357b7d230fb16f7e0c55e2938951a539cef823649388ebc4c646da5dee6b5a04"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
@@ -149,6 +149,8 @@ const ACTIONS = Object.freeze({
 })
 const FINAL_WORKFLOW_FILES = Object.freeze([
   "published-artifact-verify.yml",
+  "release-postpublication-audit.yml",
+  "release-postpublication.yml",
   "release.yml",
   "version-pr.yml",
 ])
@@ -2296,6 +2298,37 @@ test("workflow classifications are explicit safe or release-only publication", a
   )
 })
 
+test("v2 publication is a distinct exact owner classification and copied commands cannot be safe", async () => {
+  const source = (await readWorkflowSourcesFromRoot(ROOT))["release-postpublication.yml"]
+  const workflow = parse(source)
+  const entries = workflowExecutables(workflow)
+  const writes = entries.filter((entry) =>
+    /scripts\/release\/recovery\/cli\.mjs (?:adopt|reconcile-verification|dispatch-audit|reconcile-audit|finalize|publish) /u.test(
+      entry.value,
+    ),
+  )
+  assert.equal(writes.length, 6)
+  for (const entry of writes) {
+    assert.throws(() =>
+      classifyExecutables("foreign.yml", [entry], [{ ...entry, classification: "safe" }]),
+    )
+    assert.throws(() =>
+      classifyExecutables(
+        "foreign.yml",
+        [entry],
+        [{ ...entry, classification: "recovery-publication" }],
+      ),
+    )
+    assert.doesNotThrow(() =>
+      classifyExecutables(
+        "release-postpublication.yml",
+        [entry],
+        [{ ...entry, classification: "recovery-publication" }],
+      ),
+    )
+  }
+})
+
 test("matching descriptor inventory cannot classify a new executable as safe", () => {
   const cases = [
     ["npm publish", "jobs:\n  new:\n    steps:\n      - run: npm publish\n"],
@@ -4170,7 +4203,10 @@ function classifyExecutables(file, actual, expected) {
   const classifications = new Map()
   for (let index = 0; index < actual.length; index += 1) {
     const allowed = expected[index]
-    if (!isRecord(allowed) || !["safe", "publication"].includes(allowed.classification))
+    if (
+      !isRecord(allowed) ||
+      !["safe", "publication", "recovery-publication"].includes(allowed.classification)
+    )
       throw unauditedEntrypoint()
     const identity = {
       job: allowed.job,
@@ -4181,12 +4217,24 @@ function classifyExecutables(file, actual, expected) {
     }
     if (canonicalJson(actual[index]) !== canonicalJson(identity)) throw unauditedEntrypoint()
     const publication = isReleaseMutationExecutable(file, actual[index])
+    const recovery = isRecoveryMutationExecutable(actual[index])
     if (allowed.classification === "publication") {
-      if (file !== "release.yml" || !publication) throw unauditedEntrypoint()
-    } else if (publication) throw unauditedEntrypoint()
+      if (file !== "release.yml" || !publication || recovery) throw unauditedEntrypoint()
+    } else if (allowed.classification === "recovery-publication") {
+      if (file !== "release-postpublication.yml" || !recovery) throw unauditedEntrypoint()
+    } else if (publication || recovery) throw unauditedEntrypoint()
     classifications.set(executableIdentity(actual[index]), allowed.classification)
   }
   return classifications
+}
+
+function isRecoveryMutationExecutable(entry) {
+  return (
+    entry.kind === "run" &&
+    /scripts\/release\/recovery\/cli\.mjs\s+(?:adopt|reconcile-verification|dispatch-audit|reconcile-audit|finalize|publish)\b/u.test(
+      entry.value,
+    )
+  )
 }
 
 function isReleaseMutationExecutable(file, entry) {
@@ -4293,7 +4341,8 @@ function workflowDescriptor(workflow, classifications) {
               value: hasRun ? step.run : step.uses,
             }
             const classification = classifications.get(executableIdentity(executable))
-            if (!["safe", "publication"].includes(classification)) throw unauditedEntrypoint()
+            if (!["safe", "publication", "recovery-publication"].includes(classification))
+              throw unauditedEntrypoint()
             return {
               classification,
               descriptor: snapshotDescriptor(step),

@@ -299,6 +299,10 @@ test("reviewed probe inventory equals independently discovered local executable 
   const root = fileURLToPath(new URL("../../../", import.meta.url))
   const ts = createRequire(path.join(root, "packages/core/package.json"))("typescript")
   const roots = [
+    ".github/workflows/release-postpublication.yml",
+    ".github/workflows/release-postpublication-audit.yml",
+    "scripts/release/recovery/cli.mjs",
+    "scripts/release/recovery/workflow-request.mjs",
     "scripts/published-artifact-verify.mjs",
     "scripts/release/smoke/published-harness.mjs",
     "scripts/release/smoke/runtime-targets.mjs",

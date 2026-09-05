@@ -550,3 +550,113 @@ for (const field of ["jobId", "runId"])
     assert.equal(result.outcome, "blocked")
     assert.match(result.errors.join("; "), /producer (job|run) identity/)
   })
+
+test("unreserved pre-adoption inspection proves original payload without granting writer facts", async () => {
+  const r = await recoveryRemote()
+  r.args.git.listTree = async () => ""
+  r.args.git.showFile = async ({ path }) => {
+    if (path.endsWith("policy.json")) return canonical(r.policy).toString()
+    throw new Error("no committed admission")
+  }
+  assert.equal(typeof observer.inspectRecoveryOriginalPayload, "function")
+  const result = await observer.inspectRecoveryOriginalPayload(r.args)
+  assert.equal(result.status, "unreserved")
+  assert.equal(result.originalPayload.npmEvidence.conclusion, "success")
+  assert.equal(result.originalPayload.assets.length, r.baseAssets.length)
+  assert.equal(Object.hasOwn(result, "facts"), false)
+  assert.equal(result.proposal.policySha256, r.intent.policySha256)
+  assert.equal((await observe(r.args)).outcome, "blocked")
+})
+
+test("pre-adoption inspection rejects foreign original proof", async () => {
+  const r = await recoveryRemote()
+  r.args.candidate = { ...r.c, manifestSha256: "0".repeat(64) }
+  assert.equal(typeof observer.inspectRecoveryOriginalPayload, "function")
+  const result = await observer.inspectRecoveryOriginalPayload(r.args)
+  assert.equal(result.status, "blocked")
+  assert.equal(result.originalPayload, null)
+  assert.equal(result.proposal, null)
+})
+
+test("pre-adoption inspection reports a committed reservation without a duplicate proposal", async () => {
+  const r = await recoveryRemote()
+  const result = await observer.inspectRecoveryOriginalPayload(r.args)
+  assert.equal(result.status, "recovery-required")
+  assert.equal(result.proposal, null)
+  assert.equal(result.reservation.intentPath, r.intentPath)
+  assert.equal(result.originalPayload.npmEvidence.conclusion, "success")
+})
+for (const [name, change] of [
+  [
+    "conflicting candidate",
+    (r) => {
+      r.intent.candidate = { ...r.c, candidateSha: "d".repeat(40) }
+    },
+  ],
+  [
+    "foreign repository with same release ID",
+    (r) => {
+      r.intent.candidate = { ...r.c, repository: "foreign/project", repositoryId: "999" }
+    },
+  ],
+  [
+    "ambiguous reservation",
+    (r) => {
+      r.args.git.listTree = async () => `${r.intentPath}\n${r.intentPath}`
+    },
+  ],
+  [
+    "malformed inventory",
+    (r) => {
+      r.args.git.listTree = async () => ({ paths: [r.intentPath] })
+    },
+  ],
+  [
+    "malformed committed intent",
+    (r) => {
+      const show = r.args.git.showFile
+      r.args.git.showFile = async (a) => (a.path === r.intentPath ? "{}" : show(a))
+    },
+  ],
+  [
+    "changed policy digest",
+    (r) => {
+      r.intent.policySha256 = "0".repeat(64)
+    },
+  ],
+  [
+    "changed legacy body digest",
+    (r) => {
+      r.intent.legacyBodySha256 = "0".repeat(64)
+    },
+  ],
+])
+  test(`pre-adoption ${name} blocks while retaining verified original payload`, async () => {
+    const r = await recoveryRemote()
+    change(r)
+    const result = await observer.inspectRecoveryOriginalPayload(r.args)
+    assert.equal(result.status, "blocked")
+    assert.equal(result.proposal, null)
+    assert.equal(result.originalPayload.npmEvidence.conclusion, "success")
+  })
+
+test("an unrelated foreign reservation does not reserve the inspected candidate", async () => {
+  const r = await recoveryRemote()
+  r.intent.candidate = {
+    ...r.c,
+    repository: "foreign/project",
+    repositoryId: "999",
+    releaseId: "998",
+  }
+  const result = await observer.inspectRecoveryOriginalPayload(r.args)
+  assert.equal(result.status, "unreserved")
+  assert.deepEqual(result.proposal.candidate, r.c)
+})
+test("unsafe admission inventory paths cannot become an empty reservation inventory", async () => {
+  const r = await recoveryRemote()
+  r.args.git.listTree = async () => "scripts/release/recovery-adoptions/unsafe name.json"
+  const result = await observer.inspectRecoveryOriginalPayload(r.args)
+  assert.equal(result.status, "blocked")
+  assert.equal(result.proposal, null)
+  assert.equal(result.originalPayload.npmEvidence.conclusion, "success")
+})

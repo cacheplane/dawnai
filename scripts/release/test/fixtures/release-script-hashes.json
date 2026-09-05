@@ -53,7 +53,7 @@
       "sha256": "3e171b1bc9aa79080d58087327ea2014b856ba5e6329f33de1a0a5f1b18c05d1"
     },
     "scripts/release/artifact-store.mjs": {
-      "sha256": "7626952c3dace863a1cd933b1a6686e3816a6e054e06742c5d5ea8cf57dfc487"
+      "sha256": "8b285501239e71b93ee5ec4280efb6c82a112ede09dc8699663eadd66deeb6ab"
     },
     "scripts/release/audit.mjs": {
       "sha256": "8d18331b857ba0743a9a2109b51f07639639cecb7a572375973452356b81a60f"
@@ -127,11 +127,41 @@
     "scripts/release/publisher.mjs": {
       "sha256": "455f8b647b6458eb3830c30b4ac05dab4cb24a2d713098614cacbee0cfc7516c"
     },
+    "scripts/release/recovery/adopt.mjs": {
+      "sha256": "270f2efaeb15aba3431f91ba406aec3a6348c1992204ec4b233f94d7d97d1064"
+    },
     "scripts/release/recovery/audit-proof.mjs": {
       "sha256": "0d2258c9a0bee1006c3e3c47a55a033b6e8caf432bce3bb55b55b33c0ec71f30"
     },
+    "scripts/release/recovery/audit.mjs": {
+      "sha256": "93036d9c8ce207f4024e3800e710ad70c8518325a630ee01897409cfe1ef8190"
+    },
+    "scripts/release/recovery/authority.mjs": {
+      "sha256": "938eff7e7f7a8a085dd34493461ddf4da0bc619e6a8309df99f773717b4df172"
+    },
+    "scripts/release/recovery/cli.mjs": {
+      "sha256": "7521ec7a2e244d06e9ef42fb87f7c845e972126421ca06432e4f34b7c4fa8695"
+    },
+    "scripts/release/recovery/diagnostics.mjs": {
+      "sha256": "b4eadc68a8b530275625942a9adf08e3962965fb03547f62662cd86b11b6cecf"
+    },
     "scripts/release/recovery/evidence-proof.mjs": {
       "sha256": "daf0ba672d63efbe843703683cb5efb6f1c7b518c0260bb0cb2a275f9bd847c4"
+    },
+    "scripts/release/recovery/evidence.mjs": {
+      "sha256": "4e8a84512d928773bb01421ea836915248f904e22b3299a7cbeab640a1e61911"
+    },
+    "scripts/release/recovery/fence-evidence.mjs": {
+      "sha256": "ec887de50b70263edef728079f4707fd0c0d7b9b2c4566cb6c0c0e4740cfa48c"
+    },
+    "scripts/release/recovery/fence.mjs": {
+      "sha256": "9d488b39708b1651b72b55338bed63837a47cbbd60dc6e77069e4427f7b48298"
+    },
+    "scripts/release/recovery/finalize.mjs": {
+      "sha256": "28cd73764a04518bfdd8d4a42c96f6dda707ee4ff34948ffa6673e73b9a1c2d7"
+    },
+    "scripts/release/recovery/invocation.mjs": {
+      "sha256": "4ed2bb7dd388275fd20b1cc23d2095100d94b0dcfd5782fff26de490d83cf98e"
     },
     "scripts/release/recovery/metadata.mjs": {
       "sha256": "32bd962f4859558c2ffbf2666a367dc855992f30aee6fd052e05bf0f3961c3d6"
@@ -140,16 +170,37 @@
       "sha256": "0da8451d732545c08386ee90015c7fabf9d1e5a1855a5546fcdad4c0a54538d2"
     },
     "scripts/release/recovery/observe.mjs": {
-      "sha256": "c09f53400dde37d22e7859cb59cac01f27d23473787b1ecc96a29a8c6fbf19e4"
+      "sha256": "6994c22d43e12b6fc8339da45445397d6148814ee51aee197c1b1da64346b5ea"
     },
     "scripts/release/recovery/policy.json": {
-      "sha256": "b5c392b2464f53809913a9d2c916008d2ca974dd9ba1d6d7359078c43508b21f"
+      "sha256": "e792d00f81c88450eb04a82a5c2504ae41c4fe2d615fe2c9ca716e151d269233"
     },
     "scripts/release/recovery/policy.mjs": {
       "sha256": "77e3651e87b6964b84333a6c324087e855035a77987054e4fc73a412ff148ad2"
     },
+    "scripts/release/recovery/requests.mjs": {
+      "sha256": "8b881aaa9619ba902dd732247e5fc00aefcb12fb83078c0cb325e555c30d173f"
+    },
+    "scripts/release/recovery/runtime.mjs": {
+      "sha256": "ff42261bb5b2293e9e7085789960c183a95e40d655e9ae3a3db734b3b540079e"
+    },
     "scripts/release/recovery/schema.mjs": {
       "sha256": "1588b11421296c2153839f7d304f10eb1f559f06372fe79920b6048ec2652cc0"
+    },
+    "scripts/release/recovery/smoke-child.mjs": {
+      "sha256": "c1f3e03d52edbe33bd0ff5c5a71a783831dfca3a1c5463891c628d425b8b3eb1"
+    },
+    "scripts/release/recovery/smoke.mjs": {
+      "sha256": "925abe84793c8ed1307fd7d522d89871320b0ca07b39c727c67da58d53e5a84f"
+    },
+    "scripts/release/recovery/workflow-request.mjs": {
+      "sha256": "5d1cb893b0996267c5062ffeca0a72799d41f727845b2f21dc8b90bcdb77fcc0"
+    },
+    "scripts/release/recovery/workflow.mjs": {
+      "sha256": "07500c88ba45814f9a2d31dab4e2b152671522f9c2a3f4466ccf1ae8eb4be7c6"
+    },
+    "scripts/release/recovery/writer.mjs": {
+      "sha256": "c0a0766e34188e87489f76c52c9472a679c453b0f0785b96958b1dfe8029b846"
     },
     "scripts/release/release-record.mjs": {
       "sha256": "f841a2b615cef19cf913a4f89665c10c428446f97314de6c27c1785e47a51170"

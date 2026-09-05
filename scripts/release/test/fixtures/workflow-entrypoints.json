@@ -2525,6 +2525,1716 @@
         }
       ]
     },
+    "release-postpublication-audit.yml": {
+      "classification": "safe",
+      "descriptor": {
+        "concurrency": {
+          "cancel-in-progress": false,
+          "group": "dawn-recovery-audit-${{ inputs.request_id }}",
+          "queue": "max"
+        },
+        "name": "Release Post-publication Audit",
+        "on": {
+          "workflow_dispatch": {
+            "inputs": {
+              "expected_controller_sha": {
+                "description": "Exact dispatch expected_controller_sha",
+                "required": true,
+                "type": "string"
+              },
+              "intent_sha256": {
+                "description": "Exact dispatch intent_sha256",
+                "required": true,
+                "type": "string"
+              },
+              "release_id": {
+                "description": "Exact dispatch release_id",
+                "required": true,
+                "type": "string"
+              },
+              "request_id": {
+                "description": "Exact dispatch request_id",
+                "required": true,
+                "type": "string"
+              }
+            }
+          }
+        },
+        "permissions": {
+          "contents": "read"
+        }
+      },
+      "jobs": [
+        {
+          "classification": "safe",
+          "id": "recovery-audit",
+          "descriptor": {
+            "if": "github.ref == 'refs/heads/main' && inputs.expected_controller_sha == github.sha",
+            "name": "recovery-audit",
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_SHA256": "${{ inputs.intent_sha256 }}",
+                  "INPUT_RELEASE_ID": "${{ inputs.release_id }}",
+                  "INPUT_REQUEST_ID": "${{ inputs.request_id }}"
+                },
+                "name": "Resolve and bind immutable audit dispatch",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command audit --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "audit",
+                "if": "always()",
+                "name": "Run independent read-only audit",
+                "run": "node scripts/release/recovery/cli.mjs audit --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain exact audit result",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "${{ steps.audit.outputs.artifact_name }}",
+                  "overwrite": false,
+                  "path": "${{ steps.audit.outputs.evidence_directory }}/*.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain audit diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-audit-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "release-postpublication.yml": {
+      "classification": "safe",
+      "descriptor": {
+        "concurrency": {
+          "cancel-in-progress": false,
+          "group": "dawn-release-controller",
+          "queue": "max"
+        },
+        "name": "Release Post-publication Recovery",
+        "on": {
+          "workflow_dispatch": {
+            "inputs": {
+              "expected_controller_sha": {
+                "description": "Exact reviewed main controller SHA",
+                "required": true,
+                "type": "string"
+              },
+              "intent_path": {
+                "description": "Exact committed adoption intent path",
+                "required": true,
+                "type": "string"
+              }
+            }
+          }
+        },
+        "permissions": {
+          "contents": "read"
+        }
+      },
+      "jobs": [
+        {
+          "classification": "safe",
+          "id": "recovery-admit",
+          "descriptor": {
+            "if": "github.ref == 'refs/heads/main' && inputs.expected_controller_sha == github.sha",
+            "name": "recovery-admit",
+            "needs": [],
+            "outputs": {
+              "audit": "${{ steps.prepare.outputs.audit }}",
+              "bootstrap_artifact_id": "${{ steps.bootstrap.outputs.artifact-id }}",
+              "dispatch": "${{ steps.prepare.outputs.dispatch }}",
+              "evidence": "${{ steps.prepare.outputs.evidence }}",
+              "finalize": "${{ steps.prepare.outputs.finalize }}",
+              "publish": "${{ steps.prepare.outputs.publish }}",
+              "smoke": "${{ steps.prepare.outputs.smoke }}"
+            },
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command admit --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "id": "bootstrap",
+                "if": "${{ steps.prepare.outputs.smoke == 'true' }}",
+                "name": "Transfer verified original manifest",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.prepare.outputs.job_id }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/bootstrap/manifest.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "ignore",
+                  "name": "recovery-v2-diagnostic-recovery-admit-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-adopt",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success'",
+            "name": "recovery-adopt",
+            "needs": ["recovery-admit"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command adopt --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "recovery-publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute adopt",
+                "run": "node scripts/release/recovery/cli.mjs adopt --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-adopt-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-audit-evidence",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.audit == 'true' && (needs.recovery-admit.outputs.dispatch == 'false' || needs.recovery-dispatch-audit.result == 'success')",
+            "name": "recovery-audit-evidence",
+            "needs": ["recovery-admit", "recovery-adopt", "recovery-dispatch-audit"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command reconcile-audit --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "recovery-publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute reconcile-audit",
+                "run": "node scripts/release/recovery/cli.mjs reconcile-audit --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-audit-evidence-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-dispatch-audit",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.dispatch == 'true' && (needs.recovery-admit.outputs.evidence == 'false' || needs.recovery-evidence.result == 'success')",
+            "name": "recovery-dispatch-audit",
+            "needs": ["recovery-admit", "recovery-adopt", "recovery-evidence"],
+            "permissions": {
+              "actions": "write",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command dispatch-audit --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "recovery-publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute dispatch-audit",
+                "run": "node scripts/release/recovery/cli.mjs dispatch-audit --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-dispatch-audit-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-evidence",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.evidence == 'true' && (needs.recovery-admit.outputs.smoke == 'false' || (needs.recovery-metadata.result == 'success' && needs.recovery-published-harness.result == 'success' && needs.recovery-runtime-targets.result == 'success' && needs.recovery-scaffold.result == 'success' && needs.recovery-storage.result == 'success'))",
+            "name": "recovery-evidence",
+            "needs": [
+              "recovery-admit",
+              "recovery-adopt",
+              "recovery-metadata",
+              "recovery-published-harness",
+              "recovery-runtime-targets",
+              "recovery-scaffold",
+              "recovery-storage"
+            ],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command reconcile-verification --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "recovery-publication",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute reconcile-verification",
+                "run": "node scripts/release/recovery/cli.mjs reconcile-verification --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-evidence-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-finalize",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.finalize == 'true' && (needs.recovery-admit.outputs.audit == 'false' || needs.recovery-audit-evidence.result == 'success')",
+            "name": "recovery-finalize",
+            "needs": ["recovery-admit", "recovery-adopt", "recovery-audit-evidence"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command finalize --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "recovery-publication",
+              "descriptor": {
+                "env": {
+                  "DAWN_RECOVERY_POLICY_TOKEN": "${{ secrets.RELEASE_POLICY_READ_TOKEN }}",
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute finalize",
+                "run": "node scripts/release/recovery/cli.mjs finalize --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-finalize-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-metadata",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'",
+            "name": "recovery-metadata",
+            "needs": ["recovery-admit", "recovery-adopt"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download manifest selected by admission",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}",
+                  "path": "${{ runner.temp }}/bootstrap"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}",
+                  "RECOVERY_LANE": "metadata"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute smoke",
+                "run": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain exact lane and installation evidence",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "${{ steps.execute.outputs.artifact_name }}",
+                  "overwrite": false,
+                  "path": "${{ steps.execute.outputs.evidence_directory }}/*.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-metadata-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-publish",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.publish == 'true' && (needs.recovery-admit.outputs.finalize == 'false' || needs.recovery-finalize.result == 'success')",
+            "name": "recovery-publish",
+            "needs": ["recovery-admit", "recovery-adopt", "recovery-finalize"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command publish --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "recovery-publication",
+              "descriptor": {
+                "env": {
+                  "DAWN_RECOVERY_POLICY_TOKEN": "${{ secrets.RELEASE_POLICY_READ_TOKEN }}",
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute publish",
+                "run": "node scripts/release/recovery/cli.mjs publish --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-publish-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-published-harness",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'",
+            "name": "recovery-published-harness",
+            "needs": ["recovery-admit", "recovery-adopt"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download manifest selected by admission",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}",
+                  "path": "${{ runner.temp }}/bootstrap"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}",
+                  "RECOVERY_LANE": "published-harness"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute smoke",
+                "run": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain exact lane and installation evidence",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "${{ steps.execute.outputs.artifact_name }}",
+                  "overwrite": false,
+                  "path": "${{ steps.execute.outputs.evidence_directory }}/*.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-published-harness-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-report",
+          "descriptor": {
+            "if": "always()",
+            "name": "recovery-report",
+            "needs": [
+              "recovery-admit",
+              "recovery-adopt",
+              "recovery-metadata",
+              "recovery-published-harness",
+              "recovery-runtime-targets",
+              "recovery-scaffold",
+              "recovery-storage",
+              "recovery-evidence",
+              "recovery-dispatch-audit",
+              "recovery-audit-evidence",
+              "recovery-finalize",
+              "recovery-publish"
+            ],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "write"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}",
+                  "RECOVERY_NEEDS": "${{ toJSON(needs) }}"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command report --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute report",
+                "run": "node scripts/release/recovery/cli.mjs report --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --needs \"$RUNNER_TEMP/needs.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-report-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-runtime-targets",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'",
+            "name": "recovery-runtime-targets",
+            "needs": ["recovery-admit", "recovery-adopt"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download manifest selected by admission",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}",
+                  "path": "${{ runner.temp }}/bootstrap"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}",
+                  "RECOVERY_LANE": "runtime-targets"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute smoke",
+                "run": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain exact lane and installation evidence",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "${{ steps.execute.outputs.artifact_name }}",
+                  "overwrite": false,
+                  "path": "${{ steps.execute.outputs.evidence_directory }}/*.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-runtime-targets-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-scaffold",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'",
+            "name": "recovery-scaffold",
+            "needs": ["recovery-admit", "recovery-adopt"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download manifest selected by admission",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}",
+                  "path": "${{ runner.temp }}/bootstrap"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}",
+                  "RECOVERY_LANE": "scaffold"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute smoke",
+                "run": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain exact lane and installation evidence",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "${{ steps.execute.outputs.artifact_name }}",
+                  "overwrite": false,
+                  "path": "${{ steps.execute.outputs.evidence_directory }}/*.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-scaffold-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
+          "id": "recovery-storage",
+          "descriptor": {
+            "if": "always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'",
+            "name": "recovery-storage",
+            "needs": ["recovery-admit", "recovery-adopt"],
+            "permissions": {
+              "actions": "read",
+              "attestations": "read",
+              "checks": "read",
+              "contents": "read"
+            },
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout exact reviewed controller",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0,
+                  "persist-credentials": false,
+                  "ref": "${{ github.sha }}"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.19.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Assert bundled npm",
+                "run": "test \"$(npm --version)\" = \"11.17.0\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install controller dependencies without lifecycles",
+                "run": "\"$PNPM_HOME/pnpm\" install --filter . --frozen-lockfile --ignore-scripts"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Download manifest selected by admission",
+                "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "with": {
+                  "artifact-ids": "${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}",
+                  "path": "${{ runner.temp }}/bootstrap"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}",
+                  "INPUT_EXPECTED_CONTROLLER_SHA": "${{ inputs.expected_controller_sha }}",
+                  "INPUT_INTENT_PATH": "${{ inputs.intent_path }}",
+                  "RECOVERY_LANE": "storage"
+                },
+                "id": "prepare",
+                "name": "Prepare exact committed request",
+                "run": "node scripts/release/recovery/workflow-request.mjs --command smoke --output \"$RUNNER_TEMP/request.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "env": {
+                  "GITHUB_TOKEN": "${{ github.token }}"
+                },
+                "id": "execute",
+                "if": "always()",
+                "name": "Execute smoke",
+                "run": "node scripts/release/recovery/cli.mjs smoke --request \"$RUNNER_TEMP/request.json\" --output \"$RUNNER_TEMP/result.json\" --manifest \"$RUNNER_TEMP/bootstrap/manifest.json\""
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain exact lane and installation evidence",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "${{ steps.execute.outputs.artifact_name }}",
+                  "overwrite": false,
+                  "path": "${{ steps.execute.outputs.evidence_directory }}/*.json"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "if": "always()",
+                "name": "Retain command diagnostic",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                  "if-no-files-found": "error",
+                  "name": "recovery-v2-diagnostic-recovery-storage-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "overwrite": false,
+                  "path": "${{ runner.temp }}/result.json"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
     "release.yml": {
       "classification": "safe",
       "descriptor": {

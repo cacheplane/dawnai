@@ -848,9 +848,11 @@ function isAllowedLaterReceipt(name, size) {
 export function createCliAttestationVerifier({
   repository,
   token,
+  environment = process.env,
   fileSystem = defaultFileSystem,
   runGh = runGhCommand,
 }) {
+  const verifierEnvironment = { ...environment, GH_TOKEN: token }
   return {
     async verify({ source, record, subjects, files, bundles }) {
       if (!Array.isArray(subjects) || !Array.isArray(files) || files.length !== subjects.length) {
@@ -879,7 +881,7 @@ export function createCliAttestationVerifier({
           })
           try {
             await runGh(args, {
-              env: { ...process.env, GH_TOKEN: token },
+              env: { ...verifierEnvironment },
               timeout: ATTESTATION_VERIFY_TIMEOUT_MS,
               killSignal: "SIGKILL",
             })

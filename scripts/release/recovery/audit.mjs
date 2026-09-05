@@ -108,7 +108,19 @@ async function controller(request, config, dependencies) {
       body: renderRecoveryReleaseBody({ marker, body: prefix }),
     })
   }
-  return { request, writer, current, proof, observe, upload, read, advance }
+  return {
+    request,
+    writer,
+    current,
+    proof,
+    observe,
+    upload,
+    read,
+    advance,
+    clock,
+    deadline,
+    budget,
+  }
 }
 export async function dispatchRecoveryAudit(request, config, dependencies) {
   const c = await controller(request, config, dependencies)
@@ -199,16 +211,25 @@ export async function dispatchRecoveryAudit(request, config, dependencies) {
 }
 
 export async function reconcileRecoveryAudit(request, config, dependencies) {
-  const c = await controller(request, config, dependencies)
+  return reconcileAuditController(await controller(request, config, dependencies), false)
+}
+export async function waitForRecoveryAudit(request, config, dependencies) {
+  return reconcileAuditController(await controller(request, config, dependencies), true)
+}
+async function reconcileAuditController(c, wait) {
   if (c.current.phase !== "AUDIT_PENDING") return c.current
   if (c.current.facts.audit.result) return c.advance(c.current, "AUDIT_VERIFIED")
   const audit = c.current.facts.audit
-  const verified = await readAuditArtifact(
-    c.request.candidate,
-    audit.intent,
-    audit.dispatch,
-    c.read,
-  )
+  let verified,
+    backoff = RECOVERY_RETRY.initialBackoffMs
+  for (;;) {
+    verified = await readAuditArtifact(c.request.candidate, audit.intent, audit.dispatch, c.read)
+    if (!wait || !verified.missing) break
+    const remaining = c.deadline - c.clock.now()
+    auditRequire(remaining > 0, "audit wait phase deadline expired")
+    await c.budget.work(() => c.clock.sleep(Math.min(backoff, remaining)))
+    backoff = Math.min(backoff * 2, RECOVERY_RETRY.maxRetryAfterMs)
+  }
   if (verified.missing)
     return snapshotRecoveryData({ ...c.current, errors: [verified.missing] }, 16 * 1024 * 1024)
   if (verified.failure) {
@@ -236,7 +257,7 @@ export async function reconcileRecoveryAudit(request, config, dependencies) {
     executor: c.proof.executor,
     result,
     artifact: verified.artifact,
-    validatedAt: new Date(dependencies.authority.now()).toISOString(),
+    validatedAt: new Date(c.clock.now()).toISOString(),
   })
   return c.advance(await c.observe(), "AUDIT_VERIFIED")
 }

@@ -992,6 +992,133 @@ async function recoveryChain(
   return facts
 }
 
+async function originalPayloadProof(context, c, npm, npmAuditFactory, attestations) {
+  const release = await context.read("getRelease", {
+    releaseId: c.releaseId,
+  })
+  exactRelease(release, c)
+  const tag = await tagProof(context, c)
+  const refs = normalizeRecoveryAssetInventory(
+    await context.read("listReleaseAssets", { releaseId: c.releaseId }),
+  )
+  const bytes = new Map()
+  for (const ref of refs) bytes.set(ref.assetName, await loadAsset(context, ref))
+  const base = await baseProof(context, c, refs, bytes, attestations)
+  const npmEvidence = await npmProof(context, c, base.manifest, npm, npmAuditFactory)
+  return { release, tag, refs, bytes, base, npmEvidence }
+}
+
+// Diagnostic only: the proposal is never an admission or a writer-model observation.
+export async function inspectRecoveryOriginalPayload(input) {
+  const { candidate, github, git, npm, npmAuditFactory, attestations, controllerRef } = safeInput(
+    input,
+    ["candidate", "github", "git", "npm", "npmAuditFactory", "attestations", "controllerRef"],
+  )
+  let originalPayload = null
+  try {
+    const c = snapshotRecoveryData(candidate, 16384)
+    validateIdentity(c)
+    requireThat(/^[a-f0-9]{40}$/u.test(controllerRef), "exact inspected controller SHA required")
+    const context = readerContext({ github, git })
+    const proof = await originalPayloadProof(context, c, npm, npmAuditFactory, attestations)
+    requireThat(proof.release.draft === true, "pre-adoption inspection requires draft")
+    const marker = parseReleaseMarker(proof.release.body)
+    requireThat(
+      marker.schemaVersion === 1 &&
+        marker.phase === "NPM_COMPLETE" &&
+        marker.version === c.version &&
+        marker.commitSha === c.candidateSha &&
+        marker.manifestSha256 === c.manifestSha256 &&
+        marker.releaseRecordSha256 === c.releaseRecordSha256,
+      "original legacy marker differs",
+    )
+    requireThat(
+      proof.refs.every((ref) => !ref.assetName.startsWith("recovery-v2-")),
+      "recovery already started; use strict observation",
+    )
+    originalPayload = {
+      candidate: c,
+      tag: proof.tag,
+      assets: proof.base.baseAssets,
+      npmEvidence: proof.npmEvidence,
+      manifest: proof.base.manifest,
+      legacyPhase: "NPM_COMPLETE",
+    }
+    const policy = parseRecoveryPolicy(
+      await context.git("showFile", { ref: controllerRef, path: RECOVERY_POLICY_PATH }),
+    )
+    const policySha256 = hash(canonicalPolicyBytes(policy))
+    const reservations = await readReservations(context, controllerRef)
+    const relevant = reservations.filter(({ intent }) => {
+      const other = intent.candidate
+      return (
+        other.releaseId === c.releaseId ||
+        ((other.repository === c.repository || other.repositoryId === c.repositoryId) &&
+          (other.version === c.version ||
+            other.tag === c.tag ||
+            other.candidateSha === c.candidateSha))
+      )
+    })
+    requireThat(relevant.length <= 1, "ambiguous committed adoption reservation")
+    if (relevant.length === 1) {
+      const { path, intent } = relevant[0]
+      same(intent.candidate, c, "conflicting committed adoption reservation")
+      requireThat(
+        intent.policySha256 === policySha256 &&
+          intent.legacyBodySha256 === hash(Buffer.from(proof.release.body)),
+        "committed adoption reservation policy or legacy body differs",
+      )
+      return snapshotRecoveryData(
+        {
+          schemaVersion: 2,
+          kind: "recovery-inspection",
+          status: "recovery-required",
+          controllerSha: controllerRef,
+          policySha256,
+          policyStatus: policy.status,
+          originalPayload,
+          proposal: null,
+          reservation: { intentPath: path, intentSha256: hash(canonicalRecoveryBytes(intent)) },
+          errors: [],
+        },
+        16 * 1024 * 1024,
+      )
+    }
+    const proposal = parseRecovery({
+      schemaVersion: 2,
+      kind: "recovery-adoption-intent",
+      candidate: c,
+      policySha256,
+      legacyBodySha256: hash(Buffer.from(proof.release.body)),
+      legacyPhase: "NPM_COMPLETE",
+      operations: ["adopt", "audit", "finalize", "publish", "verify"],
+    })
+    return snapshotRecoveryData(
+      {
+        schemaVersion: 2,
+        kind: "recovery-inspection",
+        status: "unreserved",
+        controllerSha: controllerRef,
+        policySha256,
+        policyStatus: policy.status,
+        originalPayload,
+        proposal,
+        errors: [],
+      },
+      16 * 1024 * 1024,
+    )
+  } catch (error) {
+    return {
+      schemaVersion: 2,
+      kind: "recovery-inspection",
+      status: "blocked",
+      originalPayload,
+      proposal: null,
+      errors: [error instanceof Error ? error.message : "original payload inspection failed"],
+    }
+  }
+}
+
 export async function observeRecoveryCandidate(input) {
   const { candidate, github, git, npm, npmAuditFactory, attestations, controllerRef, intentPath } =
     safeInput(input, [
@@ -1009,18 +1136,13 @@ export async function observeRecoveryCandidate(input) {
     const c = snapshotRecoveryData(candidate, 16384)
     validateIdentity(c)
     const context = readerContext({ github, git })
-    const release = await context.read("getRelease", {
-      releaseId: c.releaseId,
-    })
-    exactRelease(release, c)
-    const tag = await tagProof(context, c)
-    const refs = normalizeRecoveryAssetInventory(
-      await context.read("listReleaseAssets", { releaseId: c.releaseId }),
+    const { release, tag, refs, bytes, base, npmEvidence } = await originalPayloadProof(
+      context,
+      c,
+      npm,
+      npmAuditFactory,
+      attestations,
     )
-    const bytes = new Map()
-    for (const ref of refs) bytes.set(ref.assetName, await loadAsset(context, ref))
-    const base = await baseProof(context, c, refs, bytes, attestations)
-    const npmEvidence = await npmProof(context, c, base.manifest, npm, npmAuditFactory)
     const finalRef = refs.find((ref) => ref.assetName === RECOVERY_FINALIZATION_ASSET)
     const finalization = finalRef
       ? parseRecovery(bytes.get(finalRef.assetName), {
@@ -1546,14 +1668,24 @@ export async function assertLegacyAuditCompatibleRelease(input) {
 
 export async function readRecoveryReservations(input) {
   const { git, terminalRecordRef } = safeInput(input, ["git", "terminalRecordRef"])
-  const context = readerContext({ git })
+  return readReservations(readerContext({ git }), terminalRecordRef)
+}
+async function readReservations(context, terminalRecordRef) {
   const tree = await context.git("listTree", { ref: terminalRecordRef })
   requireThat(typeof tree === "string", "immutable git intent inventory unavailable")
   const paths = tree
     .split("\n")
-    .filter((path) =>
-      /^scripts\/release\/recovery-adoptions\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.json$/u.test(path),
+    .filter(
+      (path) =>
+        path.replace(/^"/u, "").startsWith("scripts/release/recovery-adoptions/") &&
+        /\.json"?$/u.test(path),
     )
+  requireThat(
+    paths.every((path) =>
+      /^scripts\/release\/recovery-adoptions\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.json$/u.test(path),
+    ),
+    "unsafe committed adoption inventory path",
+  )
   requireThat(paths.length <= 256, "adoption intent inventory exceeded")
   const reservations = []
   for (const path of paths)
