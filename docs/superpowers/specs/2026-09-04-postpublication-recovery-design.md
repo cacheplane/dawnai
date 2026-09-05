@@ -289,8 +289,12 @@ It runs after failed/skipped jobs when the platform can schedule it. Job output
 presence or workflow success alone never implies release completion.
 
 Transport timeout, throttling, transient service failure, and recognized registry
-propagation lag get bounded backoff using Retry-After when available. Resume
-after the workflow budget rather than exhausting a runner indefinitely. Identity
+propagation lag get bounded backoff using Retry-After when available. A timed-out
+read may retry in the same invocation only when the transport establishes that
+the underlying operation has settled. The current normalized `TIMEOUT` envelope
+does not establish settlement, so recovery stops that invocation without an
+overlapping retry and requires a later resume. Resume after the workflow budget
+rather than exhausting a runner indefinitely. Identity
 mismatch, invalid signatures, unsupported schema, deterministic probe failures,
 or unexpected remote mutation block immediately. Retry limits and per-call/job
 budgets belong to one tested policy module, not duplicated workflow literals.

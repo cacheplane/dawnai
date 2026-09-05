@@ -662,7 +662,7 @@ test("GitHub distinguishes exact absence from auth, rate, network, parse, and se
   }
 })
 
-test("GitHub raw 404 stays ambiguous for every named resource family", async () => {
+test("GitHub completed 404 stays ambiguous for every named resource family", async () => {
   const calls = [
     (github) => github.getRef({ ref: "tags/v0.8.21" }),
     (github) => github.getReleaseByTag({ tag: "v0.8.21" }),
@@ -680,7 +680,13 @@ test("GitHub raw 404 stays ambiguous for every named resource family", async () 
       owner: OWNER,
       repo: REPO,
       token: TOKEN,
-      fetchImpl: async () => jsonResponse({ message: "resource hidden by authorization" }, 404),
+      fetchImpl: async (_url, options) =>
+        options.headers.Accept === "application/octet-stream"
+          ? new Response("resource hidden by authorization", {
+              status: 404,
+              headers: { "content-type": "application/octet-stream" },
+            })
+          : jsonResponse({ message: "resource hidden by authorization" }, 404),
     })
     const result = await call(github)
     assert.equal(result.status, "AMBIGUOUS")
@@ -1307,3 +1313,76 @@ function errorWithoutControls(error) {
     return codePoint <= 31 || codePoint === 127
   })
 }
+
+test("GitHub preserves body transport failure provenance before transient HTTP classification", async () => {
+  for (const status of [403, 429, 503]) {
+    for (const row of [
+      {
+        code: "MALFORMED_JSON",
+        response: () =>
+          new Response("{", {
+            status,
+            headers: { "content-type": "application/json", "x-ratelimit-remaining": "0" },
+          }),
+      },
+      {
+        code: "UNEXPECTED_CONTENT_TYPE",
+        response: () =>
+          new Response("{}", {
+            status,
+            headers: { "content-type": "text/html", "x-ratelimit-remaining": "0" },
+          }),
+      },
+      {
+        code: "RESPONSE_TOO_LARGE",
+        response: () =>
+          new Response("{}", {
+            status,
+            headers: {
+              "content-type": "application/json",
+              "content-length": "99999999",
+              "x-ratelimit-remaining": "0",
+            },
+          }),
+      },
+    ]) {
+      const github = createGitHubReader({
+        owner: OWNER,
+        repo: REPO,
+        fetchImpl: async () => row.response(),
+      })
+      const result = await github.getRef({ ref: "heads/main" })
+      assert.equal(result.status, "ERROR")
+      assert.equal(result.code, row.code)
+      assert.equal(result.httpStatus, status)
+    }
+  }
+})
+
+test("GitHub preserves aborted body reads despite server or throttle HTTP status", async () => {
+  for (const status of [403, 429, 503]) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () => ({
+        status,
+        headers: new Headers({ "content-type": "application/json", "x-ratelimit-remaining": "0" }),
+        body: {
+          getReader: () => ({
+            read: async () => {
+              throw Object.assign(new Error("aborted"), { name: "AbortError" })
+            },
+            cancel: async () => {},
+            releaseLock() {},
+          }),
+        },
+      }),
+    })
+    assert.deepEqual(await github.getRef({ ref: "heads/main" }), {
+      status: "AMBIGUOUS",
+      operation: "ref",
+      httpStatus: status,
+      code: "ABORTED",
+    })
+  }
+})

@@ -233,29 +233,43 @@ No production workflow, writer, CLI, or adoption record is enabled by this task.
 **Files:** Create `recovery/policy.mjs`, `recovery/policy.json`,
 `recovery/authority.mjs`, `recovery-adoptions/.gitkeep`,
 `test/recovery-authority.test.mjs`, `test/recovery-policy.test.mjs`.
+Modify `adapters/github.mjs`, `test/github-adapter.test.mjs`,
+`test/workflow-contracts.test.mjs`, and `test/fixtures/release-script-hashes.json`
+to preserve transport failures before
+HTTP status classification. Review exposed body timeouts being masked as
+retryable server errors; this prerequisite keeps retry decisions grounded in
+the original transport outcome.
 
-- [ ] Test missing/malformed/mismatched intents, wrong actual workflow SHA, an
+- [x] Test missing/malformed/mismatched intents, wrong actual workflow SHA, an
   unmerged controller, failed/absent CI, a different repository, unsupported
   policy, and a legacy-fence-required result without verified fencing evidence.
-- [ ] Run `node --test scripts/release/test/recovery-authority.test.mjs scripts/release/test/recovery-policy.test.mjs`
+- [x] Run `node --test scripts/release/test/recovery-authority.test.mjs scripts/release/test/recovery-policy.test.mjs`
   and verify red before implementation.
-- [ ] Require main-ref invocation and equality of expected SHA with actual
+- [x] Require main-ref invocation and equality of expected SHA with actual
   invocation SHA. Use independently observed main ancestry and successful CI
   at that SHA. Read intent bytes from that immutable checkout through the git
   reader; CLI strings never grant authority.
-- [ ] Policy lists the five exact lanes, mandatory checks, approved verifier
+- [x] Policy lists the five exact lanes, mandatory checks, approved verifier
   executable closure digest, supported receipt versions, environment profile,
   and retry budgets. Hash verifier source inputs without hashing policy.json
   into itself. The separate repository import-closure pins cover all code/data.
-- [ ] Centralize retry classification: 15-second reads, at most five transport
+- [x] Centralize retry classification: 15-second reads, at most five transport
   retries bounded by 90 seconds per operation, bounded Retry-After; reuse the
   registry's existing propagation classification and enforce an overall phase
   deadline. Schema/identity/signature failures never retry. Test injected clocks.
-- [ ] Make verified fence evidence a prerequisite to adoption and every later
+- [x] Make verified fence evidence a prerequisite to adoption and every later
   write while unsafe legacy reruns remain reachable. An expired/missing fence
   observation blocks. No enabling/disabling API is called by this module.
-- [ ] Re-run tests, prove an arbitrary `controllerSha` input cannot authorize
+- [x] Re-run tests, prove an arbitrary `controllerSha` input cannot authorize
   execution, and commit with no production adoption record.
+
+Task 3 is implemented with dormant admission. Both review stages passed;
+64 affected tests and all 2,601 controller tests pass. An isolated SHA-guard
+removal failed as expected and passed after restoration. The shared reader now
+preserves transport failure provenance; both source and aggregate integrity pins
+were updated. See the [runbook](../runbooks/2026-09-04-postpublication-recovery.md)
+for validation history and the unresolved earlier source-suite failure. Production
+fencing, ownership routing, writers, and workflow integration remain pending.
 
 ## Task 4: Observe artifacts and route versioned ownership
 

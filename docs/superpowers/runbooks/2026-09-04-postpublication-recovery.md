@@ -1,7 +1,8 @@
 # Post-publication recovery: feasibility and admission findings
 
 Status on 2026-09-04: local legacy-writer regression and dormant version 2
-schemas/planner implemented; disposable GitHub experiment prepared but **not run**.
+schemas, planner, and invocation authority implemented; disposable GitHub
+experiment prepared but **not run**.
 Production admission remains
 `legacy-fence-required`. This report does not authorize or perform recovery.
 
@@ -240,6 +241,104 @@ Task 2 verification records the following:
   and `git diff --check` passed. Package build/typecheck/source/pack/harness gates
   were not repeated for these dormant repository-script changes; their earlier
   results and the unresolved source-suite failure remain recorded below.
+
+## Policy and invocation authority
+
+Task 3 keeps policy status `DORMANT`, its approved fence-contract list empty,
+and `scripts/release/recovery-adoptions/` without an adoption record. Neither
+a candidate version nor a caller-supplied controller SHA enables recovery.
+
+The policy pins the current five probes and their transitive local source
+dependencies: 23 files, 353,163 bytes at the Task 2 commit. An independent
+TypeScript AST traversal found no unresolved imports or repository data-directory
+loads from those entrypoints. Generated probe programs are embedded in these
+source files; installed npm packages are separately verified subjects. Future
+version 2 wrappers must join this inventory before activation. The source digest
+excludes `policy.json`; policy identity hashes its canonical sorted JSON token
+stream, allowing presentation whitespace while rejecting duplicate keys and
+noncanonical encodings. Adoption intent retains its strict canonical wire format.
+Repository-wide
+workflow/import pins remain a separate integration requirement.
+
+Required CI evidence includes `validate`, `pack-smoke`, and `harness-verify`,
+correlated to one successful main-push CI run at the actual invocation SHA.
+Checking only `validate` would miss the pack/harness jobs that now run separately.
+A read-only API check of main `92cae0a3771473dd040c80520de177bcee0c7765`
+found successful CI run `33924658340`, suite `91941573529`, and matching job/check
+IDs for all three obligations. This is an adapter-contract observation, not CI
+approval of this unmerged recovery implementation.
+
+The actual invocation context is supplied by a trusted runtime reader, separate
+from CLI inputs. GitHub run/workflow/job records independently bind its repository,
+SHA, run, attempt, and job; git ancestry establishes main membership. Policy and
+adoption intent are read at that immutable SHA. The existing GitHub reader returns
+normalized job fields such as `runAttempt`, and its workflow arguments are file
+names, so authority tests also exercise the real adapter with a recording HTTP
+transport. The run API's nested repository object need not contain `default_branch`;
+the trusted invocation reader must obtain that value from GitHub's invocation
+context and require the main ref.
+
+Only the recovery owner workflow can acquire writer eligibility; the audit
+workflow cannot. Initial adoption adds the exact immutable git intent to current
+eligibility.
+Later eligibility is checked independently of historical adoption authority,
+preserving the recorded executor on already accepted receipts. Every future
+writer must recapture current eligibility and fresh fence evidence immediately
+before mutation. A workflow-disable claim alone is insufficient; the fence
+contract must have been reviewed and its writer coverage and drainage observed.
+The production fence observer and service rehearsal are still pending.
+
+Version 2 lane integration must emit explicit successful cleanup and registry
+obligations. The metadata probe currently records some audit/cleanup checks only
+on failure, and storage uses three separate cleanup checks. The new policy
+requires the aggregate `cleanup` result as well as the concrete underlying
+obligations; metadata also requires `registry-packages` and manifest-derived
+package coverage. Task 7 must derive those results from actual probe evidence.
+
+Retry policy bounds reads at 15 seconds, with at most five retries and 90 seconds
+per operation inside a 20-minute phase budget. Recognized throttling (including
+GitHub's normalized 403 `RATE_LIMITED`), settled transient errors, and the existing
+exact-metadata-present/tarball-404 propagation class are retryable.
+Missing packages, identity conflicts, invalid signatures, and schema failures
+cannot become propagation retries. The current transport's `TIMEOUT` envelope
+can precede actual request settlement, so recovery treats it as terminal for the
+invocation and requires a later resume. The shared GitHub reader preserves
+transport failures before HTTP status classification: a 503 response whose body
+times out must remain `TIMEOUT`, rather than becoming retryable `SERVER_ERROR`.
+This existing-adapter correction is included with its content-hash update.
+Malformed or wrong-content-type error bodies now surface their transport error;
+completed, valid 404 responses still remain ambiguous. Neither proves absence.
+An unsettled timed-out read stops without
+starting an overlapping retry or admitting its late result. A stalled backoff
+wait is also bounded by the deadline. Optional Retry-After
+hints are bounded; the existing shared HTTP/registry adapters do not yet preserve
+that header, so future transport integration must project it explicitly.
+
+Task 3 verification records the following:
+
+- Specification and code-quality reviews passed after correcting audit-workflow
+  writer admission, stalled backoff deadlines, recognized GitHub rate limits,
+  and timeout provenance through the actual HTTP/GitHub adapters.
+- All 64 affected adapter/policy/authority tests pass, including 32 new recovery
+  tests. Real-adapter regressions cover a fetch that ignores cancellation and
+  stalled response bodies behind HTTP 503, 429, and 403. Each stops with one
+  underlying read; no retry starts while that read remains unsettled.
+- In an isolated source copy, removing expected-controller-SHA equality made the
+  authority rejection regression fail. Restoring the check made it pass.
+  Repository source was never weakened during this experiment.
+- A controller run before the final transport changes passed 2,595 tests in
+  approximately 187 seconds. This is an intermediate result, not validation of
+  the final transport correction. A subsequent run passed 2,600 and failed the
+  aggregate hash pin in `workflow-contracts.test.mjs`; the source hash had been
+  updated, but the second pin over that fixture still needed recomputation.
+  After that correction, all 137 workflow-contract tests passed. The final full
+  controller suite passed all 2,601 tests, zero failures, in approximately
+  157 seconds. Both review stages approved the final files.
+- Scoped Biome, release inventory, and `git diff --check` pass. No package source,
+  workflow, writer, or adoption record changed. The shared GitHub reader change
+  and its content-hash update are covered by the affected adapter tests and
+  controller suite. Earlier package build/typecheck/source/pack/harness results
+  and the unresolved source-suite failure remain recorded below.
 
 ## Implementation validation
 

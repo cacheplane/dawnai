@@ -526,8 +526,16 @@ function normalizeSignedDownloadUrl(value) {
 
 function classifyGitHubResponse(result, operation) {
   const httpStatus = result.httpStatus
-  if (result.code === "MALFORMED_RESPONSE") {
-    return failure("ERROR", operation, httpStatus, result.code)
+  // HTTP status is not evidence that its body was read successfully. Preserve
+  // timeout/cancellation and deterministic transport failures before classifying
+  // completed HTTP errors, so consumers cannot retry an unsettled body read.
+  if (result.status === "ERROR") {
+    return failure(
+      ["ABORTED", "NETWORK_ERROR", "TIMEOUT"].includes(result.code) ? "AMBIGUOUS" : "ERROR",
+      operation,
+      httpStatus,
+      result.code,
+    )
   }
   if (httpStatus === 404) {
     return failure("AMBIGUOUS", operation, httpStatus, "NOT_FOUND_OR_HIDDEN")
