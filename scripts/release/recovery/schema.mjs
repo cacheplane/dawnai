@@ -18,6 +18,16 @@ export const RECOVERY_LANES = Object.freeze([
   "scaffold",
   "storage",
 ])
+export const RECOVERY_INSTALL_CHECKS = Object.freeze({
+  metadata: Object.freeze([]),
+  "published-harness": Object.freeze(["ag-ui", "exact-install", "typescript-tooling"]),
+  "runtime-targets": Object.freeze(["exact-install"]),
+  scaffold: Object.freeze(["dependency-install", "scaffolder-install"]),
+  storage: Object.freeze(["exact-install"]),
+})
+export function metadataCheckName(name) {
+  return name.replace(/^package:@?/u, "package-").replaceAll("/", "-")
+}
 export const RECOVERY_LIMITS = Object.freeze({
   receiptBytes: 256 * 1024,
   selectionBytes: 1024 * 1024,
@@ -25,6 +35,8 @@ export const RECOVERY_LIMITS = Object.freeze({
   retainedBytes: 64 * 1024 * 1024,
   resolutionBytes: 64 * 1024,
   resolutions: 512,
+  installationResolutions: 4096,
+  installations: 32,
   checks: 256,
   depth: 24,
   nodes: 100_000,
@@ -36,7 +48,8 @@ const FIELDS = {
   "recovery-adoption":
     "policySha256 authority executor archive baseAssets npmEvidence retainedAttempts",
   "recovery-lane":
-    "policySha256 lane executor environment startedAt finishedAt checks resolutions conclusion",
+    "policySha256 lane executor environment startedAt finishedAt checks resolutions installations conclusion",
+  "recovery-installation": "policySha256 lane executor check resolutions",
   "recovery-verification-set": "policySha256 executor lanes provenance retainedReceipts conclusion",
   "recovery-audit-intent":
     "policySha256 requestId expectedAuditorSha verificationSetSha256 inventory executor",
@@ -288,6 +301,50 @@ function integrity(value) {
     "canonical integrity",
   )
 }
+function resolution(item, subject) {
+  exact(item, "installPath subject name requested resolved source integrity")
+  text(
+    item.installPath,
+    /^node_modules\/(?:[A-Za-z0-9@][A-Za-z0-9._@-]*\/)*[A-Za-z0-9@][A-Za-z0-9._@-]*$/u,
+    "relative installation path",
+    2048,
+  )
+  requireThat(typeof item.subject === "boolean", "subject classification")
+  text(item.name, packageName, "resolution package")
+  const selectors = Array.isArray(item.requested) ? item.requested : [item.requested]
+  list(
+    selectors,
+    128,
+    (selector) => text(selector, /^[^\p{Cc}]+$/u, "requested selector", 1024),
+    (selector) => selector,
+    1,
+  )
+  requireThat(
+    !Array.isArray(item.requested) || selectors.length > 1,
+    "multiple selectors required for array",
+  )
+  requireThat(
+    item.installPath.endsWith(`/${item.name}`) ||
+      selectors.every(
+        (selector) =>
+          selector.startsWith(`npm:${item.name}@`) &&
+          selector.length > `npm:${item.name}@`.length &&
+          !/\s/u.test(selector.slice(`npm:${item.name}@`.length)),
+      ),
+    "installation identity matches package or observed npm alias",
+  )
+  version(item.resolved)
+  if (item.subject) {
+    requireThat(
+      selectors.every((selector) => selector === subject.version),
+      "subject exact requested version",
+    )
+    same(item.resolved, subject.version, "subject resolved version")
+  }
+  enumeration(item.source, ["registry", "verified-payload"])
+  integrity(item.integrity)
+}
+
 function contains(assets, receipt) {
   requireThat(
     assets.some(
@@ -379,11 +436,12 @@ function validate(value) {
       exact(value.environment, "profile node packageManager platform architecture dockerImages")
       text(value.environment.profile, identifier, "environment profile")
       version(value.environment.node)
-      text(
-        value.environment.packageManager,
-        /^(?:npm|pnpm)@[0-9]+\.[0-9]+\.[0-9]+$/u,
-        "package manager",
-      )
+      if (value.environment.packageManager !== null || value.conclusion !== "failure")
+        text(
+          value.environment.packageManager,
+          /^(?:npm|pnpm)@[0-9]+\.[0-9]+\.[0-9]+$/u,
+          "package manager",
+        )
       text(value.environment.platform, identifier, "platform")
       text(value.environment.architecture, identifier, "architecture")
       list(
@@ -403,39 +461,55 @@ function validate(value) {
       list(
         value.resolutions,
         RECOVERY_LIMITS.resolutions,
+        (item) => resolution(item, value.candidate),
+        (item) => item.installPath,
+      )
+      if (value.conclusion === "success" && value.lane !== "metadata")
+        requireThat(
+          value.resolutions.some((item) => item.subject),
+          "subject resolution required",
+        )
+      requireThat(
+        Buffer.byteLength(JSON.stringify(value.resolutions)) <= RECOVERY_LIMITS.resolutionBytes,
+        "resolution details byte limit",
+      )
+      list(
+        value.installations,
+        RECOVERY_LIMITS.installations,
         (item) => {
-          exact(item, "installPath subject name requested resolved source integrity")
-          text(
-            item.installPath,
-            /^node_modules\/(?:[A-Za-z0-9@][A-Za-z0-9._@-]*\/)*[A-Za-z0-9@][A-Za-z0-9._@-]*$/u,
-            "relative installation path",
-            2048,
+          exact(item, "check assetName sha256 size count")
+          enumeration(item.check, RECOVERY_INSTALL_CHECKS[value.lane])
+          text(item.sha256, hash, "installation digest")
+          integer(item.size, 1, RECOVERY_LIMITS.selectionBytes)
+          integer(item.count, 1, RECOVERY_LIMITS.installationResolutions)
+          same(
+            item.assetName,
+            `recovery-v2-installation-${value.lane}-${item.check}-${item.sha256}.json`,
+            "digest-qualified installation name",
           )
-          requireThat(
-            item.installPath.endsWith(`/${item.name}`),
-            "installation identity matches package",
-          )
-          requireThat(typeof item.subject === "boolean", "subject classification")
-          text(item.name, packageName, "resolution package")
-          text(item.requested, /^[^\p{Cc}]+$/u, "requested selector", 1024)
-          version(item.resolved)
-          if (item.subject) {
-            same(item.requested, value.candidate.version, "subject exact requested version")
-            same(item.resolved, value.candidate.version, "subject resolved version")
-          }
-          enumeration(item.source, ["registry", "verified-payload"])
-          integrity(item.integrity)
         },
+        (item) => item.check,
+      )
+      if (value.conclusion === "success")
+        same(
+          value.installations.map((item) => item.check),
+          RECOVERY_INSTALL_CHECKS[value.lane],
+          "complete installation checkpoints required",
+        )
+      break
+    case "recovery-installation":
+      enumeration(value.lane, RECOVERY_LANES)
+      enumeration(value.check, RECOVERY_INSTALL_CHECKS[value.lane])
+      list(
+        value.resolutions,
+        RECOVERY_LIMITS.installationResolutions,
+        (item) => resolution(item, value.candidate),
         (item) => item.installPath,
         1,
       )
       requireThat(
         value.resolutions.some((item) => item.subject),
         "subject resolution required",
-      )
-      requireThat(
-        Buffer.byteLength(JSON.stringify(value.resolutions)) <= RECOVERY_LIMITS.resolutionBytes,
-        "resolution details byte limit",
       )
       break
     case "recovery-verification-set": {
@@ -767,7 +841,10 @@ export function parseRecovery(input, options = {}) {
     requireThat(raw.length > 0 && raw.length <= RECOVERY_LIMITS.selectionBytes, "raw byte limit")
     let decoded
     try {
-      decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw)
+      decoded = new TextDecoder("utf-8", {
+        fatal: true,
+        ignoreBOM: true,
+      }).decode(raw)
     } catch {
       throw new TypeError("Invalid recovery UTF8")
     }
@@ -776,7 +853,11 @@ export function parseRecovery(input, options = {}) {
   const value = snapshotRecoveryData(input)
   validate(value)
   const bytes = bytesFor(value)
-  const maximum = ["recovery-verification-set", "recovery-finalization"].includes(value.kind)
+  const maximum = [
+    "recovery-verification-set",
+    "recovery-finalization",
+    "recovery-installation",
+  ].includes(value.kind)
     ? RECOVERY_LIMITS.selectionBytes
     : RECOVERY_LIMITS.receiptBytes
   requireThat(bytes.length <= maximum, "kind byte limit")

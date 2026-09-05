@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { markerAt, wireFixtures } from "./support/recovery-fixture.mjs"
+import { canonical, markerAt, wireFixtures } from "./support/recovery-fixture.mjs"
 
 const metadata = await import("../recovery/metadata.mjs").catch(() => ({}))
 const observer = await import("../recovery/observe.mjs").catch(() => ({}))
@@ -371,3 +371,137 @@ for (const omitArchive of [false, true])
     assert.equal(result.terminal, false)
     assert.match(result.errors.join("; "), /legacy.*finalization|finalization.*legacy/)
   })
+
+test("observer supplies canonical independently downloaded installation proofs", async () => {
+  const remote = await recoveryRemote({ published: true })
+  const result = await observe(remote.args)
+  assert.equal(result.outcome, "complete", result.errors.join("; "))
+  assert.deepEqual(
+    Object.keys(result.facts.verification.installations).sort(),
+    remote.installationAssets.map((ref) => ref.assetName).sort(),
+  )
+  for (const ref of remote.installationAssets) {
+    assert.deepEqual(result.facts.verification.installations[ref.assetName], {
+      ref,
+      bytes: remote.raws.get(ref.assetName).toString("utf8"),
+    })
+  }
+})
+for (const [name, options] of [
+  [
+    "metadata omits one actual manifest package",
+    {
+      mutateLane(lane) {
+        if (lane.lane === "metadata")
+          lane.checks = lane.checks.filter((c) => c.name !== "package-dawn-ai-sdk")
+      },
+    },
+  ],
+  [
+    "storage reports only postgres",
+    {
+      mutateLane(lane) {
+        if (lane.lane === "storage") lane.environment.dockerImages.shift()
+      },
+    },
+  ],
+  [
+    "harness omits Docker identity",
+    {
+      mutateLane(lane) {
+        if (lane.lane === "published-harness") lane.environment.dockerImages = []
+      },
+    },
+  ],
+  [
+    "runtime reports storage Docker image",
+    {
+      mutateLane(lane) {
+        if (lane.lane === "runtime-targets")
+          lane.environment.dockerImages = [
+            { reference: "postgres:16", digest: `sha256:${"a".repeat(64)}` },
+          ]
+      },
+    },
+  ],
+  [
+    "wrong sidecar count",
+    {
+      mutateLane(lane) {
+        if (lane.lane === "storage") lane.installations[0].count++
+      },
+    },
+  ],
+  [
+    "sidecar was not retained",
+    {
+      mutateSet(set) {
+        set.retainedReceipts.pop()
+      },
+    },
+  ],
+  [
+    "sidecar belongs to wrong executor",
+    {
+      mutateInstallation(value) {
+        value.executor = { ...value.executor, runId: "999" }
+      },
+    },
+  ],
+  [
+    "known subject hidden as dependency",
+    {
+      mutateInstallation(value) {
+        value.resolutions.push({
+          ...value.resolutions[0],
+          installPath: "node_modules/z/node_modules/@dawn-ai/sdk",
+          subject: false,
+          requested: "^0.7.0",
+          resolved: "0.7.0",
+        })
+      },
+    },
+  ],
+]) {
+  test(`observer blocks canonical evidence when ${name}`, async () => {
+    const remote = await recoveryRemote({ published: true, ...options })
+    const result = await observe(remote.args)
+    assert.equal(result.outcome, "blocked")
+    assert.equal(result.terminal, false)
+  })
+}
+
+for (const mode of ["missing", "different"]) {
+  test(`observer blocks ${mode} remotely downloaded installation bytes`, async () => {
+    const remote = await recoveryRemote({ published: true })
+    const ref = remote.installationAssets[0]
+    const download = remote.args.github.downloadReleaseAsset.bind(remote.args.github)
+    remote.args.github.downloadReleaseAsset = async (args) => {
+      if (String(args.assetId) === ref.id)
+        return mode === "missing"
+          ? { status: "ABSENT", httpStatus: 404 }
+          : {
+              status: "PRESENT",
+              contentBase64: Buffer.from("different bytes").toString("base64"),
+            }
+      return download(args)
+    }
+    const result = await observe(remote.args)
+    assert.equal(result.outcome, "blocked")
+    assert.equal(result.terminal, false)
+  })
+}
+
+test("valid older installation receipts remain retained diagnostic evidence", async () => {
+  const previous = await recoveryRemote()
+  const older = structuredClone(Object.values(previous.installationReceipts)[0])
+  older.executor.runAttempt = "2"
+  const remote = await recoveryRemote({
+    published: true,
+    retainedRaw: canonical(older).toString("utf8"),
+  })
+  const result = await observe(remote.args)
+  assert.equal(result.outcome, "complete", result.errors.join("; "))
+  assert.equal(Object.keys(result.facts.verification.installations).length, 7)
+  assert.equal(result.facts.verification.set.retainedReceipts.length, 8)
+})

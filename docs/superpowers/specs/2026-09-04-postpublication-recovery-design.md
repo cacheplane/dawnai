@@ -220,6 +220,30 @@ profile, run/attempt/job identity, timestamps, actual check outcomes, and captur
 dependency resolution evidence. A successful runner exit cannot override a
 failed check or failed cleanup. A partial or missing receipt is not success.
 
+Each lane carries a required `installations` array, with at most 32 descriptors
+sorted by install-check identity: `{ check, assetName, sha256, size, count }`.
+Each descriptor binds a canonical `recovery-installation` sidecar containing the
+candidate, policy, executor, lane, check, and complete physical resolution tree.
+Its name is `recovery-v2-installation-${lane}-${check}-${sha256}.json`; each file
+is limited to one MiB and 4,096 packages. Exceeding a bound fails collection;
+never truncate a successful snapshot. Repeated paths in different installs are
+separate evidence. Preserve actual package names and physical paths for npm
+aliases; validate the alias selector against the actual package identity.
+`requested` is one selector or a bounded, sorted, unique array when several
+observed parent dependencies request that installed package. Every subject
+selector must request the exact candidate version. Capture every snapshot
+before its temporary project is removed.
+Selection must independently verify descriptor names, bytes, counts, identities,
+and inclusion in retained release evidence.
+
+The lane's existing inline `resolutions` list is a bounded subject summary, not
+its complete installed tree. It may be empty for a failed lane or the metadata
+lane, whose exact payload verification does not perform a consumer install.
+Failure before detecting npm may record a null package-manager version; success
+requires an observed version. Do not invent installation or toolchain evidence
+just to serialize a failure receipt. These are adjustments to the dormant v2
+contract; frozen v1 receipt bytes and behavior remain unchanged.
+
 For sub-project 1, select one complete five-lane set from one recovery run/attempt.
 Retries rerun all five lanes; preserve older receipts for diagnosis. Cross-run
 reuse is intentionally deferred. Export only the fields each subprocess API

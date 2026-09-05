@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { metadataCheckName } from "../../recovery/schema.mjs"
 
 export const digest = (text) => createHash("sha256").update(text).digest("hex")
 export const canonical = (value) => Buffer.from(`${JSON.stringify(sort(value))}\n`)
@@ -115,29 +116,78 @@ export function wireFixtures({ retainedCount = 0 } = {}) {
           packageManager: "npm@11.0.0",
           platform: "linux",
           architecture: "x64",
-          dockerImages:
-            lane === "storage"
-              ? [{ reference: "postgres:16", digest: `sha256:${digest("postgres image")}` }]
-              : [],
+          dockerImages: (lane === "storage"
+            ? ["pgvector/pgvector:pg16", "postgres:16"]
+            : lane === "published-harness"
+              ? ["node:22-slim"]
+              : []
+          ).map((reference) => ({
+            reference,
+            digest: `sha256:${digest(reference)}`,
+          })),
         },
         startedAt: "2026-09-04T10:00:00.000Z",
         finishedAt: "2026-09-04T10:01:00.000Z",
-        checks,
-        resolutions: [
-          {
-            installPath: "node_modules/@dawn-ai/sdk",
-            subject: true,
-            name: "@dawn-ai/sdk",
-            requested: "0.8.24",
-            resolved: "0.8.24",
-            source: "registry",
-            integrity: adoption.npmEvidence.packages[0].integrity,
-          },
-        ],
+        checks:
+          lane === "metadata"
+            ? [
+                ...checks,
+                {
+                  name: metadataCheckName("package:@dawn-ai/sdk"),
+                  conclusion: "success",
+                },
+              ].sort((a, b) => (a.name < b.name ? -1 : 1))
+            : checks,
+        resolutions:
+          lane === "metadata"
+            ? []
+            : [
+                {
+                  installPath: "node_modules/@dawn-ai/sdk",
+                  subject: true,
+                  name: "@dawn-ai/sdk",
+                  requested: "0.8.24",
+                  resolved: "0.8.24",
+                  source: "registry",
+                  integrity: adoption.npmEvidence.packages[0].integrity,
+                },
+              ],
         conclusion: "success",
       }),
     ]),
   )
+  const installationReceipts = {}
+  const installationAssets = []
+  const installChecks = {
+    metadata: [],
+    "published-harness": ["ag-ui", "exact-install", "typescript-tooling"],
+    "runtime-targets": ["exact-install"],
+    scaffold: ["dependency-install", "scaffolder-install"],
+    storage: ["exact-install"],
+  }
+  for (const lane of LANES) {
+    lanes[lane].installations = installChecks[lane].map((check) => {
+      const installation = wire("recovery-installation", {
+        policySha256,
+        lane,
+        executor: lanes[lane].executor,
+        check,
+        resolutions: lanes[lane].resolutions,
+      })
+      const bytes = canonical(installation)
+      const sha256 = digest(bytes)
+      const assetName = `recovery-v2-installation-${lane}-${check}-${sha256}.json`
+      installationReceipts[assetName] = installation
+      installationAssets.push(asset(assetName, bytes, 500 + installationAssets.length))
+      return {
+        check,
+        assetName,
+        sha256,
+        size: bytes.length,
+        count: installation.resolutions.length,
+      }
+    })
+  }
   const selected = LANES.map((lane, index) => ({
     lane,
     receipt: receiptRef(lanes[lane], `recovery-v2-lane-${lane}-903-1.json`, 20 + index),
@@ -158,13 +208,16 @@ export function wireFixtures({ retainedCount = 0 } = {}) {
     executor: e,
     lanes: selected,
     provenance,
-    retainedReceipts: Array.from({ length: retainedCount }, (_, index) =>
-      asset(
-        `recovery-v2-retained-${String(index).padStart(4, "0")}.json`,
-        `retained-${index}`,
-        10000 + index,
+    retainedReceipts: [
+      ...installationAssets,
+      ...Array.from({ length: retainedCount }, (_, index) =>
+        asset(
+          `recovery-v2-retained-${String(index).padStart(4, "0")}.json`,
+          `retained-${index}`,
+          10000 + index,
+        ),
       ),
-    ),
+    ].sort(byName),
     conclusion: "success",
   })
   const setRef = receiptRef(set, "recovery-v2-verification-set-903-1.json", 30)
@@ -243,6 +296,8 @@ export function wireFixtures({ retainedCount = 0 } = {}) {
   })
   return JSON.parse(
     JSON.stringify({
+      installationReceipts,
+      installationAssets,
       intent,
       adoption,
       lanes,
@@ -325,7 +380,21 @@ export function recoveryFacts({ phase = "NPM_COMPLETE", retainedCount = 0 } = {}
         npmEvidence: f.adoption.npmEvidence,
         manifestPackages: ["@dawn-ai/sdk"],
       },
-      verification: { set: f.set, ref: f.setRef, lanes: f.lanes, provenance: f.set.provenance },
+      verification: {
+        set: f.set,
+        ref: f.setRef,
+        lanes: f.lanes,
+        installations: Object.fromEntries(
+          f.installationAssets.map((ref) => [
+            ref.assetName,
+            {
+              ref,
+              bytes: canonical(f.installationReceipts[ref.assetName]).toString("utf8"),
+            },
+          ]),
+        ),
+        provenance: f.set.provenance,
+      },
       audit: {
         intent: f.auditIntent,
         intentRef: f.intentRef,

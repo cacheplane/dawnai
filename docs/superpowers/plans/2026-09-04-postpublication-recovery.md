@@ -367,32 +367,60 @@ Modify `smoke/runtime-targets.mjs`, `smoke/scaffold.mjs`, `smoke/storage.mjs`,
 `smoke/published-harness.mjs`, `smoke-result.mjs`, and
 `scripts/published-artifact-verify.mjs` only at their operation/receipt boundary.
 Add `test/recovery-strict-runner.integration.mjs` for Linux infrastructure checks.
+Extend the dormant `recovery/schema.mjs` with typed installation sidecars and
+required lane descriptors; update `recovery/model.mjs`, `recovery/observe.mjs`,
+and their nonfrozen v2 fixtures/tests to verify the linked evidence. Keep the
+existing receipt bounds and add a one-MiB/4,096-package sidecar bound. Refresh
+reachable source pins and the aggregate contract hash. Add a narrow image-evidence
+hook in `scripts/published-artifact-smoke.mjs` while the sandbox containers still
+exist; preserve its PID assertions and cleanup. Extend the dormant approved
+Docker inventory with the probe's existing `node:22-slim` image and validate
+required images per lane.
 
-- [ ] Write identity tests with candidate A and executor B. Require B in executor
+- [x] Write identity tests with candidate A and executor B. Require B in executor
   evidence, A in package identity, all mandatory checks, and failure on bad
   cleanup. Confirm existing version 1 entrypoints still emit identical schemas.
-- [ ] Extract existing probe operations from their version 1 receipt wrappers
+- [x] Extract existing probe operations from their version 1 receipt wrappers
   into named functions in those same modules. Keep strict runner construction,
   allowed command fields, package versions, and assertions intact. Recovery
   invokes those operations with a version 2 collector; it does not manufacture
   a successful v1 result or spoof any GitHub environment variable.
-- [ ] Give metadata the same separation: run its actual exact-package byte and
+- [x] Give metadata the same separation: run its actual exact-package byte and
   provenance checks, then serialize under the selected receipt protocol.
-- [ ] Capture the environment/toolchain and complete installed dependency tree
+- [x] Capture the environment/toolchain and complete installed dependency tree
   during each install check, before temporary directories are removed. Bind
   canonical resolution bytes or separately bounded digest-qualified assets.
   Record actual Docker image identity for storage/sandbox checks, not just a tag.
-- [ ] Run `node --test scripts/release/test/recovery-smoke.test.mjs scripts/release/test/runtime-targets-smoke.test.mjs scripts/release/test/scaffold-smoke.test.mjs scripts/release/test/storage-smoke.test.mjs scripts/release/test/published-harness-smoke.test.mjs scripts/release/test/smoke-result.test.mjs`.
+  Bind each actual install through `{ check, assetName, sha256, size, count }`
+  to a typed `recovery-installation` sidecar. Keep inline lane resolutions as
+  a bounded subject summary. Failed lanes and metadata may have an empty summary;
+  unknown npm version is null only on failure, never fabricated. Reject oversized,
+  missing, mismatched, or incomplete snapshots. Preserve repeated installation
+  paths in distinct check snapshots.
+- [x] Run `node --test scripts/release/test/recovery-smoke.test.mjs scripts/release/test/runtime-targets-smoke.test.mjs scripts/release/test/scaffold-smoke.test.mjs scripts/release/test/storage-smoke.test.mjs scripts/release/test/published-harness-smoke.test.mjs scripts/release/test/smoke-result.test.mjs`.
 - [ ] On an eligible Ubuntu runner, run
   `DAWN_TEST_RECOVERY_RUNNER=1 node --test scripts/release/test/recovery-strict-runner.integration.mjs`.
   Exercise real systemd execution and cleanup with the exact strict option
   allowlist; classify an ineligible local OS as explicitly skipped, not passed.
-- [ ] Commit only after old receipt behavior and new identity tests pass. Never
+- [x] Commit only after old receipt behavior and new identity tests pass. Never
   reclassify the sandbox PID assertion as a harmless flake to finish this task.
+
+Task 6 is implemented as dormant code. Specification and code-quality reviews
+passed. Root independently passed 636 focused tests and the full controller suite
+(2,766 passed, zero failed, approximately 161 seconds). The quality reviewer
+passed 204 tests. Scoped Biome (23 files, one existing warning), release inventory,
+docs, and diff checks passed. The eligible Linux
+execution remains pending: explicitly enabling the gated integration on this
+Mac produced zero passed, zero failed, and one ineligible-host skip. This does
+not establish real systemd containment or resolve the earlier source-suite
+PID cleanup failure. No workflow dispatch or production mutation occurred.
 
 ## Task 7: Escrow complete verification and provenance
 
 **Files:** Create `recovery/evidence.mjs`, `test/recovery-evidence.test.mjs`.
+Extend `recovery/writer.mjs` with the corresponding independently verified escrow
+admission gates and tests; Task 5 intentionally rejects these uploads until this
+controller exists.
 
 - [ ] Test every missing/failed lane, duplicate/foreign artifact, incorrect
   job/run/attempt/SHA, noncanonical receipt, forged self-claimed identity, and
@@ -401,6 +429,10 @@ Add `test/recovery-strict-runner.integration.mjs` for Linux infrastructure check
 - [ ] Correlate API-observed workflow/run/jobs and exact artifact IDs/digests;
   download bounded ZIPs and require their exact files/bytes. Then upload raw
   receipts plus independently observed provenance descriptors to the release.
+  Include every digest-linked installation sidecar from Task 6, verifying exact
+  checkpoint identity, canonical bytes, size, count, and artifact-file membership.
+  Escrow sidecars in the retained inventory before selecting their lane receipts;
+  do not omit them from ZIP validation, upload admission, or resume checks.
 - [ ] Persist a complete immutable selection including retained receipt inventory,
   re-read it, then advance to `VERIFICATION_COMPLETE`. Missing/failed checks stay
   nonterminal with diagnostic receipts. A repeat with durable selection is a

@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto"
 import {
   canonicalRecoveryBytes,
+  metadataCheckName,
   parseRecovery,
   RECOVERY_LANES,
   RECOVERY_PHASES,
@@ -157,6 +158,62 @@ function legacyAuthority(facts) {
   same(facts.ownership.controllerSha, facts.executor.controllerSha, "Ownership executor mismatch")
   return intent
 }
+// Each map entry is an independently downloaded canonical UTF-8 receipt plus its
+// persisted asset reference, keyed by the digest-qualified asset name.
+function installationProof(facts, lane, retained, installations) {
+  const subjects = new Map()
+  for (const descriptor of lane.installations) {
+    const observed = installations[descriptor.assetName]
+    requireThat(
+      observed && typeof observed.bytes === "string",
+      "Independent installation bytes required",
+    )
+    const ref = retained.find((item) => item.assetName === descriptor.assetName)
+    requireThat(ref, "Selected installation is not retained")
+    same(observed.ref, ref, "Independent installation reference differs")
+    same(ref.sha256, descriptor.sha256, "Installation descriptor digest differs")
+    same(ref.size, descriptor.size, "Installation descriptor size differs")
+    const value = receipt(facts, observed.bytes, ref, "recovery-installation")
+    same(
+      observed.bytes,
+      canonicalRecoveryBytes(value).toString("utf8"),
+      "Installation bytes are not canonical",
+    )
+    policy(facts, value)
+    same(value.executor, lane.executor, "Installation executor differs")
+    same(value.lane, lane.lane, "Installation lane differs")
+    same(value.check, descriptor.check, "Installation checkpoint differs")
+    same(value.resolutions.length, descriptor.count, "Installation resolution count differs")
+    for (const item of value.resolutions) {
+      same(
+        item.subject,
+        facts.manifestPackages.includes(item.name),
+        "Installation subject classification differs from manifest",
+      )
+      if (!item.subject) continue
+      const previous = subjects.get(item.name)
+      requireThat(
+        !previous || (previous.resolved === item.resolved && previous.integrity === item.integrity),
+        "Subject identity changed between install snapshots",
+      )
+      if (!previous || item.installPath < previous.installPath) subjects.set(item.name, item)
+    }
+  }
+  same(
+    lane.resolutions,
+    [...subjects.values()].sort((a, b) =>
+      a.installPath < b.installPath ? -1 : a.installPath > b.installPath ? 1 : 0,
+    ),
+    "Lane subject summary differs from selected installations",
+  )
+}
+export function requiredRecoveryDockerImages(lane) {
+  return lane === "storage"
+    ? ["pgvector/pgvector:pg16", "postgres:16"]
+    : lane === "published-harness"
+      ? ["node:22-slim"]
+      : []
+}
 function verificationProof(facts) {
   const proof = facts.verification
   requireThat(proof, "Verification set is missing")
@@ -173,12 +230,42 @@ function verificationProof(facts) {
     set.provenance,
     "Independent API provenance differs from selected receipts",
   )
+  requireThat(
+    proof.installations &&
+      typeof proof.installations === "object" &&
+      !Array.isArray(proof.installations),
+    "Independent installation proof map required",
+  )
+  const installationNames = Object.values(proof.lanes)
+    .flatMap((lane) => lane.installations.map((item) => item.assetName))
+    .sort()
+  same(
+    Object.keys(proof.installations).sort(),
+    installationNames,
+    "Exactly the selected independent installations required",
+  )
   for (const selected of set.lanes) {
     const lane = receipt(facts, proof.lanes[selected.lane], selected.receipt, "recovery-lane")
     policy(facts, lane)
     same(lane.executor, selected.executor, "Lane executor identity mismatch")
     same(lane.lane, selected.lane, "Lane identity mismatch")
     requireThat(lane.conclusion === "success", "Failed lane cannot be adjudicated to success")
+    installationProof(facts, lane, set.retainedReceipts, proof.installations)
+    if (lane.lane === "metadata")
+      requireThat(
+        facts.manifestPackages.every((name) =>
+          lane.checks.some(
+            (check) =>
+              check.name === metadataCheckName(`package:${name}`) && check.conclusion === "success",
+          ),
+        ),
+        "Metadata per-manifest-package check missing",
+      )
+    same(
+      lane.environment.dockerImages.map((image) => image.reference),
+      requiredRecoveryDockerImages(lane.lane),
+      "Lane Docker image inventory differs",
+    )
   }
   return set
 }

@@ -280,6 +280,7 @@ export function typescriptToolingInstallArgs() {
 export async function installTypeScriptTooling(tempDir, overrides = {}) {
   const command = overrides.runCommand ?? runCommand
   await command("npm", typescriptToolingInstallArgs(), { cwd: tempDir })
+  await overrides.captureInstallation?.()
   await assertInstalledPackageIdentities(tempDir, {
     tsx: TSX_VERSION,
     typescript: TYPESCRIPT_VERSION,
@@ -312,6 +313,7 @@ export async function runAgUiInstalledProbe(tempDir, overrides = {}) {
 
   for (const { command, args } of agUiProbeCommands()) {
     await (overrides.runCommand ?? runCommand)(command, args, { cwd: tempDir })
+    if (command === "npm" && args[0] === "install") await overrides.captureInstallation?.()
   }
 
   console.log("T-AG-UI PASS")
@@ -716,7 +718,9 @@ export async function runDockerSandboxInstalledProbe(tempDir, overrides = {}) {
   }
   await writeFile(
     resolve(tempDir, "smoke-docker-sandbox.mjs"),
-    dockerSandboxInstalledProbeSource(threadId),
+    dockerSandboxInstalledProbeSource(threadId, {
+      imageEvidencePath: overrides.imageEvidencePath,
+    }),
     "utf8",
   )
   const result = await (overrides.runCommand ?? runCommand)("node", ["smoke-docker-sandbox.mjs"], {
@@ -728,13 +732,18 @@ export async function runDockerSandboxInstalledProbe(tempDir, overrides = {}) {
 
 export function dockerSandboxInstalledProbeSource(
   threadId = `published-uuid-${randomUUID().replaceAll("-", "")}`,
+  { imageEvidencePath } = {},
 ) {
   if (!/^published-uuid-[0-9a-f]{32}$/u.test(threadId)) {
     throw new TypeError("Docker sandbox installed probe thread identity is invalid")
   }
+  if (imageEvidencePath !== undefined && imageEvidencePath !== "docker-image.json") {
+    throw new TypeError("Docker evidence path must be the owned probe filename")
+  }
+  const capture = imageEvidencePath !== undefined
   return `import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
-import { readFile, rm } from "node:fs/promises"
+import { readFile, rm${capture ? ", writeFile" : ""} } from "node:fs/promises"
 import { promisify } from "node:util"
 
 import { dockerSandbox } from "@dawn-ai/sandbox"
@@ -813,6 +822,19 @@ const saturator = [
   'launch()',
 ].join("\\n")
 
+${
+  capture
+    ? `async function inspectExecutedImage() {
+  const result = await docker(["inspect", "--format", '{{json .Config.Image}} {{json .Image}}', container])
+  assert.equal(result.exitCode, 0, JSON.stringify(result))
+  const [reference, digest] = JSON.parse("[" + result.stdout.trim().replace('" "', '","') + "]")
+  assert.equal(reference, "node:22-slim")
+  assert.match(digest, /^sha256:[a-f0-9]{64}$/)
+  return { digest, reference }
+}
+`
+    : ""
+}
 const provider = dockerSandbox({ image: "node:22-slim" })
 try {
   const handle = await provider.acquire({
@@ -822,6 +844,7 @@ try {
   })
   await handle.filesystem.writeFile(sentinelPath, sentinel, context(handle.workspaceRoot))
   const originalKeeperId = await inspectKeeperId()
+${capture ? "  const originalImage = await inspectExecutedImage()" : ""}
 
   const detached = await docker(["exec", "-d", container, "node", "-e", saturator])
   assert.equal(detached.exitCode, 0, JSON.stringify(detached))
@@ -846,6 +869,13 @@ try {
   }
 
   const replacementKeeperId = await inspectKeeperId()
+${
+  capture
+    ? `  const replacementImage = await inspectExecutedImage()
+  assert.deepEqual(replacementImage, originalImage, "Executed Docker image changed during recovery")
+  await writeFile(${JSON.stringify(imageEvidencePath)}, JSON.stringify(originalImage) + "\\n", { flag: "wx" })`
+    : ""
+}
   assert.notEqual(replacementKeeperId, originalKeeperId, "PID-exhausted keeper was not replaced")
   assert.equal(
     await handle.filesystem.readFile(sentinelPath, context(handle.workspaceRoot)),

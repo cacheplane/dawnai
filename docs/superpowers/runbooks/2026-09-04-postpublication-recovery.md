@@ -489,6 +489,79 @@ source-suite failure still prevents a full-CI-green claim.
 Policy activation, the live fence experiment, workflow integration, production
 adoption, and the later smoke/audit/finalization controllers remain pending.
 
+## Smoke operations and v2 receipts (Task 6)
+
+The five lanes reuse the existing probe operations with separate v1 and v2
+receipt collectors. Candidate identity describes the published packages;
+executor identity describes the reviewed controller that ran the checks.
+Containment, exact package assertions, and cleanup remain mandatory.
+
+The dormant wire contract now includes per-installation sidecars because the
+original inline list cannot distinguish repeated paths across separate installs
+or represent every complete dependency tree within its small limit. The published
+harness has three install checkpoints: exact packages, AG-UI TypeScript, and
+TypeScript tooling. Each is captured before its subsequent checks can fail. Sidecars
+bind check, candidate, executor, policy, exact bytes, count, and physical package
+paths. Inline resolutions remain a subject summary. Collection finishes
+before cleanup and rejects incomplete or oversized evidence.
+
+The sandbox PID probe uses `node:22-slim` and replaces its keeper container.
+Image evidence is captured while each actual container exists. Inspecting
+a mutable tag after disposal cannot establish what executed. Adding this existing
+probe image to the dormant policy inventory does not activate recovery or alter
+the probe's PID and cleanup assertions.
+
+npm documents that `npm ls` describes a logical dependency tree. Its hidden
+lockfile records package locations and integrity metadata, with freshness
+conditions. Collection therefore needs to reconcile physical installed paths
+and lock records; a top-level list or unverified lockfile alone is insufficient.
+See [npm ls](https://docs.npmjs.com/cli/v11/commands/npm-ls/) and
+[package-lock.json](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/).
+
+Root independently installed `@dawn-ai/sdk@0.8.24` and
+`mini-build@npm:esbuild@0.28.1` with scripts disabled in an owned temporary
+consumer outside the checkout. The collector and sidecar parser accepted all
+three physical packages, including the platform binary, and preserved the alias
+path, actual name, and requested selector. Canonical evidence was 1,656 bytes;
+the temporary consumer was removed (`/tmp/dawn-recovery-task6-real-tree.log`).
+This verifies collection and serialization, not provenance or strict containment.
+
+Root also removed the installation-proof call in an isolated copy. The
+wrong-executor regression failed because the mutated model returned `planned`
+instead of `blocked`, proving that the test detects this bypass. Repository
+source was not weakened (`/tmp/dawn-recovery-task6-root-mutation.log`).
+
+The local host is macOS. Docker Desktop provides Linux/aarch64 containers, but
+that does not establish the required Ubuntu 24 runner with stock systemd 255,
+non-root execution, sudo control, and cgroup-v2 cleanup. The gated real runner
+integration must report local ineligibility explicitly; no GitHub runner
+identity or containment capability will be fabricated to claim a pass.
+Root ran `DAWN_TEST_RECOVERY_RUNNER=1 node --test
+scripts/release/test/recovery-strict-runner.integration.mjs`: zero passed,
+zero failed, one explicitly skipped because the local host is ineligible.
+This is not a successful Linux containment rehearsal.
+
+Both independent reviews passed with no remaining findings: the specification
+review ran 361 passing tests and one gated skip; the quality review ran 204
+passing tests. Root independently passed 636 focused tests. Scoped Biome
+checked all 23 changed source/test/data files with no errors and one verified
+pre-existing `OPENAI_API_KEY` environment warning. Release inventory, docs,
+and diff checks passed.
+
+The definitive full-controller run on the reviewed files passed all 2,766 tests
+with zero failures in approximately 161 seconds
+(`/tmp/dawn-recovery-task6-controller-verified.log`). Existing v1 receipt and
+probe behavior tests passed alongside the new identity and evidence tests.
+The gated Linux check remains pending on eligible infrastructure. Earlier
+package build/typecheck/pack/harness results and the unresolved source-suite
+failure remain recorded below; this is not a full-CI-green claim.
+
+Task 7 will add independently verified Actions artifact correlation, escrow
+admission for lane receipts and every installation sidecar, and durable
+verification selection. These uploads remain rejected by the writer until
+those admission checks exist. Recovery policy remains dormant, the adoption
+inventory is empty, and no live release record has been changed.
+
 ## Implementation validation
 
 - Node 24.20.0; Corepack pnpm 10.33.0; frozen install passed.

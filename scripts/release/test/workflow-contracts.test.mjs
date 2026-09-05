@@ -97,8 +97,9 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for recovery Task 5: shared bounded write transport, strict partial adoption
 // observations, and finalization proof validation even before the readiness marker. Legacy
 // NPM_COMPLETE plus finalization is an invalid mixed state, never a resumable adoption.
+// Repinned for Task 6: shared v1/v2 smoke operations and bounded physical installation evidence.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "7088b766d3fc92f05e39f653a051d81ef197b17926171a5d282e1d413a6a7e5e"
+  "c67ea4e2e23aa963ab4de33d2c6f378a33fd193ae544e96691ca6477056cbef5"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

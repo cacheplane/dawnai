@@ -15,7 +15,7 @@ export const RECOVERY_RETRY = Object.freeze({
   phaseDeadlineMs: 1200000,
   fenceFreshnessMs: 30000,
 })
-const REQUIRED_CHECKS = Object.freeze({
+export const REQUIRED_CHECKS = Object.freeze({
   metadata: [
     "cleanup",
     "containment",
@@ -181,7 +181,7 @@ export function parseRecoveryPolicy(raw) {
     "reviewed environment required",
   )
   requireThat(
-    equal(p.environment.dockerImages, ["pgvector/pgvector:pg16", "postgres:16"]),
+    equal(p.environment.dockerImages, ["node:22-slim", "pgvector/pgvector:pg16", "postgres:16"]),
     "exact Docker image references required",
   )
   requireThat(
@@ -267,7 +267,10 @@ export async function hashVerifierClosure(request, readFile) {
     )
     total += Buffer.byteLength(raw)
     requireThat(total <= 16 * 1024 * 1024, "closure total byte limit")
-    entries.push({ path, sha256: createHash("sha256").update(raw).digest("hex") })
+    entries.push({
+      path,
+      sha256: createHash("sha256").update(raw).digest("hex"),
+    })
   }
   return createHash("sha256").update(canonicalPolicyBytes(entries)).digest("hex")
 }
@@ -369,7 +372,11 @@ export async function runRecoveryRead(
   const started = now()
   requireThat(Number.isSafeInteger(started) && started >= 0, "clock required")
   const deadline = Math.min(options.phaseDeadline, started + RECOVERY_RETRY.operationDeadlineMs)
-  const exhausted = () => ({ status: "ERROR", code: "RECOVERY_DEADLINE", httpStatus: null })
+  const exhausted = () => ({
+    status: "ERROR",
+    code: "RECOVERY_DEADLINE",
+    httpStatus: null,
+  })
   for (let attempt = 0; attempt <= RECOVERY_RETRY.transportRetries; attempt++) {
     const remaining = deadline - now()
     if (remaining <= 0) return exhausted()
@@ -385,7 +392,11 @@ export async function runRecoveryRead(
           timer = timers.setTimer(() => {
             unsettledTimeout = true
             abort.abort()
-            resolve({ status: "ERROR", code: "READ_TIMEOUT_UNSETTLED", httpStatus: null })
+            resolve({
+              status: "ERROR",
+              code: "READ_TIMEOUT_UNSETTLED",
+              httpStatus: null,
+            })
           }, timeoutMs)
         }),
       ])

@@ -43,6 +43,21 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
   if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
     throw new TypeError("Published-harness smoke command execution requires a strictRunner")
   }
+  return executeSmokeLane(
+    { lane: "published-harness", ...options },
+    (context) => executePublishedHarnessSmoke(options, context, overrides),
+    overrides,
+  )
+}
+
+export async function executePublishedHarnessSmoke(
+  options,
+  { check, deferCleanup, captureInstallation = async () => {}, captureDockerImage },
+  overrides = {},
+) {
+  if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
+    throw new TypeError("Published-harness smoke command execution requires a strictRunner")
+  }
   const strictRunner = overrides.strictRunner ?? createStrictSmokeProcessRunner()
   const runCommand = (command, args, runOptions) =>
     strictRunner.runCommand(command, args, productionCommandOptions(runOptions))
@@ -59,100 +74,110 @@ export async function runPublishedHarnessSmoke(options, overrides = {}) {
     runCommand,
   }
   dependencies.runAgUiProbe ??= (root) =>
-    runAgUiInstalledProbe(root, { runCommand: dependencies.runCommand })
+    runAgUiInstalledProbe(root, {
+      runCommand: dependencies.runCommand,
+      captureInstallation: () => captureInstallation("ag-ui", root),
+    })
   dependencies.runDockerProbe ??= (root, identity) =>
     runDockerSandboxInstalledProbe(root, {
       runCommand: dependencies.runCommand,
       threadId: identity.threadId,
+      ...(captureDockerImage ? { imageEvidencePath: "docker-image.json" } : {}),
     })
   dependencies.runTypeScriptProbe ??= (root) =>
-    runInstalledTypeScriptProbe(root, dependencies.runCommand, options.version)
+    runInstalledTypeScriptProbe(root, dependencies.runCommand, options.version, () =>
+      captureInstallation("typescript-tooling", root),
+    )
   const dockerIdentity = publishedDockerProbeIdentity(dependencies.randomUUID)
 
-  return executeSmokeLane(
-    { lane: "published-harness", ...options },
-    async ({ check, deferCleanup }) => {
-      await check(
-        "containment",
-        strictContainmentReceiptDetail(dependencies.env),
-        dependencies.probeContainment,
-      )
-      const manifest = await check(
-        "manifest",
-        "canonical sealed manifest matched the exact release candidate",
-        () => dependencies.readManifest(options),
-      )
-      const root = await check(
-        "temporary-project",
-        "clean published harness consumer created",
-        () => dependencies.makeTempDir("dawn-published-harness-"),
-      )
-      deferCleanup("cleanup", "published harness consumer removed", () =>
-        dependencies.removeDir(root),
-      )
-      deferCleanup("cleanup-docker-probe", "installed Docker probe resources removed", () =>
-        dependencies.cleanupDockerProbe(dockerIdentity),
-      )
-
-      await check(
-        "exact-install",
-        "exact fixed-group packages installed from public npm",
-        async () => {
-          await dependencies.runCommand("npm", ["init", "-y"], { cwd: root })
-          await dependencies.runCommand(
-            "npm",
-            [
-              "install",
-              "--ignore-scripts",
-              "--save-exact",
-              ...CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => `${name}@${options.version}`),
-            ],
-            { cwd: root },
-          )
-        },
-      )
-      await check(
-        "npm-signatures",
-        "official npm CLI verified exact registry signatures and provenance attestations",
-        async () => {
-          const audit = await dependencies.runCommand(
-            "npm",
-            ["audit", "signatures", "--json", "--include-attestations"],
-            {
-              cwd: root,
-              maxOutputBytes: AUDIT_OUTPUT_BYTES,
-              acceptedExitCodes: [0, 1],
-            },
-          )
-          validateNpmAuditSignatures(audit.stdout, {
-            version: options.version,
-            requiredPackages: CANONICAL_RELEASE_PACKAGE_ORDER,
-            candidate: {
-              version: options.version,
-              commitSha: options.commitSha,
-              publisherWorkflow: ".github/workflows/release.yml",
-            },
-            manifest,
-          })
-        },
-      )
-      await check("ag-ui", "installed AG-UI ESM and TypeScript probes passed", () =>
-        dependencies.runAgUiProbe(root),
-      )
-      await check("typescript-tooling", "installed TypeScript tooling probe passed", () =>
-        dependencies.runTypeScriptProbe(root),
-      )
-      await check("docker-pid-recovery", "installed Docker PID recovery probe passed", () =>
-        dependencies.runDockerProbe(root, dockerIdentity),
-      )
-      for (const lane of ["framework", "runtime", "smoke"]) {
-        await check(`${lane}-assertions`, `${lane} installed-package assertions passed`, () =>
-          dependencies.runHarnessAssertion(root, lane, options.version),
-        )
-      }
-    },
-    overrides,
+  await check(
+    "containment",
+    strictContainmentReceiptDetail(dependencies.env),
+    dependencies.probeContainment,
   )
+  const manifest = await check(
+    "manifest",
+    "canonical sealed manifest matched the exact release candidate",
+    () => dependencies.readManifest(options),
+  )
+  const root = await check("temporary-project", "clean published harness consumer created", () =>
+    dependencies.makeTempDir("dawn-published-harness-"),
+  )
+  deferCleanup("cleanup", "published harness consumer removed", () => dependencies.removeDir(root))
+  deferCleanup("cleanup-docker-probe", "installed Docker probe resources removed", () =>
+    dependencies.cleanupDockerProbe(dockerIdentity),
+  )
+
+  await check("exact-install", "exact fixed-group packages installed from public npm", async () => {
+    await dependencies.runCommand("npm", ["init", "-y"], { cwd: root })
+    await dependencies.runCommand(
+      "npm",
+      [
+        "install",
+        "--ignore-scripts",
+        "--save-exact",
+        ...CANONICAL_RELEASE_PACKAGE_ORDER.map((name) => `${name}@${options.version}`),
+      ],
+      { cwd: root },
+    )
+    await captureInstallation("exact-install", root)
+  })
+  await check(
+    "npm-signatures",
+    "official npm CLI verified exact registry signatures and provenance attestations",
+    async () => {
+      const audit = await dependencies.runCommand(
+        "npm",
+        ["audit", "signatures", "--json", "--include-attestations"],
+        {
+          cwd: root,
+          maxOutputBytes: AUDIT_OUTPUT_BYTES,
+          acceptedExitCodes: [0, 1],
+        },
+      )
+      validateNpmAuditSignatures(audit.stdout, {
+        version: options.version,
+        requiredPackages: CANONICAL_RELEASE_PACKAGE_ORDER,
+        candidate: {
+          version: options.version,
+          commitSha: options.commitSha,
+          publisherWorkflow: ".github/workflows/release.yml",
+        },
+        manifest,
+      })
+    },
+  )
+  await check("ag-ui", "installed AG-UI ESM and TypeScript probes passed", () =>
+    dependencies.runAgUiProbe(root, () => captureInstallation("ag-ui", root)),
+  )
+  await check("typescript-tooling", "installed TypeScript tooling probe passed", () =>
+    dependencies.runTypeScriptProbe(root, () => captureInstallation("typescript-tooling", root)),
+  )
+  await check("docker-pid-recovery", "installed Docker PID recovery probe passed", async () => {
+    await dependencies.runDockerProbe(root, dockerIdentity)
+    if (captureDockerImage) {
+      const bytes = await readBoundedRegularFile(
+        path.join(root, "docker-image.json"),
+        4096,
+        "Executed Docker image",
+      )
+      const value = JSON.parse(bytes)
+      if (
+        Object.keys(value).sort().join(",") !== "digest,reference" ||
+        !bytes.equals(
+          Buffer.from(`${JSON.stringify({ digest: value.digest, reference: value.reference })}\n`),
+        )
+      ) {
+        throw new Error("Executed Docker image evidence must be canonical")
+      }
+      await captureDockerImage(value.reference, value.digest)
+    }
+  })
+  for (const lane of ["framework", "runtime", "smoke"]) {
+    await check(`${lane}-assertions`, `${lane} installed-package assertions passed`, () =>
+      dependencies.runHarnessAssertion(root, lane, options.version),
+    )
+  }
 }
 
 export function publishedDockerProbeIdentity(randomUUID = defaultRandomUUID) {
@@ -221,8 +246,8 @@ async function defaultReadManifest(options) {
   return manifest
 }
 
-async function runInstalledTypeScriptProbe(root, runCommand, version) {
-  await installTypeScriptTooling(root, { runCommand })
+async function runInstalledTypeScriptProbe(root, runCommand, version, captureInstallation) {
+  await installTypeScriptTooling(root, { runCommand, captureInstallation })
   await assertInstalledCoreResolution({
     consumerRoot: root,
     expectedCoreVersion: version,
@@ -334,7 +359,10 @@ for (const [name, value] of Object.entries(surfaces[lane])) {
 function productionCommandOptions(options = {}) {
   return {
     ...pickStrictSmokeCommandOptions(options),
-    env: publicNpmEnvironment({ home: options.cwd ?? process.cwd(), extra: options.env }),
+    env: publicNpmEnvironment({
+      home: options.cwd ?? process.cwd(),
+      extra: options.env,
+    }),
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: options.maxOutputBytes ?? COMMAND_OUTPUT_BYTES,
   }

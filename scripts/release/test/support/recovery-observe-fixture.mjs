@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises"
 import * as manifest from "../../manifest.mjs"
 import * as metadata from "../../metadata.mjs"
 import { canonicalPolicyBytes, hashVerifierClosure } from "../../recovery/policy.mjs"
-import { canonicalRecoveryBytes } from "../../recovery/schema.mjs"
+import { canonicalRecoveryBytes, metadataCheckName } from "../../recovery/schema.mjs"
 import * as record from "../../release-record.mjs"
 import { canonical, digest, executor, wireFixtures } from "./recovery-fixture.mjs"
 import { CANDIDATE, candidateFixture } from "./recovery-legacy-fixture.mjs"
@@ -13,6 +13,9 @@ export async function recoveryRemote({
   ownerWorkflow = ".github/workflows/release-postpublication.yml",
   platform = "linux",
   retainedRaw = null,
+  mutateLane = () => {},
+  mutateInstallation = () => {},
+  mutateSet = () => {},
 } = {}) {
   const base = candidateFixture({ modules: { metadata, manifest, record } })
   const source = "reviewed source\n"
@@ -109,6 +112,8 @@ export async function recoveryRemote({
   const adoptionRef = add("recovery-v2-adoption-903-1.json", adoption)
   const original = wireFixtures()
   const lanes = {}
+  const installationReceipts = {}
+  const installationAssets = []
   for (const [name, lane] of Object.entries(original.lanes)) {
     lanes[name] = {
       ...lane,
@@ -117,13 +122,15 @@ export async function recoveryRemote({
       executor: { ...e, jobId: lane.executor.jobId },
       environment: {
         ...lane.environment,
-        dockerImages:
-          name === "storage"
-            ? policy.environment.dockerImages.map((reference) => ({
-                reference,
-                digest: `sha256:${digest(reference)}`,
-              }))
-            : [],
+        dockerImages: (name === "storage"
+          ? ["pgvector/pgvector:pg16", "postgres:16"]
+          : name === "published-harness"
+            ? ["node:22-slim"]
+            : []
+        ).map((reference) => ({
+          reference,
+          digest: `sha256:${digest(reference)}`,
+        })),
         platform,
         profile: policy.environment.profile,
         node: policy.environment.node,
@@ -132,13 +139,48 @@ export async function recoveryRemote({
       checks: policy.lanes
         .find((l) => l.name === name)
         .requiredChecks.map((name) => ({ name, conclusion: "success" })),
-      resolutions: [
-        {
-          ...lane.resolutions[0],
-          integrity: npmEvidence.packages.find((p) => p.name === "@dawn-ai/sdk").integrity,
-        },
-      ],
+      resolutions:
+        name === "metadata"
+          ? []
+          : [
+              {
+                ...lane.resolutions[0],
+                integrity: npmEvidence.packages.find((p) => p.name === "@dawn-ai/sdk").integrity,
+              },
+            ],
     }
+    if (name === "metadata")
+      lanes[name].checks.push(
+        ...base.manifest.packages.map((pkg) => ({
+          name: metadataCheckName(`package:${pkg.name}`),
+          conclusion: "success",
+        })),
+      )
+    lanes[name].checks.sort((a, b) => (a.name < b.name ? -1 : 1))
+    lanes[name].installations = lane.installations.map((descriptor) => {
+      const value = wire("recovery-installation", {
+        policySha256,
+        lane: name,
+        executor: lanes[name].executor,
+        check: descriptor.check,
+        resolutions: structuredClone(lanes[name].resolutions),
+      })
+      mutateInstallation(value)
+      const bytes = canonicalRecoveryBytes(value)
+      const sha256 = digest(bytes)
+      const assetName = `recovery-v2-installation-${name}-${descriptor.check}-${sha256}.json`
+      const ref = add(assetName, value)
+      installationReceipts[assetName] = value
+      installationAssets.push(ref)
+      return {
+        check: descriptor.check,
+        assetName,
+        sha256,
+        size: bytes.length,
+        count: value.resolutions.length,
+      }
+    })
+    mutateLane(lanes[name])
   }
   const selected = Object.entries(lanes).map(([lane, value]) => ({
     lane,
@@ -146,8 +188,10 @@ export async function recoveryRemote({
     executor: value.executor,
     conclusion: "success",
   }))
-  const retainedReceipts =
-    retainedRaw === null ? [] : [add("recovery-v2-retained-903-1.json", retainedRaw)]
+  const retainedReceipts = sort([
+    ...installationAssets,
+    ...(retainedRaw === null ? [] : [add("recovery-v2-retained-903-1.json", retainedRaw)]),
+  ])
   const set = wire("recovery-verification-set", {
     policySha256,
     executor: e,
@@ -164,6 +208,7 @@ export async function recoveryRemote({
     retainedReceipts,
     conclusion: "success",
   })
+  mutateSet(set)
   const setRef = add("recovery-v2-verification-set-903-1.json", set)
   const auditIntent = wire("recovery-audit-intent", {
     policySha256,
@@ -409,6 +454,8 @@ export async function recoveryRemote({
     set,
     setRef,
     lanes,
+    installationReceipts,
+    installationAssets,
     audit,
     auditRef,
     auditIntent,

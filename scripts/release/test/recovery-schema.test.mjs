@@ -77,7 +77,11 @@ test("candidate and executor are separate exact identities", () => {
     ["tag", "v0.8.25"],
   ]) {
     assert.throws(
-      () => parse({ ...value, candidate: { ...value.candidate, [field]: invalid } }),
+      () =>
+        parse({
+          ...value,
+          candidate: { ...value.candidate, [field]: invalid },
+        }),
       field,
     )
   }
@@ -309,7 +313,10 @@ test("run results cannot invent terminal completion or regress observed phases",
   for (const value of [
     { ...f.runResult, outcome: "complete", effects: [] },
     { ...f.runResult, before: "PUBLICATION_READY", after: "NPM_COMPLETE" },
-    { ...f.runResult, effects: [{ operation: "write-marker", target: "COMPLETE" }] },
+    {
+      ...f.runResult,
+      effects: [{ operation: "write-marker", target: "COMPLETE" }],
+    },
     {
       ...f.runResult,
       outcome: "complete",
@@ -466,4 +473,56 @@ test("every reported or planned marker mutation targets the reported ending phas
       effects: [...f.runResult.effects, { operation: "write-marker", target: "PUBLICATION_READY" }],
     }),
   )
+})
+
+test("installation sidecars bind complete distinct snapshots and bounded descriptors", () => {
+  const lane = structuredClone(wireFixtures().lanes.storage)
+  const installation = {
+    schemaVersion: 2,
+    kind: "recovery-installation",
+    candidate: lane.candidate,
+    policySha256: lane.policySha256,
+    executor: lane.executor,
+    lane: lane.lane,
+    check: "exact-install",
+    resolutions: lane.resolutions,
+  }
+  assert.deepEqual(parse(canonical(installation)), installation)
+  const bytes = canonical(installation)
+  const sha256 = schema.recoveryDigest(installation)
+  lane.installations = [
+    {
+      check: installation.check,
+      assetName: `recovery-v2-installation-storage-exact-install-${sha256}.json`,
+      sha256,
+      size: bytes.length,
+      count: installation.resolutions.length,
+    },
+  ]
+  assert.deepEqual(parse(lane), lane)
+  assert.throws(() => parse({ ...installation, check: "invented-check" }))
+  assert.throws(() => parse({ ...installation, resolutions: [] }))
+  assert.throws(() =>
+    parse({
+      ...installation,
+      resolutions: Array(4097).fill(installation.resolutions[0]),
+    }),
+  )
+  assert.throws(() => parse({ ...lane, installations: [] }))
+  lane.installations[0].assetName = "recovery-v2-installation-wrong.json"
+  assert.throws(() => parse(lane))
+})
+
+test("failure can honestly lack npm version and installed resolutions", () => {
+  const lane = structuredClone(wireFixtures().lanes.storage)
+  lane.environment.packageManager = null
+  lane.resolutions = []
+  lane.installations = []
+  lane.checks = [
+    { name: "cleanup", conclusion: "success" },
+    { name: "containment", conclusion: "failure" },
+  ]
+  lane.conclusion = "failure"
+  assert.deepEqual(parse(lane), lane)
+  assert.throws(() => parse({ ...lane, conclusion: "success" }))
 })

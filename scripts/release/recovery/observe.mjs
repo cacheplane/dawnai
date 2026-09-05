@@ -7,7 +7,11 @@ import { parseReleaseMarker, verifyReleaseAttestationAnchor } from "../metadata.
 import { NPM_AUDIT_VERIFIER } from "../npm-audit.mjs"
 import { canonicalReleaseRecordBytes, parseReleaseRecord } from "../release-record.mjs"
 import { parseRecoveryReleaseMarker, renderRecoveryFinalMetadata } from "./metadata.mjs"
-import { planRecovery, verifyRecoveryObservedPhase } from "./model.mjs"
+import {
+  planRecovery,
+  requiredRecoveryDockerImages,
+  verifyRecoveryObservedPhase,
+} from "./model.mjs"
 import {
   canonicalPolicyBytes,
   hashVerifierClosure,
@@ -19,6 +23,7 @@ import {
 } from "./policy.mjs"
 import {
   canonicalRecoveryBytes,
+  metadataCheckName,
   parseRecovery,
   RECOVERY_LIMITS,
   snapshotRecoveryData,
@@ -672,10 +677,17 @@ async function recoveryChain(
   const set = wire(verificationRef, "recovery-verification-set")
   await executorAdmission(context, c, set.executor, policySha256, cache)
   const lanes = {}
+  const installations = {}
   for (const selected of set.lanes) {
     const lane = wire(selected.receipt, "recovery-lane")
     const policy = admitted.policy
-    const required = policy.lanes.find((item) => item.name === lane.lane).requiredChecks
+    const lanePolicy = policy.lanes.find((item) => item.name === lane.lane)
+    const required = [
+      ...lanePolicy.requiredChecks,
+      ...(lanePolicy.packageChecks === "each-manifest-package"
+        ? manifestPackages.map((name) => metadataCheckName(`package:${name}`))
+        : []),
+    ]
     requireThat(
       required.every((name) =>
         lane.checks.some((check) => check.name === name && check.conclusion === "success"),
@@ -688,23 +700,39 @@ async function recoveryChain(
       ),
       "lane environment differs from reviewed policy",
     )
-    if (lane.lane === "storage")
-      same(
-        lane.environment.dockerImages.map((image) => image.reference),
-        policy.environment.dockerImages,
-        "storage Docker image inventory differs",
-      )
-    else
+    const requiredImages = requiredRecoveryDockerImages(lane.lane)
+    requireThat(
+      requiredImages.every((reference) => policy.environment.dockerImages.includes(reference)),
+      "required Docker image is not approved",
+    )
+    same(
+      lane.environment.dockerImages.map((image) => image.reference),
+      requiredImages,
+      "lane Docker image inventory differs",
+    )
+    for (const descriptor of lane.installations) {
+      const ref = set.retainedReceipts.find((item) => item.assetName === descriptor.assetName)
+      requireThat(ref, "selected installation is not retained")
+      wire(ref, "recovery-installation")
       requireThat(
-        lane.environment.dockerImages.every((image) =>
-          policy.environment.dockerImages.includes(image.reference),
-        ),
-        "unapproved Docker image reference",
+        installations[descriptor.assetName] === undefined,
+        "duplicate selected installation",
       )
+      installations[descriptor.assetName] = {
+        ref,
+        bytes: bytes.get(ref.assetName).toString("utf8"),
+      }
+    }
     lanes[selected.lane] = lane
   }
   await validateRetained(set.retainedReceipts)
-  facts.verification = { set, ref: verificationRef, lanes, provenance: set.provenance }
+  facts.verification = {
+    set,
+    ref: verificationRef,
+    lanes,
+    installations,
+    provenance: set.provenance,
+  }
   const auditRef = finalization?.audit ?? marker.audit
   if (!auditRef) return facts
   const pending = marker?.phase === "AUDIT_PENDING" && !finalization

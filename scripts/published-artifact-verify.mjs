@@ -134,10 +134,82 @@ async function runReleaseModeVerify(options, overrides) {
       await overrides.writeFile(path, canonicalSmokeResultBytes(receipt))
     }
   }
+  const { startedAt, finishedAt, failures, checks, fatalErrors, packageNames } =
+    await executeReleaseMetadataVerify(options, {
+      ...dependencies,
+      strictRunner,
+    })
+
+  let receiptError
+  try {
+    const receipt = {
+      schemaVersion: 1,
+      lane: "metadata",
+      version: options.version,
+      commitSha: options.commitSha,
+      manifestSha256: options.manifestSha256,
+      workflowRunId: parsePositiveEnvironmentInteger(
+        dependencies.env.GITHUB_RUN_ID,
+        "GITHUB_RUN_ID",
+      ),
+      runAttempt: parsePositiveEnvironmentInteger(
+        dependencies.env.GITHUB_RUN_ATTEMPT,
+        "GITHUB_RUN_ATTEMPT",
+      ),
+      startedAt,
+      finishedAt,
+      checks,
+      conclusion: checks.every(({ conclusion }) => conclusion === "success")
+        ? "success"
+        : "failure",
+    }
+    await dependencies.writeResult(options.result, receipt)
+  } catch (error) {
+    receiptError = error
+  }
+
+  if (fatalErrors.length > 0 || receiptError !== undefined) {
+    const errors = [...fatalErrors, ...(receiptError === undefined ? [] : [receiptError])]
+    if (errors.length === 1) throw errors[0]
+    throw new AggregateError(errors, "Published metadata verification and receipt write failed")
+  }
+
+  return { failures, packageNames }
+}
+
+export async function executeReleaseMetadataVerify(options, overrides = {}) {
+  if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
+    throw new TypeError("Release-mode metadata command execution requires a strictRunner")
+  }
+  const strictRunner = overrides.strictRunner ?? createStrictSmokeProcessRunner()
+  const dependencies = {
+    createNpmAuditVerifier,
+    createNpmReader,
+    env: process.env,
+    mkdir,
+    now: () => new Date(),
+    readManifest: (path) =>
+      readBoundedRegularFile(path, RELEASE_PAYLOAD_LIMITS.manifestBytes, "Release manifest"),
+    verifyDownloadedPackageContents,
+    verifyReleasePackage,
+    writeResult: writeCanonicalSmokeResult,
+    ...overrides,
+  }
+  if (overrides.readManifest === undefined && overrides.readFile !== undefined) {
+    dependencies.readManifest = overrides.readFile
+  }
+  if (overrides.writeResult === undefined && overrides.writeFile !== undefined) {
+    dependencies.writeResult = async (path, receipt) => {
+      await dependencies.mkdir(dirname(path), { recursive: true })
+      await overrides.writeFile(path, canonicalSmokeResultBytes(receipt))
+    }
+  }
   const startedAt = timestampFromClock(dependencies.now)
   const failures = []
   const checks = []
   const fatalErrors = []
+  let auditConclusion = "skipped"
+  let cleanupConclusion = "success"
   let packageNames = []
   let manifest
 
@@ -205,6 +277,7 @@ async function runReleaseModeVerify(options, overrides) {
         signal: auditController.signal,
       })
       assertNpmAuditVerifier(auditVerifier)
+      auditConclusion = "success"
     } catch (error) {
       failures.push(error)
       fatalErrors.push(error)
@@ -247,6 +320,7 @@ async function runReleaseModeVerify(options, overrides) {
       try {
         await auditVerifier.dispose()
       } catch (error) {
+        cleanupConclusion = "failure"
         failures.push(error)
         fatalErrors.push(error)
         checks.push({
@@ -258,41 +332,16 @@ async function runReleaseModeVerify(options, overrides) {
     }
   }
 
-  let receiptError
-  try {
-    const receipt = {
-      schemaVersion: 1,
-      lane: "metadata",
-      version: options.version,
-      commitSha: options.commitSha,
-      manifestSha256: options.manifestSha256,
-      workflowRunId: parsePositiveEnvironmentInteger(
-        dependencies.env.GITHUB_RUN_ID,
-        "GITHUB_RUN_ID",
-      ),
-      runAttempt: parsePositiveEnvironmentInteger(
-        dependencies.env.GITHUB_RUN_ATTEMPT,
-        "GITHUB_RUN_ATTEMPT",
-      ),
-      startedAt,
-      finishedAt: timestampFromClock(dependencies.now),
-      checks,
-      conclusion: checks.every(({ conclusion }) => conclusion === "success")
-        ? "success"
-        : "failure",
-    }
-    await dependencies.writeResult(options.result, receipt)
-  } catch (error) {
-    receiptError = error
+  return {
+    startedAt,
+    finishedAt: timestampFromClock(dependencies.now),
+    failures,
+    checks,
+    fatalErrors,
+    packageNames,
+    auditConclusion,
+    cleanupConclusion,
   }
-
-  if (fatalErrors.length > 0 || receiptError !== undefined) {
-    const errors = [...fatalErrors, ...(receiptError === undefined ? [] : [receiptError])]
-    if (errors.length === 1) throw errors[0]
-    throw new AggregateError(errors, "Published metadata verification and receipt write failed")
-  }
-
-  return { failures, packageNames }
 }
 
 export function parsePublishedArtifactVerifyArgs(args) {

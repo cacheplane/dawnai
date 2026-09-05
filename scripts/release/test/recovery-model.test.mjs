@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+  canonical,
   digest,
   executor,
   LANES,
@@ -574,3 +575,171 @@ test("exhausted revisions block work that would need a newer durable marker", ()
   completed.marker.revision = Number.MAX_SAFE_INTEGER
   assert.equal(plan(completed).outcome, "complete")
 })
+
+// Rebind changed canonical evidence so the planner must reject its meaning, not a stale digest.
+function rebindVerification(facts) {
+  const proof = facts.verification
+  for (const selected of proof.set.lanes) {
+    selected.receipt = receiptRef(
+      proof.lanes[selected.lane],
+      selected.receipt.assetName,
+      selected.receipt.id,
+    )
+    proof.set.provenance.find((p) => p.lane === selected.lane).receiptSha256 =
+      selected.receipt.sha256
+  }
+  proof.provenance = structuredClone(proof.set.provenance)
+  proof.ref = receiptRef(proof.set, proof.ref.assetName, proof.ref.id)
+}
+for (const [name, mutate] of [
+  [
+    "missing independent installation map",
+    (f) => {
+      delete f.verification.installations
+    },
+  ],
+  [
+    "missing independent sidecar",
+    (f) => {
+      delete f.verification.installations[Object.keys(f.verification.installations)[0]]
+    },
+  ],
+  [
+    "different sidecar bytes",
+    (f) => {
+      Object.values(f.verification.installations)[0].bytes += " "
+    },
+  ],
+  [
+    "sidecar count mismatch",
+    (f) => {
+      f.verification.lanes.storage.installations[0].count++
+    },
+  ],
+  [
+    "nonretained sidecar",
+    (f) => {
+      f.verification.set.retainedReceipts.pop()
+    },
+  ],
+  [
+    "metadata package check missing",
+    (f) => {
+      f.verification.lanes.metadata.checks = f.verification.lanes.metadata.checks.filter(
+        (c) => !c.name.startsWith("package-"),
+      )
+    },
+  ],
+  [
+    "storage missing pgvector image",
+    (f) => {
+      f.verification.lanes.storage.environment.dockerImages.shift()
+    },
+  ],
+  [
+    "harness missing actual Docker image",
+    (f) => {
+      f.verification.lanes["published-harness"].environment.dockerImages = []
+    },
+  ],
+  [
+    "runtime carries foreign lane image",
+    (f) => {
+      f.verification.lanes["runtime-targets"].environment.dockerImages =
+        f.verification.lanes.storage.environment.dockerImages
+    },
+  ],
+]) {
+  test(`selected success blocks ${name}`, () => {
+    const facts = recoveryFacts({ phase: "RECOVERY_ADOPTED" })
+    mutate(facts)
+    rebindVerification(facts)
+    blocked(facts, "RECOVERY_ADOPTED")
+  })
+}
+
+function mutateInstallation(facts, mutate) {
+  const proof = facts.verification
+  const descriptor = proof.lanes.storage.installations[0]
+  const old = proof.installations[descriptor.assetName]
+  const value = JSON.parse(old.bytes)
+  mutate(value)
+  const sha256 = digest(canonical(value))
+  const name = `recovery-v2-installation-storage-${descriptor.check}-${sha256}.json`
+  const ref = receiptRef(value, name, old.ref.id)
+  delete proof.installations[descriptor.assetName]
+  proof.installations[name] = { ref, bytes: canonical(value).toString("utf8") }
+  proof.set.retainedReceipts = proof.set.retainedReceipts.filter(
+    (r) => r.assetName !== descriptor.assetName,
+  )
+  proof.set.retainedReceipts.push(ref)
+  proof.set.retainedReceipts.sort((a, b) => (a.assetName < b.assetName ? -1 : 1))
+  Object.assign(descriptor, {
+    assetName: name,
+    sha256,
+    size: ref.size,
+    count: value.resolutions.length,
+  })
+}
+for (const [name, mutate] of [
+  [
+    "wrong executor",
+    (v) => {
+      v.executor.runId = "999"
+    },
+  ],
+  [
+    "wrong checkpoint",
+    (v) => {
+      v.lane = "scaffold"
+      v.check = "dependency-install"
+    },
+  ],
+  [
+    "foreign candidate",
+    (v) => {
+      v.candidate.releaseId = "999"
+    },
+  ],
+  [
+    "foreign policy",
+    (v) => {
+      v.policySha256 = "e".repeat(64)
+    },
+  ],
+  [
+    "known subject hidden as dependency",
+    (v) => {
+      v.resolutions.push({
+        ...v.resolutions[0],
+        installPath: "node_modules/z/node_modules/@dawn-ai/sdk",
+        subject: false,
+        requested: "^0.7.0",
+        resolved: "0.7.0",
+      })
+    },
+  ],
+  [
+    "foreign dependency classified as subject",
+    (v) => {
+      v.resolutions.push({
+        ...v.resolutions[0],
+        installPath: "node_modules/other",
+        name: "other",
+      })
+    },
+  ],
+  [
+    "subject summary differs from actual installation",
+    (v) => {
+      v.resolutions[0].integrity = `sha512-${Buffer.alloc(64, 2).toString("base64")}`
+    },
+  ],
+]) {
+  test(`canonical selected installation blocks ${name}`, () => {
+    const facts = recoveryFacts({ phase: "RECOVERY_ADOPTED" })
+    mutateInstallation(facts, mutate)
+    rebindVerification(facts)
+    blocked(facts, "RECOVERY_ADOPTED")
+  })
+}

@@ -6,13 +6,16 @@
   "environment": {
     "architecture": "x64",
     "containment": "systemd-cgroup-v2",
-    "dockerImages": ["pgvector/pgvector:pg16", "postgres:16"],
+    "dockerImages": ["node:22-slim", "pgvector/pgvector:pg16", "postgres:16"],
     "node": "24.17.0",
     "packageManager": "npm@11.17.0",
     "platform": "linux",
     "profile": "recovery-linux-v2"
   },
-  "fence": { "concurrencyGroup": "dawn-release-controller", "contracts": [] },
+  "fence": {
+    "concurrencyGroup": "dawn-release-controller",
+    "contracts": []
+  },
   "lanes": [
     {
       "name": "metadata",
@@ -119,7 +122,9 @@
       "scripts/release/limits.mjs",
       "scripts/release/manifest.mjs",
       "scripts/release/npm-audit.mjs",
+      "scripts/release/recovery/policy.mjs",
       "scripts/release/recovery/schema.mjs",
+      "scripts/release/recovery/smoke.mjs",
       "scripts/release/semver.mjs",
       "scripts/release/smoke-command-shim.mjs",
       "scripts/release/smoke-containment.mjs",
@@ -132,7 +137,7 @@
       "scripts/release/smoke/storage.mjs",
       "scripts/release/topology.mjs"
     ],
-    "sha256": "2f32e9a6d68b083e3b88aa0033b6b06dd972a5188ab0f87323a8aadc14216802"
+    "sha256": "a1e0e61e2031d230398c2f6c2877c84117ae7ce8f969ed01672b2b3fbc586be7"
   },
   "workflows": [
     ".github/workflows/release-postpublication-audit.yml",

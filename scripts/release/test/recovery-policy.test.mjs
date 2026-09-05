@@ -105,7 +105,10 @@ test("closure digest commits to path and raw bytes, checks bounds, and never has
   )
   await assert.rejects(() =>
     policyModule.hashVerifierClosure(
-      { controllerSha: "a".repeat(40), inputs: ["scripts/release/recovery/policy.json"] },
+      {
+        controllerSha: "a".repeat(40),
+        inputs: ["scripts/release/recovery/policy.json"],
+      },
       read,
     ),
   )
@@ -154,7 +157,12 @@ test("bounded Retry-After and operation/phase deadlines prevent extra reads", as
     { phaseDeadline: 4000 },
     async () => {
       attempts++
-      return { status: "AMBIGUOUS", code: "HTTP_429", httpStatus: 429, retryAfterMs: 999999 }
+      return {
+        status: "AMBIGUOUS",
+        code: "HTTP_429",
+        httpStatus: 429,
+        retryAfterMs: 999999,
+      }
     },
     c,
   )
@@ -201,7 +209,12 @@ test("only recognized metadata-present tarball propagation is retried", async ()
       async () => {
         attempts++
         return attempts === 1
-          ? { status: "AMBIGUOUS", operation: "package-tarball", code: "HTTP_404", httpStatus: 404 }
+          ? {
+              status: "AMBIGUOUS",
+              operation: "package-tarball",
+              code: "HTTP_404",
+              httpStatus: 404,
+            }
           : { status: "PRESENT" }
       },
       clock(),
@@ -292,6 +305,7 @@ test("reviewed probe inventory equals independently discovered local executable 
     "scripts/release/smoke/scaffold.mjs",
     "scripts/release/smoke/storage.mjs",
     "scripts/release/recovery/schema.mjs",
+    "scripts/release/recovery/smoke.mjs",
   ]
   const seen = new Set(),
     pending = [...roots]
@@ -472,7 +486,11 @@ test("real adapter TIMEOUT is terminal when an abort-ignoring fetch has not sett
       return new Promise((resolve) =>
         pending.push(() => {
           active--
-          resolve(new Response("{}", { headers: { "content-type": "application/json" } }))
+          resolve(
+            new Response("{}", {
+              headers: { "content-type": "application/json" },
+            }),
+          )
         }),
       )
     },
@@ -567,4 +585,16 @@ test("transient HTTP status cannot make unknown or deterministic transport error
       }
     }
   }
+})
+
+test("dormant image inventory includes the actual sandbox image and recovery collector closure", async () => {
+  const policy = policyModule.parseRecoveryPolicy(
+    policyModule.canonicalPolicyBytes(await fixture()),
+  )
+  assert.deepEqual(policy.environment.dockerImages, [
+    "node:22-slim",
+    "pgvector/pgvector:pg16",
+    "postgres:16",
+  ])
+  assert.ok(policy.verifierClosure.inputs.includes("scripts/release/recovery/smoke.mjs"))
 })

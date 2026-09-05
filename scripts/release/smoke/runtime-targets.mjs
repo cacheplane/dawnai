@@ -20,6 +20,21 @@ export async function runRuntimeTargetsSmoke(options, overrides = {}) {
   if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
     throw new TypeError("Runtime-target smoke command execution requires a strictRunner")
   }
+  return executeSmokeLane(
+    { lane: "runtime-targets", ...options },
+    (context) => executeRuntimeTargetsSmoke(options, context, overrides),
+    overrides,
+  )
+}
+
+export async function executeRuntimeTargetsSmoke(
+  options,
+  { check, deferCleanup, captureInstallation = async () => {} },
+  overrides = {},
+) {
+  if (overrides.runCommand !== undefined || overrides.probeContainment !== undefined) {
+    throw new TypeError("Runtime-target smoke command execution requires a strictRunner")
+  }
   const strictRunner = overrides.strictRunner ?? createStrictSmokeProcessRunner()
   const dependencies = {
     makeTempDir,
@@ -31,68 +46,63 @@ export async function runRuntimeTargetsSmoke(options, overrides = {}) {
     probeContainment: strictRunner.probe,
   }
 
-  return executeSmokeLane(
-    { lane: "runtime-targets", ...options },
-    async ({ check, deferCleanup }) => {
-      await check(
-        "containment",
-        strictContainmentReceiptDetail(dependencies.env),
-        dependencies.probeContainment,
-      )
-      const root = await check("temporary-project", "clean runtime-target consumer created", () =>
-        dependencies.makeTempDir("dawn-published-runtime-targets-"),
-      )
-      deferCleanup("cleanup", "runtime-target consumer removed", () => dependencies.removeDir(root))
+  await check(
+    "containment",
+    strictContainmentReceiptDetail(dependencies.env),
+    dependencies.probeContainment,
+  )
+  const root = await check("temporary-project", "clean runtime-target consumer created", () =>
+    dependencies.makeTempDir("dawn-published-runtime-targets-"),
+  )
+  deferCleanup("cleanup", "runtime-target consumer removed", () => dependencies.removeDir(root))
 
-      await check(
-        "exact-install",
-        "exact Node and edge packages installed from public npm",
-        async () => {
-          await dependencies.runCommand("npm", ["init", "-y"], { cwd: root })
-          await dependencies.runCommand(
-            "npm",
-            [
-              "install",
-              "--save-exact",
-              "--package-lock=false",
-              `@dawn-ai/sdk@${options.version}`,
-              `@dawn-ai/core@${options.version}`,
-              `@dawn-ai/langgraph@${options.version}`,
-              `@dawn-ai/ag-ui@${options.version}`,
-              `@dawn-ai/postgres-storage@${options.version}`,
-              `esbuild@${ESBUILD_VERSION}`,
-            ],
-            { cwd: root },
-          )
-        },
+  await check(
+    "exact-install",
+    "exact Node and edge packages installed from public npm",
+    async () => {
+      await dependencies.runCommand("npm", ["init", "-y"], { cwd: root })
+      await dependencies.runCommand(
+        "npm",
+        [
+          "install",
+          "--save-exact",
+          "--package-lock=false",
+          `@dawn-ai/sdk@${options.version}`,
+          `@dawn-ai/core@${options.version}`,
+          `@dawn-ai/langgraph@${options.version}`,
+          `@dawn-ai/ag-ui@${options.version}`,
+          `@dawn-ai/postgres-storage@${options.version}`,
+          `esbuild@${ESBUILD_VERSION}`,
+        ],
+        { cwd: root },
       )
-      await check("probe-files", "runtime-target probes created", () =>
-        dependencies.writeProbeFiles(root),
-      )
-      await check("node-runtime", "Node imports and representative runtime passed", () =>
-        dependencies.runCommand("node", ["node-runtime.mjs"], { cwd: root }),
-      )
-      await check("edge-bundle", "edge target bundled without Node builtins", () =>
-        dependencies.runCommand(
-          "npm",
-          [
-            "exec",
-            "--",
-            "esbuild",
-            "edge-entry.mjs",
-            "--bundle",
-            "--platform=browser",
-            "--format=esm",
-            "--outfile=edge-bundle.mjs",
-          ],
-          { cwd: root },
-        ),
-      )
-      await check("edge-import", "bundled edge target imported and executed", () =>
-        dependencies.runCommand("node", ["edge-import.mjs"], { cwd: root }),
-      )
+      await captureInstallation("exact-install", root)
     },
-    overrides,
+  )
+  await check("probe-files", "runtime-target probes created", () =>
+    dependencies.writeProbeFiles(root),
+  )
+  await check("node-runtime", "Node imports and representative runtime passed", () =>
+    dependencies.runCommand("node", ["node-runtime.mjs"], { cwd: root }),
+  )
+  await check("edge-bundle", "edge target bundled without Node builtins", () =>
+    dependencies.runCommand(
+      "npm",
+      [
+        "exec",
+        "--",
+        "esbuild",
+        "edge-entry.mjs",
+        "--bundle",
+        "--platform=browser",
+        "--format=esm",
+        "--outfile=edge-bundle.mjs",
+      ],
+      { cwd: root },
+    ),
+  )
+  await check("edge-import", "bundled edge target imported and executed", () =>
+    dependencies.runCommand("node", ["edge-import.mjs"], { cwd: root }),
   )
 }
 
@@ -148,7 +158,10 @@ assert.deepEqual(edgeSurface(), ["function", "function"])
 function productionCommandOptions(options = {}) {
   return {
     ...pickStrictSmokeCommandOptions(options),
-    env: publicNpmEnvironment({ home: options.cwd ?? process.cwd(), extra: options.env }),
+    env: publicNpmEnvironment({
+      home: options.cwd ?? process.cwd(),
+      extra: options.env,
+    }),
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_OUTPUT_BYTES,
   }
