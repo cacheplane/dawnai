@@ -660,3 +660,79 @@ test("unsafe admission inventory paths cannot become an empty reservation invent
   assert.equal(result.proposal, null)
   assert.equal(result.originalPayload.npmEvidence.conclusion, "success")
 })
+
+test("each fresh observation verifies one complete npm inventory batch after all fresh bytes", async () => {
+  const r = await recoveryRemote()
+  let factories = 0,
+    commands = 0,
+    downloads = 0
+  const create = r.args.npmAuditFactory.create
+  const download = r.args.npm.downloadRegistryTarball
+  r.args.npm.downloadRegistryTarball = async (args) => {
+    downloads++
+    return download(args)
+  }
+  r.args.npmAuditFactory.create = async () => {
+    factories++
+    const verifier = await create()
+    return {
+      ...verifier,
+      async verifyPackages(args) {
+        commands++
+        assert.equal(downloads, commands * r.base.manifest.packages.length)
+        assert.deepEqual(
+          args.entries,
+          [...r.base.manifest.packages].sort((a, b) => (a.name < b.name ? -1 : 1)),
+        )
+        return verifier.verifyPackages(args)
+      },
+      async verifyPackage() {
+        throw new Error("per-package audit must not run")
+      },
+    }
+  }
+  for (let i = 0; i < 2; i++) {
+    const result = await observe(r.args)
+    assert.equal(result.outcome, "recovery-required", result.errors.join("; "))
+  }
+  assert.equal(factories, 2)
+  assert.equal(commands, 2)
+  assert.equal(downloads, 2 * r.base.manifest.packages.length)
+})
+for (const mutation of ["missing", "duplicate", "reordered", "foreign", "extra field", "null"])
+  test(`observer rejects ${mutation} batch result`, async () => {
+    const r = await recoveryRemote()
+    const create = r.args.npmAuditFactory.create
+    r.args.npmAuditFactory.create = async () => {
+      const verifier = await create()
+      return {
+        ...verifier,
+        async verifyPackages(args) {
+          const rows = structuredClone(await verifier.verifyPackages(args))
+          if (mutation === "missing") rows.pop()
+          if (mutation === "duplicate") rows[1] = rows[0]
+          if (mutation === "reordered") rows.reverse()
+          if (mutation === "foreign") rows[1].name = "foreign"
+          if (mutation === "extra field") rows[1].extra = true
+          if (mutation === "null") rows[1] = null
+          return rows
+        },
+      }
+    }
+    const result = await observe(r.args)
+    assert.equal(result.outcome, "blocked")
+  })
+
+test("a created verifier missing the required batch method is still disposed", async () => {
+  const r = await recoveryRemote()
+  let disposed = 0
+  r.args.npmAuditFactory.create = async () => ({
+    verifyPackage: async () => {},
+    dispose: async () => {
+      disposed++
+    },
+  })
+  const result = await observe(r.args)
+  assert.equal(result.outcome, "blocked")
+  assert.equal(disposed, 1)
+})

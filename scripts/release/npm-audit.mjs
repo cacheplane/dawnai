@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { snapshotJson } from "./adapter-normalize.mjs"
+import { assertPreparedTarballPayload } from "./limits.mjs"
 import { isExactSemver, parseSemver } from "./semver.mjs"
 
 const PUBLIC_REGISTRY_ORIGIN = "https://registry.npmjs.org"
@@ -120,7 +121,13 @@ export async function createNpmAuditVerifier({
   }
 
   const createdRoot = await fileSystem.mkdtemp(path.join(os.tmpdir(), "dawn-npm-audit-"))
-  const root = await fileSystem.realpath(createdRoot)
+  let root
+  try {
+    root = await fileSystem.realpath(createdRoot)
+  } catch (error) {
+    await fileSystem.rm(createdRoot, { recursive: true, force: true }).catch(() => undefined)
+    throw error
+  }
   const auditHome = path.join(root, "audit-home")
   const auditCache = path.join(root, "audit-cache")
   const publishHome = path.join(root, "publish-home")
@@ -128,6 +135,8 @@ export async function createNpmAuditVerifier({
   const consumersRoot = path.join(root, "consumers")
   const consumers = new Map()
   let disposed = false
+  let disposal
+  const batches = new Set()
   try {
     await Promise.all(
       [auditHome, auditCache, publishHome, publishCache, consumersRoot].map((directory) =>
@@ -161,6 +170,113 @@ export async function createNpmAuditVerifier({
           preserveOidc: true,
           additionalEnvironment: provenanceEnvironment,
         })
+      },
+      verifyPackages(input) {
+        const work = (async () => {
+          if (disposed) throw new Error("npm audit verifier has been disposed")
+          const identities = validateBatchContext(input)
+          if (typeof fileSystem.lstat !== "function") {
+            throw new TypeError("npm audit batch file system must expose lstat")
+          }
+          const active = () => {
+            if (disposed) throw new Error("npm audit verifier has been disposed")
+            signal.throwIfAborted()
+          }
+          active()
+          // Each capture gets an empty consumer. Never reuse a prior audit tree or proof.
+          const directory = await fileSystem.mkdtemp(path.join(consumersRoot, "batch-"))
+          active()
+          const files = new Map()
+          const directories = new Map([[directory, ["node_modules", "package.json"]]])
+          const modules = path.join(directory, "node_modules")
+          directories.set(modules, [])
+          files.set(
+            path.join(directory, "package.json"),
+            Buffer.from(
+              `${JSON.stringify({
+                name: "dawn-release-audit-consumer",
+                version: "0.0.0",
+                private: true,
+                dependencies: Object.fromEntries(
+                  identities.map(({ entry }) => [entry.name, entry.version]),
+                ),
+              })}\n`,
+            ),
+          )
+          for (const { entry } of identities) {
+            const segments = entry.name.split("/")
+            const leaf = path.join(modules, ...segments)
+            if (!directories.get(modules).includes(segments[0]))
+              directories.get(modules).push(segments[0])
+            if (segments.length === 2) {
+              const scope = path.join(modules, segments[0])
+              if (!directories.has(scope)) directories.set(scope, [])
+              directories.get(scope).push(segments[1])
+            }
+            directories.set(leaf, ["package.json"])
+            files.set(
+              path.join(leaf, "package.json"),
+              Buffer.from(`${JSON.stringify({ name: entry.name, version: entry.version })}\n`),
+            )
+          }
+          for (const directory of directories.keys()) {
+            active()
+            await fileSystem.mkdir(directory, { recursive: true, mode: 0o700 })
+          }
+          for (const [file, bytes] of files) {
+            active()
+            await fileSystem.writeFile(file, bytes, { flag: "wx", mode: 0o600 })
+          }
+          const assertTree = async () => {
+            for (const [file, bytes] of files) {
+              if (!(await fileSystem.lstat(file)).isFile()) {
+                throw new Error("npm audit batch requires regular file metadata")
+              }
+              if (
+                (await fileSystem.realpath(file)) !== file ||
+                !Buffer.from(await fileSystem.readFile(file)).equals(bytes)
+              ) {
+                throw new Error("npm audit batch consumer identity changed")
+              }
+            }
+            for (const [directory, members] of directories) {
+              if (!(await fileSystem.lstat(directory)).isDirectory()) {
+                throw new Error("npm audit batch requires real directories")
+              }
+              if (
+                (await fileSystem.realpath(directory)) !== directory ||
+                !arraysEqual((await fileSystem.readdir(directory)).sort(), [...members].sort())
+              ) {
+                throw new Error("npm audit batch consumer identity changed")
+              }
+            }
+          }
+          await assertTree()
+          active()
+          let result
+          try {
+            result = await runNpm(
+              "npm",
+              ["audit", "signatures", "--no-package-lock", "--json", "--include-attestations"],
+              {
+                cwd: directory,
+                env: auditEnvironment,
+                signal,
+                acceptedExitCodes: [0, 1],
+              },
+            )
+          } finally {
+            await assertTree()
+          }
+          active()
+          return parseBatchAudit(result?.stdout, identities)
+        })()
+        batches.add(work)
+        work.then(
+          () => batches.delete(work),
+          () => batches.delete(work),
+        )
+        return work
       },
       async verifyPackage({ entry, candidate }) {
         if (disposed) throw new Error("npm audit verifier has been disposed")
@@ -233,17 +349,121 @@ export async function createNpmAuditVerifier({
         await assertSyntheticAuditTree(fileSystem, consumer, identity.entry.name)
         return parseNpmAuditSignatures(auditResult?.stdout, identity)
       },
-      async dispose() {
-        if (disposed) return
+      dispose() {
+        if (disposal !== undefined) return disposal
         disposed = true
-        consumers.clear()
-        await fileSystem.rm(root, { recursive: true, force: true })
+        disposal = (async () => {
+          await Promise.allSettled([...batches])
+          consumers.clear()
+          await fileSystem.rm(root, { recursive: true, force: true })
+        })()
+        return disposal
       },
     }
   } catch (error) {
     await fileSystem.rm(root, { recursive: true, force: true }).catch(() => undefined)
     throw error
   }
+}
+
+function validateBatchContext(input) {
+  // Check the declared array bound without executing an accessor, then snapshot
+  // every identity before touching disk or yielding to mutable caller state.
+  const entries = input != null && Object.getOwnPropertyDescriptor(input, "entries")?.value
+  if (!Array.isArray(entries) || entries.length < 1 || entries.length > 64) {
+    throw new TypeError("npm audit batch requires 1 through 64 exact packages")
+  }
+  const value = snapshotJson(input)
+  assertExactFields(value, ["entries", "candidate"], "npm audit batch context")
+  assertExactFields(
+    value.candidate,
+    ["version", "commitSha", "ciWorkflow", "ciCheck", "publisherWorkflow"],
+    "npm audit batch candidate",
+  )
+  if (value.candidate.ciWorkflow !== "CI" || value.candidate.ciCheck !== "validate") {
+    throw new TypeError("npm audit batch candidate CI identity is invalid")
+  }
+  const names = new Set()
+  const identities = value.entries.map((entry) => {
+    assertExactFields(
+      entry,
+      ["name", "version", "filename", "size", "sha256", "sha512", "npmIntegrity", "access"],
+      "npm audit batch manifest entry",
+    )
+    const identity = validateAuditContext(entry, value.candidate)
+    if (
+      typeof entry.name !== "string" ||
+      entry.name.length > 214 ||
+      ["node_modules", "favicon.ico"].includes(entry.name) ||
+      names.has(entry.name)
+    ) {
+      throw new TypeError("npm audit batch package identity is invalid or duplicate")
+    }
+    const tarballName = entry.name.startsWith("@")
+      ? entry.name.slice(1).replaceAll("/", "-")
+      : entry.name
+    if (
+      entry.filename !== `${tarballName}-${entry.version}.tgz` ||
+      entry.access !== "public" ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size <= 0 ||
+      typeof entry.sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(entry.sha256)
+    ) {
+      throw new TypeError("npm audit batch manifest entry is invalid")
+    }
+    names.add(entry.name)
+    return identity
+  })
+  assertPreparedTarballPayload(value.entries)
+  return identities
+}
+
+function parseBatchAudit(output, identities) {
+  if (
+    typeof output !== "string" ||
+    Buffer.byteLength(output, "utf8") < 1 ||
+    Buffer.byteLength(output, "utf8") > NPM_AUDIT_OUTPUT_MAX_BYTES
+  ) {
+    throw new Error("npm audit signatures output is missing or exceeds its byte limit")
+  }
+  let audit
+  try {
+    audit = snapshotJson(JSON.parse(output))
+  } catch (error) {
+    throw new Error("npm audit signatures output is malformed", { cause: error })
+  }
+  assertExactFields(audit, AUDIT_ROOT_FIELDS, "npm audit signatures output")
+  if (
+    !Array.isArray(audit.invalid) ||
+    audit.invalid.length !== 0 ||
+    !Array.isArray(audit.missing) ||
+    audit.missing.length !== 0 ||
+    !Array.isArray(audit.verified) ||
+    audit.verified.length !== identities.length
+  ) {
+    throw new Error("npm audit batch has missing, invalid, or extra evidence")
+  }
+  const expected = new Map(identities.map(({ entry }) => [entry.name, entry.version]))
+  for (const row of audit.verified) {
+    assertExactFields(row, VERIFIED_FIELDS, "npm audit signatures verified entry")
+    if (
+      !expected.has(row.name) ||
+      row.version !== expected.get(row.name) ||
+      row.location !== `node_modules/${row.name}`
+    ) {
+      throw new Error("npm audit batch has foreign, duplicate, or conflicting evidence")
+    }
+    expected.delete(row.name)
+  }
+  // The original complete stdout is the proof. Never manufacture filtered output.
+  return deepFreeze(
+    identities.map((identity) => ({
+      name: identity.entry.name,
+      version: identity.entry.version,
+      ...parseNpmAuditSignatures(output, identity),
+    })),
+  )
 }
 
 function validateAuditContext(entry, candidate) {

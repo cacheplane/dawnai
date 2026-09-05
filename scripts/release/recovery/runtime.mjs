@@ -104,6 +104,7 @@ export function createRecoveryRuntime(
       })
       return Object.freeze({
         verifyPackage: (args) => verifier.verifyPackage(args),
+        verifyPackages: (args) => verifier.verifyPackages(args),
         dispose: () => verifier.dispose(),
       })
     },

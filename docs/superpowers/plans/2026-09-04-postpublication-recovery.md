@@ -715,6 +715,19 @@ identity that discards unsettled-write exclusion. Prefer reusing the existing
 writer transaction and verifier lease for initial controller reads when that
 preserves the read-only boundary, rather than adding another lifecycle manager.
 
+- [x] Slice 12a: add fresh exact-inventory npm batching while preserving legacy
+  verifier methods. Independent specification and quality reviews approved the
+  final source; all 3,072 controller tests passed in 150.48 seconds. The 19-write
+  fixture reduced signature commands from 861 to 41; transfer counts remain for
+  slice 12b. The actual new verifier also passed all 21 production packages in
+  one official npm 11.17.0 audit command. Evidence:
+  `/tmp/dawn-recovery-task12a-controller-verified.log`,
+  `/tmp/dawn-task12a-observation-cost.json`, `/tmp/dawn-task12a-real-npm.json`.
+- [ ] Slice 12b: bounded invocation-only payload reuse and initial managed
+  observation settlement, with independent reviews and measured phase counts.
+- [ ] Slice 12c: production-adapter fault rehearsal, explicit service-probe
+  entrypoint, and eligible Linux runner CI evidence.
+
 - [ ] Reuse production effects and adapters against disposable local HTTP/npm
   fixtures, with independent readback. Exercise the whole legacy adoption ->
   five lanes -> audit -> finalization -> publish -> no-op -> next-version path.

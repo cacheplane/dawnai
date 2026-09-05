@@ -397,18 +397,18 @@ async function baseProof(context, c, refs, bytes, attestations) {
 }
 async function npmProof(context, c, manifest, npm, npmAuditFactory) {
   npm = recoveryMethods(npm, ["observePackageVersion", "downloadRegistryTarball"])
-  const verifier = recoveryMethods(
-    await context.work(
-      () => recoveryMethods(npmAuditFactory, ["create"]).create(),
-      async (value) => {
-        if (value !== undefined) await recoveryMethods(value, ["dispose"]).dispose()
-      },
-    ),
-    ["verifyPackage", "dispose"],
+  const created = await context.work(
+    () => recoveryMethods(npmAuditFactory, ["create"]).create(),
+    async (value) => {
+      if (value !== undefined) await recoveryMethods(value, ["dispose"]).dispose()
+    },
   )
+  const cleanup = recoveryMethods(created, ["dispose"])
   const packages = []
+  const entries = [...manifest.packages].sort((a, b) => (a.name < b.name ? -1 : 1))
   try {
-    for (const entry of [...manifest.packages].sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const verifier = recoveryMethods(created, ["verifyPackages"])
+    for (const entry of entries) {
       const pkg = await context.npm(
         () =>
           npm.observePackageVersion({
@@ -447,29 +447,6 @@ async function npmProof(context, c, manifest, npm, npmAuditFactory) {
           payload.sha1 === pkg.shasum,
         "registry tarball bytes differ",
       )
-      const audit = snapshotRecoveryData(
-        await context.work(
-          () => verifier.verifyPackage({ entry, candidate: legacyIdentity(c) }),
-          () => verifier.dispose(),
-        ),
-      )
-      requireThat(
-        audit?.status === "verified" &&
-          audit.signature?.status === "valid" &&
-          audit.signature.verifier === NPM_AUDIT_VERIFIER,
-        "registry signatures invalid",
-      )
-      same(
-        audit.provenance,
-        {
-          predicateType: "https://slsa.dev/provenance/v1",
-          repository: `https://github.com/${c.repository}`,
-          workflow: ".github/workflows/release.yml",
-          commitSha: c.candidateSha,
-          ref: `refs/tags/${c.tag}`,
-        },
-        "registry source differs",
-      )
       packages.push({
         name: entry.name,
         version: entry.version,
@@ -479,11 +456,34 @@ async function npmProof(context, c, manifest, npm, npmAuditFactory) {
         conclusion: "success",
       })
     }
+    const audits = snapshotRecoveryData(
+      await context.work(
+        () => verifier.verifyPackages({ entries, candidate: legacyIdentity(c) }),
+        () => cleanup.dispose(),
+      ),
+    )
+    same(
+      audits,
+      entries.map((entry) => ({
+        name: entry.name,
+        version: entry.version,
+        status: "verified",
+        signature: { status: "valid", verifier: NPM_AUDIT_VERIFIER },
+        provenance: {
+          predicateType: "https://slsa.dev/provenance/v1",
+          repository: `https://github.com/${c.repository}`,
+          workflow: ".github/workflows/release.yml",
+          commitSha: c.candidateSha,
+          ref: `refs/tags/${c.tag}`,
+        },
+      })),
+      "registry batch signatures or source differ",
+    )
   } finally {
     // Cleanup must still start after a read consumes the phase budget. It grants
     // no authority and cannot overlap the unsettled verifier work whose late
     // settlement callback owns disposal instead.
-    if (context.settled()) await verifier.dispose()
+    if (context.settled()) await cleanup.dispose()
   }
   return { manifestSha256: c.manifestSha256, packages, conclusion: "success" }
 }

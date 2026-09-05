@@ -171,6 +171,10 @@ export function createRecoveryWriter(config, dependencies) {
           active()
           return track(() => recoveryMethods(verifier, ["verifyPackage"]).verifyPackage(args))
         },
+        verifyPackages(args) {
+          active()
+          return track(() => recoveryMethods(verifier, ["verifyPackages"]).verifyPackages(args))
+        },
         dispose() {
           disposal ??= track(async () => {
             try {

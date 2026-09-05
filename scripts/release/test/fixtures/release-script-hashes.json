@@ -98,7 +98,7 @@
       "sha256": "1b3e9cc2e5eb187309565e46bd5ecdc2cb2d6578288a9c05a58a120dfef2020e"
     },
     "scripts/release/npm-audit.mjs": {
-      "sha256": "308b723105b9549a2740456eaedf2f272c0885fdc5c530f9bfb3aa0e49314111"
+      "sha256": "ae879f6ce01abe9af898fec0764553287f57542471718acf3d8c03f8bd7f8cfe"
     },
     "scripts/release/npm-evidence.mjs": {
       "sha256": "fc14058dcf57fd3252cf758d8f58ee2795a5d5f210f41231a794018b17366b74"
@@ -170,10 +170,10 @@
       "sha256": "0da8451d732545c08386ee90015c7fabf9d1e5a1855a5546fcdad4c0a54538d2"
     },
     "scripts/release/recovery/observe.mjs": {
-      "sha256": "6994c22d43e12b6fc8339da45445397d6148814ee51aee197c1b1da64346b5ea"
+      "sha256": "9297f553973faa7f00bd162598a30c15d1c250fc3e233516f048f3a932e757df"
     },
     "scripts/release/recovery/policy.json": {
-      "sha256": "e792d00f81c88450eb04a82a5c2504ae41c4fe2d615fe2c9ca716e151d269233"
+      "sha256": "b52e05c47a46223d8c909faefdccf13c037a875ac8db40daacb6e6f3c8177bc7"
     },
     "scripts/release/recovery/policy.mjs": {
       "sha256": "77e3651e87b6964b84333a6c324087e855035a77987054e4fc73a412ff148ad2"
@@ -182,7 +182,7 @@
       "sha256": "8b881aaa9619ba902dd732247e5fc00aefcb12fb83078c0cb325e555c30d173f"
     },
     "scripts/release/recovery/runtime.mjs": {
-      "sha256": "ff42261bb5b2293e9e7085789960c183a95e40d655e9ae3a3db734b3b540079e"
+      "sha256": "0c888cf3aaaf42ed996a8f26e21d1c928f214660802d75cb3cd7f76aee0c3b0f"
     },
     "scripts/release/recovery/schema.mjs": {
       "sha256": "1588b11421296c2153839f7d304f10eb1f559f06372fe79920b6048ec2652cc0"
@@ -200,7 +200,7 @@
       "sha256": "07500c88ba45814f9a2d31dab4e2b152671522f9c2a3f4466ccf1ae8eb4be7c6"
     },
     "scripts/release/recovery/writer.mjs": {
-      "sha256": "c0a0766e34188e87489f76c52c9472a679c453b0f0785b96958b1dfe8029b846"
+      "sha256": "52187b83e4688d172ac43dc9d5b0de135457cfd3c166036b8b14d398721822f0"
     },
     "scripts/release/release-record.mjs": {
       "sha256": "f841a2b615cef19cf913a4f89665c10c428446f97314de6c27c1785e47a51170"

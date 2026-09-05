@@ -149,6 +149,7 @@ test("real read-only runtime never constructs invocation or policy readers and h
         calls.push(options)
         return {
           verifyPackage: async () => "verified",
+          verifyPackages: async () => ["batch verified"],
           dispose: async () => {},
           publisherEnvironment: () => {
             throw new Error("forbidden")
@@ -160,9 +161,10 @@ test("real read-only runtime never constructs invocation or policy readers and h
   )
   assert.equal(result.authority, undefined)
   const verifier = await result.observation.npmAuditFactory.create()
-  assert.deepEqual(Object.keys(verifier).sort(), ["dispose", "verifyPackage"])
+  assert.deepEqual(Object.keys(verifier).sort(), ["dispose", "verifyPackage", "verifyPackages"])
   assert.ok(!JSON.stringify(calls).includes("policy-secret"))
   assert.equal(await verifier.verifyPackage({}), "verified")
+  assert.deepEqual(await verifier.verifyPackages({}), ["batch verified"])
   await verifier.dispose()
 })
 test("composed recovery attestation child excludes policy npm and OIDC credentials on success and failure", async () => {

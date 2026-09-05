@@ -629,9 +629,9 @@ test("built-in production discovery proves a recovery candidate once per invocat
         const verifier = await create(args)
         return {
           ...verifier,
-          async verifyPackage(args) {
+          async verifyPackages(args) {
             verifications++
-            return verifier.verifyPackage(args)
+            return verifier.verifyPackages(args)
           },
         }
       },
@@ -646,7 +646,7 @@ test("built-in production discovery proves a recovery candidate once per invocat
   assert.equal(result.state, "RECOVERY_REQUIRED")
   assert.equal(result.disposition, "recovery-owned")
   assert.equal(creates, 1)
-  assert.equal(verifications, r.base.manifest.packages.length)
+  assert.equal(verifications, 1)
 })
 
 test("an injected recovery-looking discovery result still receives independent observation", async () => {

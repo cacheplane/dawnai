@@ -544,8 +544,10 @@ export async function recoveryRemote({
   const npmAuditFactory = {
     async create() {
       return {
-        async verifyPackage() {
-          return {
+        async verifyPackages({ entries }) {
+          return entries.map((entry) => ({
+            name: entry.name,
+            version: entry.version,
             status: "verified",
             signature: {
               status: "valid",
@@ -558,7 +560,7 @@ export async function recoveryRemote({
               commitSha: c.candidateSha,
               ref: `refs/tags/${c.tag}`,
             },
-          }
+          }))
         },
         async dispose() {
           calls.push("dispose")

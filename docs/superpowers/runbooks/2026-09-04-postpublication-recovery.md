@@ -863,3 +863,64 @@ phase, selected receipt locations, and the next action. Starting phase and
 completed mutation history are explicitly unavailable; successful job results
 are never converted into a fictitious mutation journal. Readiness metadata drift
 recommends finalization repair before publication. Live recovery remains dormant.
+
+## Fresh production payload verification
+
+On 2026-09-05, the read-only inspector from committed controller
+`e38e6f28bd70e8dafda8986838f87c885ded8742` independently verified all 45 original
+Release assets and all 21 published packages, including the real GitHub
+attestation anchor and official npm signature/provenance checks. It returned
+`unreserved` and `original-payload-verified`, with no errors or release writes.
+The source was extracted from that commit, independently of the concurrent
+batching implementation. The check took 43.916 seconds on macOS with Node
+24.20.0 and a temporary, isolated npm 11.17.0 installation. This is a single
+read-only inspection, not a Linux smoke result or pipeline latency estimate.
+
+The exact candidate remains release `382873833`, tag `v0.8.24`, candidate SHA
+`88c01c4afd59866fc0ea4c8f3b8444439a01c8ea`, and annotated tag object
+`f2b401a29fe13141d1a71a919f0cf5b5eb05314b`. Its mutable draft still uses the
+opaque release tag and original `NPM_COMPLETE` marker. Evidence is retained at
+`/tmp/dawn-recovery-production-read-1789d99n/evidence/inspection.json` and
+`summary.json` in the same directory. Package counts come from the inspection's
+`originalPayload.npmEvidence.packages` array.
+
+The proposed intent is retained outside active admission at
+`/tmp/dawn-recovery-production-read-1789d99n/evidence/proposed-intent-dormant.json`.
+It binds the inspected **DORMANT** policy and is a diagnostic only. It must be
+regenerated after admission policy changes; this evidence does not establish a
+legacy fence, workflow credential sufficiency, or authorization to activate.
+
+
+## Fresh npm batching verification (Task 12a)
+
+The new recovery batch method verifies the exact manifest inventory in one
+fresh official npm 11.17.0 signature command per observation. It retains
+complete-output membership checks and every per-package provenance binding.
+Each observation still fetches fresh npm metadata and validates all tarball
+bytes. The batch consumer has an exact filesystem inventory checked before
+and after npm; malformed identities and nonregular package files reject before
+reading them. Legacy verifier methods retain their compatibility.
+
+The deterministic evidence-collection fixture still reaches
+`VERIFICATION_COMPLETE` with 19 writes. Its signature-command count drops from
+861 per-package commands to 41 complete-inventory commands, one for each fresh
+observation. This slice deliberately leaves payload-transfer counts unchanged:
+2,322 Release downloads, 861 npm tarball downloads, and 22 Actions downloads.
+These are fixture call counts, not production throughput. Evidence:
+`/tmp/dawn-task12a-observation-cost.json`.
+
+Root also ran the new verifier against all 21 real published packages using the
+manifest from the verified production inspection. Official npm 11.17.0 verified
+every package with one audit command (plus its version check), taking 1.526
+seconds on macOS/Node 24.20.0 including disposal. The source SHA256 was
+`ae879f6ce01abe9af898fec0764553287f57542471718acf3d8c03f8bd7f8cfe`.
+This was read-only cryptographic verification, not a full recovery invocation,
+Linux smoke, service fence, or publication. Evidence:
+`/tmp/dawn-task12a-real-npm.json`.
+
+Independent specification and quality reviews approved Task 12a. The final
+controller suite passed 3,072 tests, zero failures, in 150.48 seconds. Scoped
+Biome checked 14 files; docs, inventory, and whitespace checks passed. The
+complete controller log is `/tmp/dawn-recovery-task12a-controller-verified.log`.
+Owned temporary production-inspection source and npm tooling were removed;
+inspection and batch-verification evidence remain available at the paths above.

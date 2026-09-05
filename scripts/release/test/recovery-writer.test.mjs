@@ -586,7 +586,7 @@ test("late harmless GET settlement cannot start managed work after inspection ti
   }
 })
 
-for (const stalled of ["create", "verifyPackage"])
+for (const stalled of ["create", "verifyPackages"])
   test(`nested observation timeout retains raw ${stalled} and late disposal until fresh resume`, async () => {
     const r = await recoveryWriteRemote()
     r.activate([...r.baseAssets, r.adoption.archive, r.adoptionRef])
@@ -611,12 +611,12 @@ for (const stalled of ["create", "verifyPackage"])
       const index = ++created
       const actual = await originalCreate()
       const instance = {
-        async verifyPackage(args) {
-          if (index === 1 && stalled === "verifyPackage") {
+        async verifyPackages(args) {
+          if (index === 1 && stalled === "verifyPackages") {
             start()
             await raw
           }
-          return actual.verifyPackage(args)
+          return actual.verifyPackages(args)
         },
         async dispose() {
           disposed++
