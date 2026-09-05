@@ -98,7 +98,7 @@
             "env": {
               "DAWN_TEST_K8S_CONTEXT": "kind-dawn-chart-apply"
             },
-            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
             "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 15
@@ -913,6 +913,68 @@
         },
         {
           "classification": "safe",
+          "id": "release-controller",
+          "descriptor": {
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 30
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.17.0",
+                  "cache": "pnpm"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Release Integrity Preflight",
+                "run": "pnpm test:release-integrity"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Release Controller Tests",
+                "run": "pnpm test:release-controller"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
           "id": "sandbox-docker",
           "descriptor": {
             "runs-on": "ubuntu-latest",
@@ -984,7 +1046,7 @@
             "env": {
               "DAWN_TEST_SMOKE_E2E": "1"
             },
-            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
             "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 30
@@ -1070,7 +1132,7 @@
             "env": {
               "DAWN_TEST_K8S_CONTEXT": "kind-dawn-k8s-canonical"
             },
-            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
             "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 35
@@ -1204,7 +1266,7 @@
               "DAWN_TEST_SMOKE_E2E": "1",
               "KIND_CLUSTER": "dawn-smoke"
             },
-            "if": "${{ always() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
+            "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.metadata_scope.result != 'success' || needs.metadata_scope.outputs.metadata_only != 'true') }}",
             "needs": "metadata_scope",
             "runs-on": "ubuntu-latest",
             "timeout-minutes": 30
@@ -1381,6 +1443,113 @@
         },
         {
           "classification": "safe",
+          "id": "source-validate",
+          "descriptor": {
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": 45
+          },
+          "steps": [
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Checkout",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {
+                  "fetch-depth": 0
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup pnpm",
+                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+                "with": {
+                  "version": "10.33.0"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Setup Node.js",
+                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                "with": {
+                  "node-version": "24.17.0",
+                  "cache": "pnpm"
+                }
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Install",
+                "run": "pnpm install --frozen-lockfile"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Release Integrity Preflight",
+                "run": "pnpm test:release-integrity"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Lint",
+                "run": "pnpm lint"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Build Cache Config",
+                "run": "pnpm check:build-cache"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Build",
+                "run": "pnpm build"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Typecheck",
+                "run": "pnpm typecheck"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Source Tests",
+                "env": {
+                  "DAWN_REQUIRE_DOCKER": "1"
+                },
+                "run": "pnpm test"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Release Inventory",
+                "run": "pnpm check:release-inventory"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
+                "name": "Docs Check",
+                "run": "node scripts/check-docs.mjs"
+              }
+            }
+          ]
+        },
+        {
+          "classification": "safe",
           "id": "testing-windows",
           "descriptor": {
             "runs-on": "windows-latest",
@@ -1449,112 +1618,23 @@
           "classification": "safe",
           "id": "validate",
           "descriptor": {
+            "needs": ["source-validate", "release-controller", "pack-smoke", "harness-verify"],
+            "if": "always()",
             "runs-on": "ubuntu-latest",
-            "timeout-minutes": 45
+            "timeout-minutes": 5
           },
           "steps": [
             {
               "classification": "safe",
               "descriptor": {
-                "name": "Checkout",
-                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-                "with": {
-                  "fetch-depth": 0
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Setup pnpm",
-                "uses": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
-                "with": {
-                  "version": "10.33.0"
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Setup Node.js",
-                "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-                "with": {
-                  "cache": "pnpm",
-                  "node-version": "24.17.0"
-                }
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Install",
-                "run": "pnpm install --frozen-lockfile"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Release Integrity Preflight",
-                "run": "pnpm test:release-integrity"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Lint",
-                "run": "pnpm lint"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Build Cache Config",
-                "run": "pnpm check:build-cache"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Build",
-                "run": "pnpm build"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Typecheck",
-                "run": "pnpm typecheck"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
+                "name": "Require every validation lane",
                 "env": {
-                  "DAWN_REQUIRE_DOCKER": "1"
+                  "LANE_0": "${{ needs.source-validate.result }}",
+                  "LANE_1": "${{ needs.release-controller.result }}",
+                  "LANE_2": "${{ needs.pack-smoke.result }}",
+                  "LANE_3": "${{ needs.harness-verify.result }}"
                 },
-                "name": "Source Tests",
-                "run": "pnpm test"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Release Inventory",
-                "run": "pnpm check:release-inventory"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Release Controller Tests",
-                "run": "pnpm test:release-controller"
-              }
-            },
-            {
-              "classification": "safe",
-              "descriptor": {
-                "name": "Docs Check",
-                "run": "node scripts/check-docs.mjs"
+                "run": "for result in \"$LANE_0\" \"$LANE_1\" \"$LANE_2\" \"$LANE_3\"; do\n  if [ \"$result\" != success ]; then\n    echo \"Required validation lane did not succeed: $result\" >&2\n    exit 1\n  fi\ndone\n"
               }
             }
           ]

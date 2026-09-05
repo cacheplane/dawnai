@@ -54,7 +54,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 0,
         "step": "Checkout",
         "kind": "step-uses",
@@ -62,7 +62,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 1,
         "step": "Setup pnpm",
         "kind": "step-uses",
@@ -70,7 +70,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 2,
         "step": "Setup Node.js",
         "kind": "step-uses",
@@ -78,7 +78,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 3,
         "step": "Install",
         "kind": "run",
@@ -86,7 +86,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 4,
         "step": "Release Integrity Preflight",
         "kind": "run",
@@ -94,7 +94,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 5,
         "step": "Lint",
         "kind": "run",
@@ -102,7 +102,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 6,
         "step": "Build Cache Config",
         "kind": "run",
@@ -110,7 +110,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 7,
         "step": "Build",
         "kind": "run",
@@ -118,7 +118,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 8,
         "step": "Typecheck",
         "kind": "run",
@@ -126,7 +126,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 9,
         "step": "Source Tests",
         "kind": "run",
@@ -134,7 +134,7 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 10,
         "step": "Release Inventory",
         "kind": "run",
@@ -142,8 +142,56 @@
       },
       {
         "classification": "safe",
-        "job": "validate",
+        "job": "source-validate",
         "stepIndex": 11,
+        "step": "Docs Check",
+        "kind": "run",
+        "value": "node scripts/check-docs.mjs"
+      },
+      {
+        "classification": "safe",
+        "job": "release-controller",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "release-controller",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "release-controller",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "release-controller",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "release-controller",
+        "stepIndex": 4,
+        "step": "Release Integrity Preflight",
+        "kind": "run",
+        "value": "pnpm test:release-integrity"
+      },
+      {
+        "classification": "safe",
+        "job": "release-controller",
+        "stepIndex": 5,
         "step": "Release Controller Tests",
         "kind": "run",
         "value": "pnpm test:release-controller"
@@ -151,10 +199,10 @@
       {
         "classification": "safe",
         "job": "validate",
-        "stepIndex": 12,
-        "step": "Docs Check",
+        "stepIndex": 0,
+        "step": "Require every validation lane",
         "kind": "run",
-        "value": "node scripts/check-docs.mjs"
+        "value": "for result in \"$LANE_0\" \"$LANE_1\" \"$LANE_2\" \"$LANE_3\"; do\n  if [ \"$result\" != success ]; then\n    echo \"Required validation lane did not succeed: $result\" >&2\n    exit 1\n  fi\ndone\n"
       },
       {
         "classification": "safe",

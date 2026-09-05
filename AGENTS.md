@@ -105,8 +105,11 @@ scripts respectively) — not workspace packages.
 
 ## Definition of Done
 
-The `validate` job in `.github/workflows/ci.yml` runs these gates in order,
-after installing dependencies:
+The required `validate` job in `.github/workflows/ci.yml` aggregates four
+independent lanes and succeeds only when all four succeed. Failure, cancellation,
+or a skipped lane blocks it.
+
+The `source-validate` lane runs these gates in order after installation:
 
 1. `pnpm test:release-integrity` — early content pins and recovery-policy checks
 2. `pnpm lint`
@@ -115,11 +118,12 @@ after installing dependencies:
 5. `pnpm typecheck`
 6. `pnpm test`
 7. `pnpm check:release-inventory`
-8. `pnpm test:release-controller` — the complete suite, including the early checks
-9. `node scripts/check-docs.mjs`
+8. `node scripts/check-docs.mjs`
 
-The separate `pack-smoke` job runs `pnpm pack:check` and
-`pnpm verify:typescript-tooling-pack`. The separate `harness-verify` job runs
+The `release-controller` lane installs dependencies, runs the early integrity
+checks, and runs the complete `pnpm test:release-controller` suite from an unbuilt
+checkout. The `pack-smoke` lane runs `pnpm pack:check` and
+`pnpm verify:typescript-tooling-pack`. The `harness-verify` lane runs
 `pnpm verify:harness:self-test` and the framework, runtime, and smoke harnesses.
 These gates remain part of repository validation.
 
@@ -127,8 +131,8 @@ On pull requests, a separate `changesets` job also runs
 `node scripts/check-changesets.mjs` to require a changeset for user-facing
 package changes.
 
-Run `pnpm ci:validate` locally to approximate this lane (it exists as a
-script in the root `package.json`). It runs the same release-integrity → lint → build-cache →
+Run `pnpm ci:validate` locally to run the validation commands sequentially.
+The script in the root `package.json` runs release-integrity → lint → build-cache →
 build → typecheck → source-test → release-inventory → release-controller-test →
 docs-check → pack-check → TypeScript-tooling-pack → harness sequence, plus
 the local-only `test:sync-chart-appversion` release-script unit test, which is

@@ -101,6 +101,7 @@ export interface VitestProviderAccountingRecord {
 export interface VitestProviderAccountingSession {
   record(options: VitestProviderAccountingRecord): Promise<void>
   finish(): void
+  dispose(): Promise<void>
 }
 
 export interface ReportPersistenceDependencies {
@@ -552,13 +553,26 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
   readonly #pendingCanonicalPaths = new Set<string>()
   readonly #usedIdentities = new Set<string>()
   readonly #pendingIdentities = new Set<string>()
+  readonly #retainedHandles: Awaited<ReturnType<typeof open>>[] = []
+  readonly #records = new Set<Promise<void>>()
+  #disposal: Promise<void> | undefined
   #finished = false
 
   constructor(expected: Readonly<Record<ProviderPhase, readonly string[]>>) {
     this.#expected = expected
   }
 
-  async record(options: VitestProviderAccountingRecord): Promise<void> {
+  record(options: VitestProviderAccountingRecord): Promise<void> {
+    const recording = this.#record(options)
+    this.#records.add(recording)
+    void recording.then(
+      () => this.#records.delete(recording),
+      () => this.#records.delete(recording),
+    )
+    return recording
+  }
+
+  async #record(options: VitestProviderAccountingRecord): Promise<void> {
     if (this.#finished) {
       throw new Error("Vitest provider accounting session is finished")
     }
@@ -578,6 +592,8 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
     this.#pendingPaths.add(reportPath)
     let canonicalPath: string | undefined
     let identity: string | undefined
+    let reservedCanonicalPath = false
+    let reservedIdentity = false
     let handle: Awaited<ReturnType<typeof open>> | undefined
     try {
       let initialStatus: Awaited<ReturnType<typeof lstat>>
@@ -597,6 +613,7 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
         throw new Error(`Vitest report canonical path is already reserved; reuse is forbidden`)
       }
       this.#pendingCanonicalPaths.add(canonicalPath)
+      reservedCanonicalPath = true
 
       handle = await open(reportPath, constants.O_RDONLY | constants.O_NOFOLLOW)
       const openedStatus = await handle.stat()
@@ -608,6 +625,7 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
         throw new Error("Vitest report identity is already reserved; reuse is forbidden")
       }
       this.#pendingIdentities.add(identity)
+      reservedIdentity = true
 
       const report = parseJson(await handle.readFile("utf8"), "Vitest output")
       const parsedReport = parseVitestProviderReport(report)
@@ -628,7 +646,14 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
         throw new Error("Vitest report identity changed before secure deletion")
       }
       await unlink(reportPath)
+      if (this.#finished) {
+        throw new Error("Vitest provider accounting session finished before record completed")
+      }
 
+      // Keep the unlinked inode alive so the filesystem cannot recycle its
+      // identity for the next phase. At most one handle is retained per phase.
+      this.#retainedHandles.push(handle)
+      handle = undefined
       this.#recordedPhases.add(phase)
       this.#usedPaths.add(reportPath)
       this.#usedCanonicalPaths.add(canonicalPath)
@@ -637,8 +662,29 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
       await handle?.close().catch(() => undefined)
       this.#pendingPhases.delete(phase)
       this.#pendingPaths.delete(reportPath)
-      if (canonicalPath !== undefined) this.#pendingCanonicalPaths.delete(canonicalPath)
-      if (identity !== undefined) this.#pendingIdentities.delete(identity)
+      if (reservedCanonicalPath && canonicalPath !== undefined) {
+        this.#pendingCanonicalPaths.delete(canonicalPath)
+      }
+      if (reservedIdentity && identity !== undefined) this.#pendingIdentities.delete(identity)
+    }
+  }
+
+  dispose(): Promise<void> {
+    this.#finished = true
+    this.#disposal ??= this.#dispose()
+    return this.#disposal
+  }
+
+  async #dispose(): Promise<void> {
+    await Promise.allSettled([...this.#records])
+    const results = await Promise.allSettled(
+      this.#retainedHandles.splice(0).map((handle) => handle.close()),
+    )
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    )
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Vitest provider report disposal failed")
     }
   }
 
