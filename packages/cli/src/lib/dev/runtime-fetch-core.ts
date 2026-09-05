@@ -1,4 +1,5 @@
-import { seedDawnConfig } from "@dawn-ai/core"
+import type { DawnConfig } from "@dawn-ai/core"
+import { loadDawnConfig, seedDawnConfig } from "@dawn-ai/core"
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware, MiddlewareRequest, ThreadAccessPolicy } from "@dawn-ai/sdk"
@@ -22,6 +23,8 @@ import type { DawnStaticModules } from "../runtime/static-modules-core.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { handleAgUiFetchRequest } from "./agui-handler.js"
+import type { CorsConfig } from "./cors.js"
+import { applyCorsHeaders, corsPreflightResponse, resolveCorsPolicy } from "./cors.js"
 import {
   handleMemoryApproveRequest,
   handleMemoryListRequest,
@@ -677,7 +680,7 @@ export async function createRuntimeFetchHandler(
     ...(options.modules ? { staticModules: options.modules } : {}),
   })
 
-  const fetch = async (request: Request): Promise<Response> => {
+  const serveRoutes = async (request: Request): Promise<Response> => {
     if (!state.acceptingRequests) {
       return Response.json(createRequestErrorBody("Server is shutting down"), {
         status: 503,
@@ -866,6 +869,26 @@ export async function createRuntimeFetchHandler(
     // Release sandboxes only after in-flight requests have drained, so tools
     // executing against a sandbox are never yanked mid-request.
     if (sandboxManager) await sandboxManager.releaseAll()
+  }
+
+  // CORS wraps the whole handler rather than living inside it. `serveRoutes`
+  // has eight exit paths — the dispatch result, the tracked SSE response, the
+  // shutdown 503 and five error branches — and a cross-origin caller must be
+  // able to read ALL of them, including the failures. Stamping once here is
+  // the only version of that with no path left uncovered.
+  //
+  // Resolved at boot — see `readCorsConfig` for where the config comes from.
+  // Boot is also where a malformed origin list should fail, so an operator
+  // sees it on startup rather than on the first cross-origin request.
+  const corsPolicy = resolveCorsPolicy(await readCorsConfig(options))
+  const fetch = async (request: Request): Promise<Response> => {
+    // A preflight never reaches the route table: it claims no in-flight slot
+    // and needs no stores, and the router has no OPTIONS route that could
+    // answer it. Returns undefined when CORS is off or this is not a
+    // preflight, and the request proceeds normally.
+    const preflight = corsPreflightResponse(corsPolicy, request)
+    if (preflight !== undefined) return preflight
+    return applyCorsHeaders(corsPolicy, request, await serveRoutes(request))
   }
 
   return { close, fetch, shutdownController, state }
@@ -1500,6 +1523,38 @@ export function buildRouteTable(ctx: {
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/resume(?:\?.*)?$/,
     },
   ]
+}
+
+// ---------------------------------------------------------------------------
+// CORS config resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * `server.cors`, or undefined when this runtime has no config to read it from.
+ *
+ * Three callers, three shapes:
+ * - An edge runtime (or any caller that injects its own stores) passes
+ *   `config` and has no `dawn.config.ts` — read it straight off the object.
+ * - `dawn dev` / `dawn start` pass none and DO have one on disk; routes read it
+ *   lazily through the same memo, so loading here costs nothing extra.
+ * - Neither: no config file and none supplied. That is a legal Dawn app, and
+ *   `loadDawnConfig` signals it by throwing (`access` ENOENT). No config means
+ *   no CORS, exactly like an app that omits the block — the same
+ *   try/catch-to-defaults shape `resolveMemoryStore` uses for this case.
+ *
+ * A config that EXISTS but is malformed still throws: the catch here covers
+ * only obtaining the config, and `resolveCorsPolicy` validates afterwards.
+ */
+async function readCorsConfig(options: {
+  readonly appRoot: string
+  readonly config?: DawnConfig
+}): Promise<CorsConfig | undefined> {
+  if (options.config) return options.config.server?.cors
+  try {
+    return (await loadDawnConfig({ appRoot: options.appRoot })).config.server?.cors
+  } catch {
+    return undefined
+  }
 }
 
 // ---------------------------------------------------------------------------

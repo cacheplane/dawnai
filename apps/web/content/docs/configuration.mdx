@@ -384,6 +384,61 @@ Retrieval](/docs/memory/retrieval) for ranking, [Episodes](/docs/memory/episodes
 for run history, and [Distillation](/docs/memory/distillation) for explicit
 consolidation and reflection.
 
+### `server.cors`
+
+```ts
+server?: {
+  cors?: {
+    origins: readonly string[] | "*"
+    credentials?: boolean
+    methods?: readonly string[]
+    headers?: readonly string[]
+    exposeHeaders?: readonly string[]
+    maxAgeSeconds?: number
+  }
+}
+```
+
+Absent by default, and absence means **no `Access-Control-*` header on any
+response** — a browser on another origin cannot call `/agui/*`, `/threads/*` or
+`/memory/*`, and `OPTIONS` falls through to the router's 404. Opening a server
+to other origins is a deployment decision, so nothing here is inferred.
+
+Set it when a browser client talks to Dawn directly instead of through a
+same-origin proxy:
+
+```ts
+server: { cors: { origins: ["https://app.example.com"] } }
+```
+
+Origins are compared exactly, after normalizing case and a trailing slash, so
+`"HTTP://LocalHost:3010/"` matches an `Origin: http://localhost:3010`. Note that
+`localhost` and `127.0.0.1` are *different* origins — list both if your dev
+client may be opened at either.
+
+The policy is resolved and validated once at boot, so a malformed origin list
+fails on startup rather than on the first cross-origin request. `origins: "*"`
+with `credentials: true` is rejected outright: browsers refuse a wildcard
+allow-origin on a credentialed request, and accepting it would produce a server
+that looks configured and fails only in the console.
+
+Defaults for the rest: `credentials` false; `methods` `GET, POST, DELETE,
+OPTIONS`; `headers` echoes the browser's own
+`Access-Control-Request-Headers` (so an app can add an auth header without
+changing server config); `exposeHeaders` empty; `maxAgeSeconds` 600.
+
+Two behaviors worth knowing. A request from an origin **not** on the list is
+still served normally — it just carries no CORS header, and the browser is what
+refuses to hand it to the page; answering 403 there would break every
+non-browser client that happens to send an `Origin`. And error responses are
+stamped too, including the shutdown 503, because a cross-origin caller that
+cannot read a 404 sees only an opaque CORS failure.
+
+CORS is not authentication. It controls which origins a browser will let read a
+response; it does not decide who may call the server. Pair it with
+[`defineThreadAccess`](/docs/thread-access).
+
+
 ## Postgres backend
 
 Shared Postgres persistence requires three explicit entries: the checkpointer,

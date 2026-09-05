@@ -288,7 +288,8 @@ POST /memory/candidates/:id/approve
 POST /memory/candidates/:id/reject
 ```
 
-The browser cannot call those routes directly — the Dawn dev server sets no CORS
+The browser cannot call those routes directly unless the server sets
+[`server.cors`](/docs/configuration#servercors); with it absent the Dawn dev server sends no CORS
 headers — so the example reaches them through a same-origin catch-all,
 `app/api/dawn/[...path]/route.ts`. That proxy is **allowlisted**, not
 pass-through: `app/lib/proxy-allowlist.ts` is a pure function listing the exact
