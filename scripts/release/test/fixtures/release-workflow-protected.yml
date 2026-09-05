@@ -587,6 +587,7 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             scripts/release/adapter-normalize.mjs
+            scripts/release/adapters/conditional-json.mjs
             scripts/release/adapters/github.mjs
             scripts/release/adapters/http.mjs
             scripts/release/adapters/npm.mjs

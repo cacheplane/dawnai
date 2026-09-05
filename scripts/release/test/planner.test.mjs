@@ -63,6 +63,8 @@ const PACKAGE_IDENTITIES = [
 
 test("ReleaseState is the frozen canonical state model", () => {
   assert.deepEqual(ReleaseState, {
+    RECOVERY_REQUIRED: "RECOVERY_REQUIRED",
+    RECOVERY_COMPLETE: "RECOVERY_COMPLETE",
     NO_CANDIDATE: "NO_CANDIDATE",
     SUPERSEDED_NOOP: "SUPERSEDED_NOOP",
     CANDIDATE_VALIDATED: "CANDIDATE_VALIDATED",

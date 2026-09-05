@@ -1274,6 +1274,13 @@ function rehearsalNpmAuditFactory(candidate) {
         async verifyPackage({ entry }) {
           return verifiedNpmAudit({ candidate, entry })
         },
+        async verifyPackages({ entries }) {
+          return entries.map((entry) => ({
+            name: entry.name,
+            version: entry.version,
+            ...verifiedNpmAudit({ candidate, entry }),
+          }))
+        },
         async dispose() {},
       })
     },

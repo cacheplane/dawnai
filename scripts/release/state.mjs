@@ -3,6 +3,8 @@ import { correlateReleaseEvidence } from "./evidence.mjs"
 import { snapshotReleaseInput } from "./observation-schema.mjs"
 
 export const ReleaseState = Object.freeze({
+  RECOVERY_REQUIRED: "RECOVERY_REQUIRED",
+  RECOVERY_COMPLETE: "RECOVERY_COMPLETE",
   NO_CANDIDATE: "NO_CANDIDATE",
   SUPERSEDED_NOOP: "SUPERSEDED_NOOP",
   CANDIDATE_VALIDATED: "CANDIDATE_VALIDATED",
@@ -22,6 +24,8 @@ export const ReleaseState = Object.freeze({
 })
 
 export const RELEASE_PROGRESS_RANK = Object.freeze({
+  [ReleaseState.RECOVERY_REQUIRED]: 8,
+  [ReleaseState.RECOVERY_COMPLETE]: 16,
   [ReleaseState.NO_CANDIDATE]: 0,
   [ReleaseState.SUPERSEDED_NOOP]: 1,
   [ReleaseState.CANDIDATE_VALIDATED]: 2,
@@ -41,6 +45,7 @@ export const RELEASE_PROGRESS_RANK = Object.freeze({
 })
 
 export const TERMINAL_RELEASE_STATES = Object.freeze([
+  ReleaseState.RECOVERY_COMPLETE,
   ReleaseState.NO_CANDIDATE,
   ReleaseState.SUPERSEDED_NOOP,
   ReleaseState.AUDIT_COMPLETE,
@@ -48,6 +53,7 @@ export const TERMINAL_RELEASE_STATES = Object.freeze([
 ])
 
 export const INCOMPLETE_TAGGED_RELEASE_STATES = Object.freeze([
+  ReleaseState.RECOVERY_REQUIRED,
   ReleaseState.CANDIDATE_TAGGED,
   ReleaseState.ARTIFACTS_PREPARED,
   ReleaseState.ARTIFACTS_ATTESTED,

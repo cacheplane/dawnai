@@ -301,6 +301,7 @@ test("the documented four-argument resolver defaults to its built-in ZIP extract
 test("the sparse executable dependency allowlist covers its exact local import closure", () => {
   assert.deepEqual(ARTIFACT_STORE_SPARSE_FILES, [
     "scripts/release/adapter-normalize.mjs",
+    "scripts/release/adapters/conditional-json.mjs",
     "scripts/release/adapters/github.mjs",
     "scripts/release/adapters/http.mjs",
     "scripts/release/artifact-store.mjs",
@@ -751,10 +752,55 @@ test("the CLI attestation verifier keeps the Actions path online per file with t
   assert.deepEqual(result, { status: "VERIFIED", subjects })
   assert.equal(calls.length, 2)
   for (const call of calls) {
+    assert.ok(
+      Object.entries(process.env).every(
+        ([key, value]) => key === "GH_TOKEN" || call.options.env[key] === value,
+      ),
+    )
+    assert.equal(call.options.env.GH_TOKEN, "token")
     assert.equal(call.options.timeout, 180_000)
     assert.equal(call.options.killSignal, "SIGKILL")
     assert.equal(call.args.includes("--bundle"), false)
   }
+})
+
+test("attestation verifier snapshots explicit environment without ambient inheritance", async () => {
+  const environment = { PATH: "/reviewed/bin", HOME: "/reviewed/home", GH_TOKEN: "wrong" }
+  const calls = []
+  const verifier = createCliAttestationVerifier({
+    repository: "cacheplane/dawnai",
+    token: "attestation-token",
+    environment,
+    async runGh(_args, options) {
+      calls.push({ ...options.env })
+      options.env.INJECTED = "must not persist"
+    },
+  })
+  environment.DAWN_RECOVERY_POLICY_TOKEN = "added after construction"
+  environment.PATH = "/changed/bin"
+  const subjects = [{ name: "manifest.json", sha256: "b".repeat(64) }]
+  for (let i = 0; i < 2; i++) {
+    const result = await verifier.verify({
+      source: "actions",
+      record: artifactFixture().record,
+      subjects,
+      files: [{ name: "manifest.json", bytes: Buffer.from("manifest") }],
+      bundles: [],
+    })
+    assert.equal(result.status, "VERIFIED")
+  }
+  assert.ok(
+    calls.every((env) => Object.keys(env).sort().join(",") === "GH_TOKEN,HOME,PATH"),
+    "child environment contains only explicit keys",
+  )
+  assert.deepEqual(
+    calls,
+    Array(2).fill({
+      PATH: "/reviewed/bin",
+      HOME: "/reviewed/home",
+      GH_TOKEN: "attestation-token",
+    }),
+  )
 })
 
 test("escrow verification runs gh once for the anchor and proves the other 21 subjects locally", async () => {

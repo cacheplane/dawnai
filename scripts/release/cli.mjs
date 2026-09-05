@@ -309,6 +309,7 @@ async function runObserve(options, runtime) {
   const inventory = runtime.inventory ?? createInventoryReader({ root: runtime.cwd, git })
   requiredMethod(inventory, "read", "production inventory reader")
 
+  const npmAuditFactory = await requireNpmAuditFactory(runtime)
   let selection
   let resolutionFailure = null
   let observationDiagnostics = []
@@ -320,6 +321,7 @@ async function runObserve(options, runtime) {
       git,
       github,
       npm,
+      npmAuditFactory,
       attestations,
       marker,
       terminalRecordRef: TERMINAL_RECORD_REF,
@@ -371,13 +373,14 @@ async function runObserve(options, runtime) {
       ]
     }
   }
-  const npmAuditFactory = await requireNpmAuditFactory(runtime)
   const currentPublisherRun = currentPublisherRunFromEnvironment(
     runtime.environment,
     selection.candidate,
   )
   const observer = {
     async observe() {
+      if (["RECOVERY_REQUIRED", "RECOVERY_COMPLETE"].includes(selection.state))
+        return { schemaVersion: 2, owner: "postpublication-recovery", state: selection.state }
       if (resolutionFailure !== null || selection.candidate === null) {
         return {
           status: resolutionFailure === null ? "no-candidate" : "ambiguous",
@@ -422,6 +425,17 @@ async function runObserve(options, runtime) {
           conflicts: [...selection.conflicts, "production-observation-ambiguous"],
         })
       }
+      if (selection.state === "RECOVERY_REQUIRED")
+        return blockedObservePlan({
+          state: selection.state,
+          conflicts: selection.conflicts.length ? selection.conflicts : ["recovery-required"],
+        })
+      if (selection.state === "RECOVERY_COMPLETE")
+        return terminalObservePlan({
+          state: selection.state,
+          disposition: "recovery-terminal",
+          reason: "independently verified immutable recovery completion",
+        })
       if (selection.candidate === null) {
         return terminalObservePlan({
           state: "NO_CANDIDATE",

@@ -1,0 +1,351 @@
+# Disposable fixture only. Preserves production job IDs, needs, conditions and admission outputs.
+# Replaces production commands with harmless fixed shell; optional publication uses only the disposable repository token.
+name: Recovery service topology
+run-name: recovery-topology-${{ inputs.probe_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      probe_id:
+        type: string
+        required: true
+      expected_controller_sha:
+        type: string
+        required: true
+      phase:
+        type: choice
+        options:
+          - full
+          - published-noop
+          - publish-only
+        default: full
+      fail_job:
+        type: string
+        default: ""
+      publish_contract:
+        type: boolean
+        default: false
+      reviewed_controller_sha:
+        type: string
+        default: ""
+      publication_source_sha:
+        type: string
+        default: ""
+      discard_response:
+        type: choice
+        options:
+          - ""
+          - upload
+          - publication
+        default: ""
+permissions: {}
+concurrency:
+  group: recovery-service-fixture
+  cancel-in-progress: false
+  queue: max
+jobs:
+  recovery-admit:
+    name: recovery-admit
+    needs: []
+    if: github.ref == 'refs/heads/main' && inputs.expected_controller_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Emit fixture phase outputs
+        id: prepare
+        env:
+          FIXTURE_PHASE: ${{ inputs.phase }}
+        run: |
+          for output in smoke evidence dispatch audit finalize publish; do
+            value=false
+            if [ "$FIXTURE_PHASE" = "full" ] || { [ "$FIXTURE_PHASE" = "publish-only" ] && [ "$output" = "publish" ]; }; then value=true; fi
+            printf '%s=%s\n' "$output" "$value" >> "$GITHUB_OUTPUT"
+          done
+      - name: Emit fixture artifact identity
+        id: bootstrap
+        run: echo "artifact-id=1" >> "$GITHUB_OUTPUT"
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-admit
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+    outputs:
+      smoke: ${{ steps.prepare.outputs.smoke }}
+      evidence: ${{ steps.prepare.outputs.evidence }}
+      dispatch: ${{ steps.prepare.outputs.dispatch }}
+      audit: ${{ steps.prepare.outputs.audit }}
+      finalize: ${{ steps.prepare.outputs.finalize }}
+      publish: ${{ steps.prepare.outputs.publish }}
+      bootstrap_artifact_id: ${{ steps.bootstrap.outputs.artifact-id }}
+  recovery-adopt:
+    name: recovery-adopt
+    needs:
+      - recovery-admit
+    if: always() && needs.recovery-admit.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-adopt
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-metadata:
+    name: recovery-metadata
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-metadata
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-published-harness:
+    name: recovery-published-harness
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-published-harness
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-runtime-targets:
+    name: recovery-runtime-targets
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-runtime-targets
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-scaffold:
+    name: recovery-scaffold
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-scaffold
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-storage:
+    name: recovery-storage
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-storage
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-evidence:
+    name: recovery-evidence
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-metadata
+      - recovery-published-harness
+      - recovery-runtime-targets
+      - recovery-scaffold
+      - recovery-storage
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.evidence == 'true' && (needs.recovery-admit.outputs.smoke == 'false' || (needs.recovery-metadata.result == 'success' && needs.recovery-published-harness.result == 'success' && needs.recovery-runtime-targets.result == 'success' && needs.recovery-scaffold.result == 'success' && needs.recovery-storage.result == 'success'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-evidence
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-dispatch-audit:
+    name: recovery-dispatch-audit
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-evidence
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.dispatch == 'true' && (needs.recovery-admit.outputs.evidence == 'false' || needs.recovery-evidence.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-dispatch-audit
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-audit-evidence:
+    name: recovery-audit-evidence
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-dispatch-audit
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.audit == 'true' && (needs.recovery-admit.outputs.dispatch == 'false' || needs.recovery-dispatch-audit.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-audit-evidence
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-finalize:
+    name: recovery-finalize
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-audit-evidence
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.finalize == 'true' && (needs.recovery-admit.outputs.audit == 'false' || needs.recovery-audit-evidence.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-finalize
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+  recovery-publish:
+    name: recovery-publish
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-finalize
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.publish == 'true' && (needs.recovery-admit.outputs.finalize == 'false' || needs.recovery-finalize.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-publish
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"
+      - name: Checkout separately reviewed probe source
+        if: inputs.publish_contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: cacheplane/dawnai
+          ref: ${{ inputs.reviewed_controller_sha }}
+          persist-credentials: false
+      - name: Setup Node
+        if: inputs.publish_contract
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Exercise actual workflow publication credential
+        if: inputs.publish_contract
+        env:
+          DAWN_TEST_RECOVERY_GITHUB: "1"
+          DAWN_TEST_RECOVERY_PUBLICATION_GITHUB: "1"
+          DAWN_RECOVERY_TEST_REPOSITORY: ${{ github.repository }}
+          DAWN_RECOVERY_AUTHORIZED_REPOSITORY: ${{ vars.RECOVERY_AUTHORIZED_REPOSITORY }}
+          DAWN_RECOVERY_PUBLICATION_TOKEN: ${{ github.token }}
+          DAWN_RECOVERY_TEST_POLICY_TOKEN: ${{ secrets.RECOVERY_POLICY_READ_TOKEN }}
+          DAWN_RECOVERY_TEST_CREDENTIAL_KIND: workflow
+          DAWN_RECOVERY_TEST_SOURCE_SHA: ${{ inputs.publication_source_sha }}
+          DAWN_RECOVERY_TEST_DISCARD_RESPONSE: ${{ inputs.discard_response }}
+        run: node --test scripts/release/test/recovery-publication-github.integration.mjs
+      - name: Retain publication contract ledger
+        if: always() && inputs.publish_contract
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-publication-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dawn-recovery-publication-*/ledger.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-report:
+    name: recovery-report
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-metadata
+      - recovery-published-harness
+      - recovery-runtime-targets
+      - recovery-scaffold
+      - recovery-storage
+      - recovery-evidence
+      - recovery-dispatch-audit
+      - recovery-audit-evidence
+      - recovery-finalize
+      - recovery-publish
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harmless replacement for production commands
+        env:
+          FIXTURE_JOB: recovery-report
+          FIXTURE_FAIL_JOB: ${{ inputs.fail_job }}
+          FIXTURE_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$FIXTURE_ATTEMPT" = "1" ] && [ "$FIXTURE_JOB" = "$FIXTURE_FAIL_JOB" ]; then exit 17; fi
+          printf 'fixture job %s attempt %s completed\n' "$FIXTURE_JOB" "$FIXTURE_ATTEMPT"

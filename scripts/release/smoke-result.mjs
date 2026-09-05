@@ -204,9 +204,16 @@ export async function writeCanonicalSmokeResult(path, value, overrides = {}) {
   return writeCanonicalFileNoClobber(path, canonicalSmokeResultBytes(value), overrides)
 }
 
-export async function writeCanonicalFileNoClobber(path, bytes, overrides = {}) {
+export async function writeCanonicalFileNoClobber(
+  path,
+  bytes,
+  overrides = {},
+  maximumBytes = MAX_CANONICAL_BYTES,
+) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 1024 * 1024)
+    throw new Error("Canonical file byte limit is invalid")
   if (typeof path !== "string" || path.length === 0) throw new TypeError("Result path is required")
-  if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > MAX_CANONICAL_BYTES) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > maximumBytes) {
     throw new Error("Canonical result bytes are missing or exceed the byte limit")
   }
   const dependencies = { link, mkdir, open, unlink, ...overrides }
@@ -235,7 +242,7 @@ export async function writeCanonicalFileNoClobber(path, bytes, overrides = {}) {
       let existing
       try {
         const before = await existingHandle.stat({ bigint: true })
-        if (!before.isFile() || before.size <= 0n || before.size > BigInt(MAX_CANONICAL_BYTES)) {
+        if (!before.isFile() || before.size <= 0n || before.size > BigInt(maximumBytes)) {
           throw new Error("Existing smoke result is not a bounded regular file")
         }
         existing = await existingHandle.readFile()
@@ -331,7 +338,53 @@ export async function executeSmokeLane(options, operation, overrides = {}) {
       await overrides.writeFile(path, canonicalSmokeResultBytes(receipt))
     }
   }
-  const startedAt = clockTimestamp(dependencies.now)
+  const { startedAt, finishedAt, checks, errors } = await executeSmokeOperation(operation, {
+    now: dependencies.now,
+  })
+
+  let receipt
+  try {
+    receipt = parseSmokeResult({
+      schemaVersion: SMOKE_RESULT_SCHEMA_VERSION,
+      lane: options.lane,
+      version: options.version,
+      commitSha: options.commitSha,
+      manifestSha256: options.manifestSha256,
+      workflowRunId: environmentPositiveInteger(
+        options.workflowRunId ?? dependencies.env.GITHUB_RUN_ID,
+        "GITHUB_RUN_ID",
+      ),
+      runAttempt: environmentPositiveInteger(
+        options.runAttempt ?? dependencies.env.GITHUB_RUN_ATTEMPT,
+        "GITHUB_RUN_ATTEMPT",
+      ),
+      startedAt,
+      finishedAt,
+      checks,
+      conclusion: derivedConclusion(checks),
+    })
+    if (typeof options.result !== "string" || options.result.length === 0) {
+      throw new Error("Smoke lane result path is required")
+    }
+    await dependencies.writeResult(options.result, receipt)
+  } catch (error) {
+    errors.push(error)
+  }
+
+  if (errors.length === 1) throw errors[0]
+  if (errors.length > 1) {
+    throw new AggregateError(
+      errors,
+      `Smoke lane failed: ${errors.map(formatSmokeError).join("; ")}`,
+    )
+  }
+  return receipt
+}
+
+export async function executeSmokeOperation(operation, { now = () => new Date() } = {}) {
+  if (typeof operation !== "function")
+    throw new TypeError("Smoke lane operation must be a function")
+  const startedAt = clockTimestamp(now)
   const checks = []
   const names = new Set()
   const cleanups = []
@@ -369,7 +422,11 @@ export async function executeSmokeLane(options, operation, overrides = {}) {
     if (!checks.some((check) => check.conclusion === "failure")) {
       const name = names.has("lane") ? "execution" : "lane"
       names.add(name)
-      checks.push({ name, conclusion: "failure", detail: formatSmokeError(error) })
+      checks.push({
+        name,
+        conclusion: "failure",
+        detail: formatSmokeError(error),
+      })
     }
   }
 
@@ -391,43 +448,13 @@ export async function executeSmokeLane(options, operation, overrides = {}) {
     }
   }
 
-  let receipt
-  try {
-    receipt = parseSmokeResult({
-      schemaVersion: SMOKE_RESULT_SCHEMA_VERSION,
-      lane: options.lane,
-      version: options.version,
-      commitSha: options.commitSha,
-      manifestSha256: options.manifestSha256,
-      workflowRunId: environmentPositiveInteger(
-        options.workflowRunId ?? dependencies.env.GITHUB_RUN_ID,
-        "GITHUB_RUN_ID",
-      ),
-      runAttempt: environmentPositiveInteger(
-        options.runAttempt ?? dependencies.env.GITHUB_RUN_ATTEMPT,
-        "GITHUB_RUN_ATTEMPT",
-      ),
-      startedAt,
-      finishedAt: clockTimestamp(dependencies.now),
-      checks,
-      conclusion: derivedConclusion(checks),
-    })
-    if (typeof options.result !== "string" || options.result.length === 0) {
-      throw new Error("Smoke lane result path is required")
-    }
-    await dependencies.writeResult(options.result, receipt)
-  } catch (error) {
-    errors.push(error)
+  return {
+    startedAt,
+    finishedAt: clockTimestamp(now),
+    checks,
+    errors,
+    conclusion: derivedConclusion(checks),
   }
-
-  if (errors.length === 1) throw errors[0]
-  if (errors.length > 1) {
-    throw new AggregateError(
-      errors,
-      `Smoke lane failed: ${errors.map(formatSmokeError).join("; ")}`,
-    )
-  }
-  return receipt
 }
 
 function validateAggregateSmokeResult(value) {

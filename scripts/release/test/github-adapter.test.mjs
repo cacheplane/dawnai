@@ -25,17 +25,22 @@ const ALLOWED_METHODS = [
   "getRef",
   "getRelease",
   "getReleaseByTag",
+  "getRepository",
   "getWorkflow",
+  "getWorkflowById",
   "getWorkflowPermissions",
   "getWorkflowRunApprovals",
   "listActionsArtifacts",
   "listActionsRunArtifacts",
   "listActionsRunJobs",
+  "listActionsRunJobsComplete",
   "listEnvironments",
   "listReleaseAssets",
   "listReleases",
+  "listRepositoryWorkflowsComplete",
   "listTagRefs",
   "listWorkflowRuns",
+  "listWorkflowRunsAllShasComplete",
 ]
 
 test("GitHub reads the exact protected-environment approval history for one workflow run", async () => {
@@ -662,7 +667,7 @@ test("GitHub distinguishes exact absence from auth, rate, network, parse, and se
   }
 })
 
-test("GitHub raw 404 stays ambiguous for every named resource family", async () => {
+test("GitHub completed 404 stays ambiguous for every named resource family", async () => {
   const calls = [
     (github) => github.getRef({ ref: "tags/v0.8.21" }),
     (github) => github.getReleaseByTag({ tag: "v0.8.21" }),
@@ -680,7 +685,13 @@ test("GitHub raw 404 stays ambiguous for every named resource family", async () 
       owner: OWNER,
       repo: REPO,
       token: TOKEN,
-      fetchImpl: async () => jsonResponse({ message: "resource hidden by authorization" }, 404),
+      fetchImpl: async (_url, options) =>
+        options.headers.Accept === "application/octet-stream"
+          ? new Response("resource hidden by authorization", {
+              status: 404,
+              headers: { "content-type": "application/octet-stream" },
+            })
+          : jsonResponse({ message: "resource hidden by authorization" }, 404),
     })
     const result = await call(github)
     assert.equal(result.status, "AMBIGUOUS")
@@ -1307,3 +1318,200 @@ function errorWithoutControls(error) {
     return codePoint <= 31 || codePoint === 127
   })
 }
+
+test("GitHub preserves body transport failure provenance before transient HTTP classification", async () => {
+  for (const status of [403, 429, 503]) {
+    for (const row of [
+      {
+        code: "MALFORMED_JSON",
+        response: () =>
+          new Response("{", {
+            status,
+            headers: { "content-type": "application/json", "x-ratelimit-remaining": "0" },
+          }),
+      },
+      {
+        code: "UNEXPECTED_CONTENT_TYPE",
+        response: () =>
+          new Response("{}", {
+            status,
+            headers: { "content-type": "text/html", "x-ratelimit-remaining": "0" },
+          }),
+      },
+      {
+        code: "RESPONSE_TOO_LARGE",
+        response: () =>
+          new Response("{}", {
+            status,
+            headers: {
+              "content-type": "application/json",
+              "content-length": "99999999",
+              "x-ratelimit-remaining": "0",
+            },
+          }),
+      },
+    ]) {
+      const github = createGitHubReader({
+        owner: OWNER,
+        repo: REPO,
+        fetchImpl: async () => row.response(),
+      })
+      const result = await github.getRef({ ref: "heads/main" })
+      assert.equal(result.status, "ERROR")
+      assert.equal(result.code, row.code)
+      assert.equal(result.httpStatus, status)
+    }
+  }
+})
+
+test("GitHub preserves aborted body reads despite server or throttle HTTP status", async () => {
+  for (const status of [403, 429, 503]) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () => ({
+        status,
+        headers: new Headers({ "content-type": "application/json", "x-ratelimit-remaining": "0" }),
+        body: {
+          getReader: () => ({
+            read: async () => {
+              throw Object.assign(new Error("aborted"), { name: "AbortError" })
+            },
+            cancel: async () => {},
+            releaseLock() {},
+          }),
+        },
+      }),
+    })
+    assert.deepEqual(await github.getRef({ ref: "heads/main" }), {
+      status: "AMBIGUOUS",
+      operation: "ref",
+      httpStatus: status,
+      code: "ABORTED",
+    })
+  }
+})
+
+test("complete recovery reads use pinned API and preserve legacy filtered behavior", async () => {
+  const { fetchImpl, calls } = recordingFetch([
+    jsonResponse({ id: 42, full_name: `${OWNER}/${REPO}`, default_branch: "main" }),
+    jsonResponse(
+      { total_count: 2, workflows: [{ id: 1 }] },
+      200,
+      linkHeader(`${BASE}/actions/workflows?per_page=100&page=2`),
+    ),
+    jsonResponse({ total_count: 2, workflows: [{ id: 2 }] }),
+    jsonResponse({ id: 1, path: ".github/workflows/release.yml" }),
+    jsonResponse({ total_count: 1, workflow_runs: [{ id: 100, head_sha: SHA }] }),
+  ])
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, token: TOKEN, fetchImpl })
+  assert.equal(typeof github.getRepository, "function")
+  assert.equal((await github.getRepository()).value.id, 42)
+  assert.equal((await github.listRepositoryWorkflowsComplete()).value.length, 2)
+  assert.equal((await github.getWorkflowById({ workflowId: "1" })).value.id, 1)
+  assert.equal((await github.listWorkflowRunsAllShasComplete({ workflowId: "1" })).value.length, 1)
+  for (const { url, init } of calls) {
+    assert.equal(init.method, "GET")
+    assert.equal(init.headers["X-GitHub-Api-Version"], "2026-03-10")
+    assert.equal(new URL(url).searchParams.has("head_sha"), false)
+  }
+  assert.throws(() => github.listWorkflowRunsAllShasComplete({ workflowId: "1", head_sha: SHA }))
+})
+for (const [label, responses] of Object.entries({
+  truncated: [jsonResponse({ total_count: 2, workflows: [{ id: 1 }] })],
+  duplicate: [jsonResponse({ total_count: 2, workflows: [{ id: 1 }, { id: 1 }] })],
+  missingTotal: [jsonResponse({ workflows: [] })],
+  countDrift: [
+    jsonResponse(
+      { total_count: 2, workflows: [{ id: 1 }] },
+      200,
+      linkHeader(`${BASE}/actions/workflows?per_page=100&page=2`),
+    ),
+    jsonResponse({ total_count: 3, workflows: [{ id: 2 }, { id: 3 }] }),
+  ],
+  skippedPage: [
+    jsonResponse(
+      { total_count: 2, workflows: [{ id: 1 }] },
+      200,
+      linkHeader(`${BASE}/actions/workflows?per_page=100&page=3`),
+    ),
+  ],
+  changedPageSize: [
+    jsonResponse(
+      { total_count: 2, workflows: [{ id: 1 }] },
+      200,
+      linkHeader(`${BASE}/actions/workflows?per_page=1&page=2`),
+    ),
+  ],
+  extraFilter: [
+    jsonResponse(
+      { total_count: 2, workflows: [{ id: 1 }] },
+      200,
+      linkHeader(`${BASE}/actions/workflows?per_page=100&page=2&head_sha=${SHA}`),
+    ),
+  ],
+  hostileHost: [
+    jsonResponse(
+      { total_count: 2, workflows: [{ id: 1 }] },
+      200,
+      linkHeader(`https://evil.example/actions/workflows?per_page=100&page=2`),
+    ),
+  ],
+  forbidden: [jsonResponse({}, 403)],
+  missing: [jsonResponse({}, 404)],
+}))
+  test(`complete recovery inventory rejects ${label}`, async () => {
+    const { fetchImpl } = recordingFetch(responses)
+    const github = createGitHubReader({ owner: OWNER, repo: REPO, token: TOKEN, fetchImpl })
+    assert.notEqual((await github.listRepositoryWorkflowsComplete()).status, "PRESENT")
+  })
+
+test("strict inventories apply cumulative page, byte, record, deadline and cancellation bounds", async () => {
+  const next = `${BASE}/actions/workflows?per_page=100&page=2`
+  for (const options of [{ maxPages: 1 }, { maxRecords: 1 }, { maxResponseBytes: 60 }]) {
+    const { fetchImpl } = recordingFetch([
+      jsonResponse({ total_count: 2, workflows: [{ id: 1 }] }, 200, linkHeader(next)),
+      jsonResponse({ total_count: 2, workflows: [{ id: 2 }] }),
+    ])
+    const reader = createGitHubReader({ owner: OWNER, repo: REPO, fetchImpl, ...options })
+    assert.notEqual((await reader.listRepositoryWorkflowsComplete()).status, "PRESENT")
+  }
+  let clock = 1000
+  const reader = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    timeoutMs: 100,
+    now: () => clock,
+    fetchImpl: async () => {
+      clock = 2000
+      return Response.json({ total_count: 0, workflows: [] })
+    },
+  })
+  assert.notEqual((await reader.listRepositoryWorkflowsComplete()).status, "PRESENT")
+  const abort = new AbortController()
+  abort.abort()
+  let fetched = false
+  const cancelled = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    fetchImpl: async () => {
+      fetched = true
+      return Response.json({})
+    },
+  })
+  assert.notEqual(
+    (await cancelled.listRepositoryWorkflowsComplete({}, { signal: abort.signal })).status,
+    "PRESENT",
+  )
+  assert.equal(fetched, false)
+})
+
+test("strict inventory rejects a last-page link that contradicts a missing next link", async () => {
+  const { fetchImpl } = recordingFetch([
+    jsonResponse({ total_count: 1, workflows: [{ id: 1 }] }, 200, {
+      link: `<${BASE}/actions/workflows?per_page=100&page=2>; rel="last"`,
+    }),
+  ])
+  const reader = createGitHubReader({ owner: OWNER, repo: REPO, fetchImpl })
+  assert.notEqual((await reader.listRepositoryWorkflowsComplete()).status, "PRESENT")
+})

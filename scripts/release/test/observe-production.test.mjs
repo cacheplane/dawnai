@@ -71,8 +71,16 @@ test("production candidate resolution uses the exact immutable ref or scheduled 
     terminalRecordRef: "HEAD",
     event: { ref: "refs/heads/main", after: COMMIT_SHA },
     inventory: inventoryReader(),
-    git: {},
-    github: {},
+    git: {
+      async listTree() {
+        return ""
+      },
+    },
+    github: {
+      async listReleases() {
+        return { status: "PRESENT", value: [] }
+      },
+    },
     marker: MARKER,
     discovery: {
       async discoverManagedCandidate(input) {
@@ -91,8 +99,16 @@ test("production candidate resolution uses the exact immutable ref or scheduled 
     terminalRecordRef: "HEAD",
     event: { schedule: "17 * * * *" },
     inventory: inventoryReader(),
-    git: {},
-    github: {},
+    git: {
+      async listTree() {
+        return ""
+      },
+    },
+    github: {
+      async listReleases() {
+        return { status: "PRESENT", value: [] }
+      },
+    },
     marker: MARKER,
     discovery: {
       async discoverManagedCandidate() {
@@ -123,8 +139,16 @@ test("production exact dispatch accepts a verified current-version no-candidate 
         return inventory()
       },
     },
-    git: {},
-    github: {},
+    git: {
+      async listTree() {
+        return ""
+      },
+    },
+    github: {
+      async listReleases() {
+        return { status: "PRESENT", value: [] }
+      },
+    },
     marker: MARKER,
     discovery: {
       async discoverManagedCandidate() {
@@ -179,8 +203,16 @@ test("production exact-ref resolution cannot leapfrog an older globally selected
     terminalRecordRef: "HEAD",
     event: { ref: "refs/heads/main", after: COMMIT_SHA },
     inventory: inventoryReader(),
-    git: {},
-    github: {},
+    git: {
+      async listTree() {
+        return ""
+      },
+    },
+    github: {
+      async listReleases() {
+        return { status: "PRESENT", value: [] }
+      },
+    },
     marker: MARKER,
     discovery: {
       async discoverManagedCandidate() {

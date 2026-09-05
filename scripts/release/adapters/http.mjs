@@ -85,12 +85,34 @@ async function get(context, request, bodyType) {
   let contentType
   try {
     responseHeaders = normalizedResponseHeaders(responseHeadersObject)
+    if (bodyType === "json" && request.allowNotModified === true) {
+      const etag = responseHeadersObject.get("etag")
+      if (etag !== null && typeof etag !== "string") throw new TypeError("Invalid ETag")
+      responseHeaders.etag = etag
+    }
     declaredLength = responseHeadersObject.get("content-length")
     contentType = responseHeadersObject.get("content-type")
   } catch {
     await safelyCancelBody(responseBody)
     deadline.dispose()
     return transportError(httpStatus, "MALFORMED_RESPONSE")
+  }
+  if (httpStatus === 304 && bodyType === "json" && request.allowNotModified === true) {
+    try {
+      const bytes = await readBoundedBody(responseBody, maxResponseBytes, deadline)
+      if (bytes.byteLength !== 0) return transportError(httpStatus, "MALFORMED_NOT_MODIFIED")
+      return {
+        status: "NOT_MODIFIED",
+        httpStatus,
+        code: "NOT_MODIFIED",
+        headers: responseHeaders,
+        bodyBytes: 0,
+      }
+    } catch (error) {
+      return transportError(httpStatus, bodyReadCode(error, deadline))
+    } finally {
+      deadline.dispose()
+    }
   }
   if (httpStatus >= 300 && httpStatus < 400) {
     await safelyCancelBody(responseBody)

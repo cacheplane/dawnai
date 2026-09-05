@@ -62,6 +62,7 @@ const VERIFIED_MATERIALIZATIONS = new WeakMap()
 
 export const ARTIFACT_STORE_SPARSE_FILES = Object.freeze([
   "scripts/release/adapter-normalize.mjs",
+  "scripts/release/adapters/conditional-json.mjs",
   "scripts/release/adapters/github.mjs",
   "scripts/release/adapters/http.mjs",
   "scripts/release/artifact-store.mjs",
@@ -848,9 +849,11 @@ function isAllowedLaterReceipt(name, size) {
 export function createCliAttestationVerifier({
   repository,
   token,
+  environment = process.env,
   fileSystem = defaultFileSystem,
   runGh = runGhCommand,
 }) {
+  const verifierEnvironment = { ...environment, GH_TOKEN: token }
   return {
     async verify({ source, record, subjects, files, bundles }) {
       if (!Array.isArray(subjects) || !Array.isArray(files) || files.length !== subjects.length) {
@@ -879,7 +882,7 @@ export function createCliAttestationVerifier({
           })
           try {
             await runGh(args, {
-              env: { ...process.env, GH_TOKEN: token },
+              env: { ...verifierEnvironment },
               timeout: ATTESTATION_VERIFY_TIMEOUT_MS,
               killSignal: "SIGKILL",
             })

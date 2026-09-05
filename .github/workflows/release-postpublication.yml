@@ -1,0 +1,808 @@
+name: Release Post-publication Recovery
+on:
+  workflow_dispatch:
+    inputs:
+      intent_path:
+        description: Exact committed adoption intent path
+        required: true
+        type: string
+      expected_controller_sha:
+        description: Exact reviewed main controller SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: dawn-release-controller
+  cancel-in-progress: false
+  queue: max
+jobs:
+  recovery-admit:
+    name: recovery-admit
+    needs: []
+    if: github.ref == 'refs/heads/main' && inputs.expected_controller_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: read
+    outputs:
+      smoke: ${{ steps.prepare.outputs.smoke }}
+      evidence: ${{ steps.prepare.outputs.evidence }}
+      dispatch: ${{ steps.prepare.outputs.dispatch }}
+      audit: ${{ steps.prepare.outputs.audit }}
+      finalize: ${{ steps.prepare.outputs.finalize }}
+      publish: ${{ steps.prepare.outputs.publish }}
+      bootstrap_artifact_id: ${{ steps.bootstrap.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+        run: node scripts/release/recovery/workflow-request.mjs --command admit --output "$RUNNER_TEMP/request.json"
+      - name: Transfer verified original manifest
+        id: bootstrap
+        if: ${{ steps.prepare.outputs.smoke == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.prepare.outputs.job_id }}
+          path: ${{ runner.temp }}/bootstrap/manifest.json
+          if-no-files-found: error
+          overwrite: false
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-admit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: ignore
+          overwrite: false
+  recovery-adopt:
+    name: recovery-adopt
+    needs:
+      - recovery-admit
+    if: always() && needs.recovery-admit.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+        run: node scripts/release/recovery/workflow-request.mjs --command adopt --output "$RUNNER_TEMP/request.json"
+      - name: Execute adopt
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs adopt --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json"
+        if: always()
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-adopt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-metadata:
+    name: recovery-metadata
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Download manifest selected by admission
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}
+          path: ${{ runner.temp }}/bootstrap
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+          RECOVERY_LANE: metadata
+        run: node scripts/release/recovery/workflow-request.mjs --command smoke --output "$RUNNER_TEMP/request.json"
+      - name: Execute smoke
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs smoke --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json" --manifest "$RUNNER_TEMP/bootstrap/manifest.json"
+        if: always()
+      - name: Retain exact lane and installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.execute.outputs.artifact_name }}
+          path: ${{ steps.execute.outputs.evidence_directory }}/*.json
+          if-no-files-found: error
+          overwrite: false
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-metadata-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-published-harness:
+    name: recovery-published-harness
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Download manifest selected by admission
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}
+          path: ${{ runner.temp }}/bootstrap
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+          RECOVERY_LANE: published-harness
+        run: node scripts/release/recovery/workflow-request.mjs --command smoke --output "$RUNNER_TEMP/request.json"
+      - name: Execute smoke
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs smoke --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json" --manifest "$RUNNER_TEMP/bootstrap/manifest.json"
+        if: always()
+      - name: Retain exact lane and installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.execute.outputs.artifact_name }}
+          path: ${{ steps.execute.outputs.evidence_directory }}/*.json
+          if-no-files-found: error
+          overwrite: false
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-published-harness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-runtime-targets:
+    name: recovery-runtime-targets
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Download manifest selected by admission
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}
+          path: ${{ runner.temp }}/bootstrap
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+          RECOVERY_LANE: runtime-targets
+        run: node scripts/release/recovery/workflow-request.mjs --command smoke --output "$RUNNER_TEMP/request.json"
+      - name: Execute smoke
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs smoke --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json" --manifest "$RUNNER_TEMP/bootstrap/manifest.json"
+        if: always()
+      - name: Retain exact lane and installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.execute.outputs.artifact_name }}
+          path: ${{ steps.execute.outputs.evidence_directory }}/*.json
+          if-no-files-found: error
+          overwrite: false
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-runtime-targets-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-scaffold:
+    name: recovery-scaffold
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Download manifest selected by admission
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}
+          path: ${{ runner.temp }}/bootstrap
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+          RECOVERY_LANE: scaffold
+        run: node scripts/release/recovery/workflow-request.mjs --command smoke --output "$RUNNER_TEMP/request.json"
+      - name: Execute smoke
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs smoke --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json" --manifest "$RUNNER_TEMP/bootstrap/manifest.json"
+        if: always()
+      - name: Retain exact lane and installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.execute.outputs.artifact_name }}
+          path: ${{ steps.execute.outputs.evidence_directory }}/*.json
+          if-no-files-found: error
+          overwrite: false
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-scaffold-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-storage:
+    name: recovery-storage
+    needs:
+      - recovery-admit
+      - recovery-adopt
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Download manifest selected by admission
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.recovery-admit.outputs.bootstrap_artifact_id }}
+          path: ${{ runner.temp }}/bootstrap
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+          RECOVERY_LANE: storage
+        run: node scripts/release/recovery/workflow-request.mjs --command smoke --output "$RUNNER_TEMP/request.json"
+      - name: Execute smoke
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs smoke --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json" --manifest "$RUNNER_TEMP/bootstrap/manifest.json"
+        if: always()
+      - name: Retain exact lane and installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.execute.outputs.artifact_name }}
+          path: ${{ steps.execute.outputs.evidence_directory }}/*.json
+          if-no-files-found: error
+          overwrite: false
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-storage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-evidence:
+    name: recovery-evidence
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-metadata
+      - recovery-published-harness
+      - recovery-runtime-targets
+      - recovery-scaffold
+      - recovery-storage
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.evidence == 'true' && (needs.recovery-admit.outputs.smoke == 'false' || (needs.recovery-metadata.result == 'success' && needs.recovery-published-harness.result == 'success' && needs.recovery-runtime-targets.result == 'success' && needs.recovery-scaffold.result == 'success' && needs.recovery-storage.result == 'success'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+        run: node scripts/release/recovery/workflow-request.mjs --command reconcile-verification --output "$RUNNER_TEMP/request.json"
+      - name: Execute reconcile-verification
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs reconcile-verification --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json"
+        if: always()
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-dispatch-audit:
+    name: recovery-dispatch-audit
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-evidence
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.dispatch == 'true' && (needs.recovery-admit.outputs.evidence == 'false' || needs.recovery-evidence.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: write
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+        run: node scripts/release/recovery/workflow-request.mjs --command dispatch-audit --output "$RUNNER_TEMP/request.json"
+      - name: Execute dispatch-audit
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs dispatch-audit --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json"
+        if: always()
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-dispatch-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-audit-evidence:
+    name: recovery-audit-evidence
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-dispatch-audit
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.audit == 'true' && (needs.recovery-admit.outputs.dispatch == 'false' || needs.recovery-dispatch-audit.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+        run: node scripts/release/recovery/workflow-request.mjs --command reconcile-audit --output "$RUNNER_TEMP/request.json"
+      - name: Execute reconcile-audit
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs reconcile-audit --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json"
+        if: always()
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-audit-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-finalize:
+    name: recovery-finalize
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-audit-evidence
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.finalize == 'true' && (needs.recovery-admit.outputs.audit == 'false' || needs.recovery-audit-evidence.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+        run: node scripts/release/recovery/workflow-request.mjs --command finalize --output "$RUNNER_TEMP/request.json"
+      - name: Execute finalize
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DAWN_RECOVERY_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_READ_TOKEN }}
+        run: node scripts/release/recovery/cli.mjs finalize --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json"
+        if: always()
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-finalize-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-publish:
+    name: recovery-publish
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-finalize
+    if: always() && needs.recovery-admit.result == 'success' && needs.recovery-adopt.result == 'success' && needs.recovery-admit.outputs.publish == 'true' && (needs.recovery-admit.outputs.finalize == 'false' || needs.recovery-finalize.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+        run: node scripts/release/recovery/workflow-request.mjs --command publish --output "$RUNNER_TEMP/request.json"
+      - name: Execute publish
+        id: execute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DAWN_RECOVERY_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_READ_TOKEN }}
+        run: node scripts/release/recovery/cli.mjs publish --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json"
+        if: always()
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
+  recovery-report:
+    name: recovery-report
+    needs:
+      - recovery-admit
+      - recovery-adopt
+      - recovery-metadata
+      - recovery-published-harness
+      - recovery-runtime-targets
+      - recovery-scaffold
+      - recovery-storage
+      - recovery-evidence
+      - recovery-dispatch-audit
+      - recovery-audit-evidence
+      - recovery-finalize
+      - recovery-publish
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Prepare exact committed request
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_INTENT_PATH: ${{ inputs.intent_path }}
+          RECOVERY_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/release/recovery/workflow-request.mjs --command report --output "$RUNNER_TEMP/request.json"
+      - name: Execute report
+        id: execute
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs report --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json" --needs "$RUNNER_TEMP/needs.json"
+      - name: Retain command diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-diagnostic-recovery-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false

@@ -14,10 +14,10 @@
       "sha256": "1bb7a43e9b97d641b6d00bd3addeb6e35cfb873589bd743967f89e31f038fcb8"
     },
     "scripts/published-artifact-smoke.mjs": {
-      "sha256": "fe61cecff0370565cbbfa26f8680075cad30da1123588f4f626260990cd88663"
+      "sha256": "586a13cc4aa8ea4679caa0cf4c01fcb724e2e77a3e2daf5420aeb36c3e8cfe3d"
     },
     "scripts/published-artifact-verify.mjs": {
-      "sha256": "24152c0d10fc8b6ca38e288bb1e44286493a89f41ed6566c0d956d9dc1d20356"
+      "sha256": "0165e61437c5dd93fb6018a454c62405b66c69e4921d9bfdcaf7d62ef5a22f4f"
     },
     "scripts/release/abandonment-authority.mjs": {
       "sha256": "750de06620049eacc6be0f254193fc331e482eef7108cb973e74ed3d73fade10"
@@ -31,35 +31,41 @@
     "scripts/release/adapter-normalize.mjs": {
       "sha256": "465beffc12678ec5bd6d6e5ef6dc4f4c9cc1d76e622b4ed27c35dd231f2e0dda"
     },
+    "scripts/release/adapters/conditional-json.mjs": {
+      "sha256": "d67f832e1e19f07fb6236e4f880327995aeb90d5594de7c9fdea15de7ba4f7f6"
+    },
     "scripts/release/adapters/git-write.mjs": {
       "sha256": "3f3ca348de38259fad2dd361cc336af47c57e8c3a95908c63604cfed3e62094f"
     },
     "scripts/release/adapters/git.mjs": {
-      "sha256": "6b0faca41ea2fd83aa9f0bb9347fd9a844fefceb0ec093736a3bb507db5e465b"
+      "sha256": "3a6f2029e58da9db08f3d9bdd85cf28892df300c35a563d3694c279918155b08"
+    },
+    "scripts/release/adapters/github-write-transport.mjs": {
+      "sha256": "c9c20a293690eeffa83c6fe59e2a0638653d16c51a249353551990032b8a2955"
     },
     "scripts/release/adapters/github-write.mjs": {
-      "sha256": "fbb45e2c728a67da52ea168ed2f3aab67a67165642bc774b474500d8d2c80790"
+      "sha256": "0c4d42920d9ba00d1a3778eab64e9623a18663fdcf302cdda48d67b01dc3ea84"
     },
     "scripts/release/adapters/github.mjs": {
-      "sha256": "11a1cb51ae31be026d000489d0dac816b00abc7cbc294d53e6127909f385b8f0"
+      "sha256": "66910dbcf915cdd98d6b12211b980d6cdcea4a601e512a05c91477d72a35219b"
     },
     "scripts/release/adapters/http.mjs": {
-      "sha256": "86e03a6cd1536bd57983c27256694bb281d83dfc7efd09181a299b7f351f9510"
+      "sha256": "aacd907d447b6756b3335ebe19b0bb09b02ffbe76b3adaaa52fbf6c94b5b752b"
     },
     "scripts/release/adapters/npm.mjs": {
       "sha256": "3e171b1bc9aa79080d58087327ea2014b856ba5e6329f33de1a0a5f1b18c05d1"
     },
     "scripts/release/artifact-store.mjs": {
-      "sha256": "7626952c3dace863a1cd933b1a6686e3816a6e054e06742c5d5ea8cf57dfc487"
+      "sha256": "a9920592396029bfdacf4daaab9d453216f02c3114c50c35cd563058c8cac9dd"
     },
     "scripts/release/audit.mjs": {
       "sha256": "8d18331b857ba0743a9a2109b51f07639639cecb7a572375973452356b81a60f"
     },
     "scripts/release/candidate.mjs": {
-      "sha256": "85751db5d26bcdd012922965a167a34a892f259eb4575bd077c832cfb9dc8f21"
+      "sha256": "e32e20cf1e35503ea07c6ea9fef8dc753143776aab211a8ec8ffd749f345349b"
     },
     "scripts/release/cli.mjs": {
-      "sha256": "a532fb5d18d74786a67761fe98626019a9b467f404b9a6c92083d76957bc569f"
+      "sha256": "d2149307ba3a16f6043d71fdc73700f702021ffc2c4d3131f3f93461b763ef78"
     },
     "scripts/release/conflicts.mjs": {
       "sha256": "9fb3ff5154dab04d975b56baf29255493ece213824801e3504fad534ae81db7f"
@@ -77,7 +83,7 @@
       "sha256": "427419a41951adb53720470d80f1defca030f8eb9289dae50c704f332e5f9ac0"
     },
     "scripts/release/independent-audit-coordinator.mjs": {
-      "sha256": "5045bb1d81504a25379d791408deebf50057b05c50eae29aca06a94ece444f63"
+      "sha256": "5a154fa94961395be30a52eabb6518b53042ef7b6ecc482a6b93386c131f0a2b"
     },
     "scripts/release/independent-audit.mjs": {
       "sha256": "32746a3162b0fbf97990e3ad01952a4f581fa92ece87aaf8252a9a7fa4a68dd8"
@@ -95,7 +101,7 @@
       "sha256": "1b3e9cc2e5eb187309565e46bd5ecdc2cb2d6578288a9c05a58a120dfef2020e"
     },
     "scripts/release/npm-audit.mjs": {
-      "sha256": "308b723105b9549a2740456eaedf2f272c0885fdc5c530f9bfb3aa0e49314111"
+      "sha256": "ae879f6ce01abe9af898fec0764553287f57542471718acf3d8c03f8bd7f8cfe"
     },
     "scripts/release/npm-evidence.mjs": {
       "sha256": "fc14058dcf57fd3252cf758d8f58ee2795a5d5f210f41231a794018b17366b74"
@@ -104,10 +110,10 @@
       "sha256": "fc3847533cbf01b8fa2420f484680a7576b8b2b4edf4d6f41f56df925f4914c3"
     },
     "scripts/release/observe.mjs": {
-      "sha256": "1c19385a438555a0715aacbf0b2ef616cce81a6cc4906dbe44cc8562c6d51c8f"
+      "sha256": "e44cab0e8637e1bf5d2ae5100ee0a1a272c359352c2e30e55d36fe3305e032eb"
     },
     "scripts/release/planner.mjs": {
-      "sha256": "c68760ef160b100ad20233fe7c3608e381b976158b248ff6ee3bceccf3023d0f"
+      "sha256": "2e09281ff952da69e985de7802307b849b76525e838e4cab49516a3d05793433"
     },
     "scripts/release/post-publication-audit.mjs": {
       "sha256": "909600cbb051aabcf36e819ff002c3aae05d45de47c2e91a5364419bdeeea0d4"
@@ -123,6 +129,84 @@
     },
     "scripts/release/publisher.mjs": {
       "sha256": "455f8b647b6458eb3830c30b4ac05dab4cb24a2d713098614cacbee0cfc7516c"
+    },
+    "scripts/release/recovery/adopt.mjs": {
+      "sha256": "efe0b8da53dc035932d2ce266bb88456a5547332313bca9bfa2bf50ee4e0ac8a"
+    },
+    "scripts/release/recovery/audit-proof.mjs": {
+      "sha256": "60a0c2f18761029d54ffad891f03a892bf5c68b9101d725fdeee4b5d9a6fe175"
+    },
+    "scripts/release/recovery/audit.mjs": {
+      "sha256": "2e840c220245494bcd093ba121d7d390d532f022cb0958724acb022fe85f50c7"
+    },
+    "scripts/release/recovery/authority.mjs": {
+      "sha256": "938eff7e7f7a8a085dd34493461ddf4da0bc619e6a8309df99f773717b4df172"
+    },
+    "scripts/release/recovery/cli.mjs": {
+      "sha256": "2ebdc5eb05a2978b9887c8bc15082d009a1a97d2adb08b0454a1538bd113c357"
+    },
+    "scripts/release/recovery/diagnostics.mjs": {
+      "sha256": "b4eadc68a8b530275625942a9adf08e3962965fb03547f62662cd86b11b6cecf"
+    },
+    "scripts/release/recovery/evidence-proof.mjs": {
+      "sha256": "412380b760a75f97bcc3ddb83a347df7d1f33780283aeeb9680e2c6a521294b3"
+    },
+    "scripts/release/recovery/evidence.mjs": {
+      "sha256": "66c5a43436a08c88c1507cbcfcf3acd11b19557af17ea39cbfbcc0a0895a19d4"
+    },
+    "scripts/release/recovery/fence-evidence.mjs": {
+      "sha256": "5d60c891e1b76cbd4c93db2eb7c7ba076e6b2475a47f170474139e836e8b1429"
+    },
+    "scripts/release/recovery/fence.mjs": {
+      "sha256": "e6bfba07a34fd5fd91b1812a06d69d8f11cc763ee5a7af29533871b9d6a70c88"
+    },
+    "scripts/release/recovery/finalize.mjs": {
+      "sha256": "87ef742e4300aaabe76d52aa48dacc2a2463dc94cf9760d9274eaf9ddf9547e5"
+    },
+    "scripts/release/recovery/invocation.mjs": {
+      "sha256": "4ed2bb7dd388275fd20b1cc23d2095100d94b0dcfd5782fff26de490d83cf98e"
+    },
+    "scripts/release/recovery/metadata.mjs": {
+      "sha256": "32bd962f4859558c2ffbf2666a367dc855992f30aee6fd052e05bf0f3961c3d6"
+    },
+    "scripts/release/recovery/model.mjs": {
+      "sha256": "0da8451d732545c08386ee90015c7fabf9d1e5a1855a5546fcdad4c0a54538d2"
+    },
+    "scripts/release/recovery/observe.mjs": {
+      "sha256": "818caff803f53d3926f7328356ff7c19b99b30df919ff90e0d565362e3acb1d0"
+    },
+    "scripts/release/recovery/payload-reuse.mjs": {
+      "sha256": "bfe8d23eb87cb31afc474f77fa4742784508e20d985b44717479f22ad918c517"
+    },
+    "scripts/release/recovery/policy.json": {
+      "sha256": "c3551e4230ab0c1109086556937b4d38494c18adcf3e094d9791013188d7d27b"
+    },
+    "scripts/release/recovery/policy.mjs": {
+      "sha256": "77e3651e87b6964b84333a6c324087e855035a77987054e4fc73a412ff148ad2"
+    },
+    "scripts/release/recovery/requests.mjs": {
+      "sha256": "8b881aaa9619ba902dd732247e5fc00aefcb12fb83078c0cb325e555c30d173f"
+    },
+    "scripts/release/recovery/runtime.mjs": {
+      "sha256": "03d0c23f0a405954cb19008a2b86f6dfabe97b2aaf37a4b539b7ec301b9ce8c1"
+    },
+    "scripts/release/recovery/schema.mjs": {
+      "sha256": "1588b11421296c2153839f7d304f10eb1f559f06372fe79920b6048ec2652cc0"
+    },
+    "scripts/release/recovery/smoke-child.mjs": {
+      "sha256": "c1f3e03d52edbe33bd0ff5c5a71a783831dfca3a1c5463891c628d425b8b3eb1"
+    },
+    "scripts/release/recovery/smoke.mjs": {
+      "sha256": "925abe84793c8ed1307fd7d522d89871320b0ca07b39c727c67da58d53e5a84f"
+    },
+    "scripts/release/recovery/workflow-request.mjs": {
+      "sha256": "5883c9a0b740e05843aadfae52c5bf002b89463ba947e377cc664fe2d92e1694"
+    },
+    "scripts/release/recovery/workflow.mjs": {
+      "sha256": "07500c88ba45814f9a2d31dab4e2b152671522f9c2a3f4466ccf1ae8eb4be7c6"
+    },
+    "scripts/release/recovery/writer.mjs": {
+      "sha256": "d8d4690b92e5e9225204fefd950cf18ad4b3009d450494c658ec05c62c937cc6"
     },
     "scripts/release/release-record.mjs": {
       "sha256": "f841a2b615cef19cf913a4f89665c10c428446f97314de6c27c1785e47a51170"
@@ -143,25 +227,25 @@
       "sha256": "453072ab899f3a542a634baa7d368f6f2d6a65b889ab3c11eb080a7b3f43449f"
     },
     "scripts/release/smoke-result.mjs": {
-      "sha256": "b6ab2832f862bd628529528ab95d462708cc84d832d935163e48abe029e2af21"
+      "sha256": "5595e7bd2bab245f0a4c2862be634f26aec9be9f137895f3ac9fa1bd08f60d43"
     },
     "scripts/release/smoke/docker-identity.mjs": {
       "sha256": "59b720b4ff9f9b29fb2bf4c0d7ca6fa3e818e5c0fb4d27e57c4f4f23adbded53"
     },
     "scripts/release/smoke/published-harness.mjs": {
-      "sha256": "763afad7c1a2fcf2501d246164fa221aedebf494d8a0ffe9484adb482f4c1a42"
+      "sha256": "c78db7a75d920a960da07f2e02812e3df6a233727d0f6586e0d979af3372f253"
     },
     "scripts/release/smoke/runtime-targets.mjs": {
-      "sha256": "e82aebe4c25805b7c60e7ec64af72f8c4b922a3aeddd1c9afbff48e6bdf8294d"
+      "sha256": "2ec7baac975f54ec05abb50fe6063a9af9d25ce4417ad6886ad190a3ca6393e4"
     },
     "scripts/release/smoke/scaffold.mjs": {
-      "sha256": "a8809c7be496ce59e3dddecc7f893135800dab4fefce823a5112ebd72dba3b52"
+      "sha256": "ce25a8873dbdcefcbc501d1e784dca1e94831eeb1ac9c355a08a59b299542662"
     },
     "scripts/release/smoke/storage.mjs": {
-      "sha256": "be07add60b15362476e45f5705b9f6fcdb44d0b005ee277a6538cae07f189798"
+      "sha256": "392be884c12f935b7c0500cad21704140bdd6bab9f34c2097b058751997fed58"
     },
     "scripts/release/state.mjs": {
-      "sha256": "81e852b5c9d1dd6f34ab0cceb28002b7917f364e749e1a0e1b2ddff4e35c2479"
+      "sha256": "b03fa68167e7297458ca19a26b9deeaebea04bb90b0566e461896e8b645c0e15"
     },
     "scripts/release/terminal-record-store.mjs": {
       "sha256": "cd5561d0dfb8e959ae180f851791b26b7611e2252c6cb4ac4a6718bdeab0225a"

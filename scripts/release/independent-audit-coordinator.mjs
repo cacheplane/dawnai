@@ -3,11 +3,11 @@
 import { appendFile } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-
 import { normalizeAdapterEnvelope, snapshotJson } from "./adapter-normalize.mjs"
 import { createGitHubReader } from "./adapters/github.mjs"
 import { createGitHubWriter } from "./adapters/github-write.mjs"
 import { canonicalReleaseBody, isManagedReleaseForTag, parseReleaseMarker } from "./metadata.mjs"
+import { assertLegacyAuditCompatibleRelease } from "./recovery/observe.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 
 const REPOSITORY = "cacheplane/dawnai"
@@ -56,7 +56,13 @@ export async function coordinateIndependentAudit(input) {
     invocation.eventName === "schedule"
       ? await discoverLatestPublishedRelease(invocation.github.reader, invocation.defaultBranch)
       : parseManagedRelease(
-          await readReleaseByTag(invocation.github.reader, `v${invocation.inputs.version}`),
+          await assertLegacyAuditCompatibleRelease({
+            release: await readReleaseByTag(
+              invocation.github.reader,
+              `v${invocation.inputs.version}`,
+            ),
+            github: invocation.github.reader,
+          }),
           {
             defaultBranch: invocation.defaultBranch,
             expected: invocation.inputs,
@@ -99,7 +105,7 @@ async function readAuditableManagedRelease(reader, { defaultBranch, expected }) 
       release !== null &&
       typeof release === "object" &&
       !Array.isArray(release) &&
-      release.name === name,
+      (release.name === name || release.tag_name === `v${expected.version}`),
   )
   if (matches.length === 0) {
     throw new Error(`No managed Release named ${name} was found`)
@@ -107,6 +113,7 @@ async function readAuditableManagedRelease(reader, { defaultBranch, expected }) 
   if (matches.length > 1) {
     throw new Error(`Managed Release ${name} is duplicated`)
   }
+  await assertLegacyAuditCompatibleRelease({ release: matches[0], github: reader })
   return parseManagedRelease(matches[0], { defaultBranch, expected, allowDraft: true })
 }
 
@@ -117,16 +124,17 @@ async function discoverLatestPublishedRelease(reader, defaultBranch) {
   const versions = new Set()
   for (const release of releases) {
     if (!isPublishedReleaseCandidate(release)) continue
-    const parsed = parseManagedRelease(release, { defaultBranch, allowDraft: false })
-    if (versions.has(parsed.version)) {
-      throw new Error(`Managed published Release v${parsed.version} is duplicated`)
-    }
-    versions.add(parsed.version)
-    managed.push(parsed)
+    const version = release.tag_name.slice(1)
+    if (versions.has(version))
+      throw new Error(`Managed published Release v${version} is duplicated`)
+    versions.add(version)
+    managed.push(release)
   }
   if (managed.length === 0) throw new Error("No managed published immutable Release was found")
-  managed.sort((left, right) => compareSemver(left.version, right.version))
-  return managed.at(-1)
+  managed.sort((left, right) => compareSemver(left.tag_name.slice(1), right.tag_name.slice(1)))
+  const selected = managed.at(-1)
+  await assertLegacyAuditCompatibleRelease({ release: selected, github: reader })
+  return parseManagedRelease(selected, { defaultBranch, allowDraft: false })
 }
 
 function isPublishedReleaseCandidate(value) {

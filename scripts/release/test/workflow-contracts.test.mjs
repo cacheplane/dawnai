@@ -92,8 +92,18 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // independent-audit.mjs all read it off disk and its values select the npm trusted-publisher
 // environment and the abandonment environment. It is declared in RELEASE_DATA_FILES and anchored
 // to those readers, so the declaration fails as a stale pin if they stop naming it.
+// Repinned for GitHub transport-error precedence: body timeouts and deterministic read
+// failures retain their cause before HTTP status can classify them as retryable responses.
+// Repinned for recovery Task 5: shared bounded write transport, strict partial adoption
+// observations, and finalization proof validation even before the readiness marker. Legacy
+// NPM_COMPLETE plus finalization is an invalid mixed state, never a resumable adoption.
+// Repinned for Task 6: shared v1/v2 smoke operations and bounded physical installation evidence.
+// Repinned for Task 7: independently observed Actions escrow and durable provenance selection.
+// Repinned for Task 9: frozen finalization observation and canonical metadata reconstruction.
+// Repinned for Task 10a: strict GitHub inventories, bounded exact git reads, and dormant verifier closure.
+// Repinned for Task 12a: fresh complete-inventory npm signature batching.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "8009b5b7f7cc4aed302b134ad9b9eab117fbf75a478a653b1c8ad66c21ec2f49"
+  "e28ec97bcbd9b2fb9bee756e50adabdbf6ab5dbb633139e7177554a5e18ed2cb"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
@@ -117,7 +127,10 @@ const REVIEWED_DYNAMIC_IMPORT_SEAMS = Object.freeze([
 // so an entry whose reader disappears fails as a stale pin rather than lingering unreviewed.
 // scripts/release/controller-schema.json selects the npm trusted-publisher environment and the
 // abandonment environment; candidate.mjs, cli.mjs, and independent-audit.mjs all read it.
-const RELEASE_DATA_FILES = Object.freeze(["scripts/release/controller-schema.json"])
+const RELEASE_DATA_FILES = Object.freeze([
+  "scripts/release/controller-schema.json",
+  "scripts/release/recovery/policy.json",
+])
 const RELEASE_PIN_REACH = Object.freeze({
   workflowEntrypoint:
     "A final release owner runs it directly or through package.json, so its bytes must be pinned with the command line.",
@@ -137,6 +150,8 @@ const ACTIONS = Object.freeze({
 })
 const FINAL_WORKFLOW_FILES = Object.freeze([
   "published-artifact-verify.yml",
+  "release-postpublication-audit.yml",
+  "release-postpublication.yml",
   "release.yml",
   "version-pr.yml",
 ])
@@ -1694,6 +1709,27 @@ test("workflow entrypoints fail closed unless their exact normalized form is exp
   )
 })
 
+test("recovery containment runs on an actual eligible Linux host without publication credentials", async () => {
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
+  const ci = parseWorkflowSource(sources["ci.yml"], "ci.yml")
+  const job = ci.jobs["recovery-strict-runner"]
+  assert.ok(job, "dedicated recovery strict-runner CI job required")
+  assert.equal(job["runs-on"], "ubuntu-24.04")
+  assert.equal(job["timeout-minutes"], 5)
+  assert.deepEqual(job.permissions, { contents: "read" })
+  assert.equal(job.steps.length, 3)
+  assert.equal(job.steps[0].uses, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")
+  assert.deepEqual(job.steps[0].with, { "persist-credentials": false })
+  assert.equal(job.steps[1].uses, "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020")
+  assert.deepEqual(job.steps[1].with, { "node-version": "24.19.0" })
+  assert.deepEqual(job.steps[2].env, { DAWN_TEST_RECOVERY_RUNNER: "1" })
+  assert.equal(
+    job.steps[2].run,
+    "node --test scripts/release/test/recovery-strict-runner.integration.mjs",
+  )
+  assert.equal(job.env, undefined, "runner identity must come from the real host")
+})
+
 test("testing-windows has the exact safe descriptors and executable classifications", async () => {
   const descriptors = JSON.parse(
     await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }),
@@ -2284,6 +2320,37 @@ test("workflow classifications are explicit safe or release-only publication", a
   )
 })
 
+test("v2 publication is a distinct exact owner classification and copied commands cannot be safe", async () => {
+  const source = (await readWorkflowSourcesFromRoot(ROOT))["release-postpublication.yml"]
+  const workflow = parse(source)
+  const entries = workflowExecutables(workflow)
+  const writes = entries.filter((entry) =>
+    /scripts\/release\/recovery\/cli\.mjs (?:adopt|reconcile-verification|dispatch-audit|reconcile-audit|finalize|publish) /u.test(
+      entry.value,
+    ),
+  )
+  assert.equal(writes.length, 6)
+  for (const entry of writes) {
+    assert.throws(() =>
+      classifyExecutables("foreign.yml", [entry], [{ ...entry, classification: "safe" }]),
+    )
+    assert.throws(() =>
+      classifyExecutables(
+        "foreign.yml",
+        [entry],
+        [{ ...entry, classification: "recovery-publication" }],
+      ),
+    )
+    assert.doesNotThrow(() =>
+      classifyExecutables(
+        "release-postpublication.yml",
+        [entry],
+        [{ ...entry, classification: "recovery-publication" }],
+      ),
+    )
+  }
+})
+
 test("matching descriptor inventory cannot classify a new executable as safe", () => {
   const cases = [
     ["npm publish", "jobs:\n  new:\n    steps:\n      - run: npm publish\n"],
@@ -2671,7 +2738,10 @@ test("final release reachability pins the transitive import closure of every ent
   })
 
   await t.test("the declared release data files are read by pinned release modules", () => {
-    assert.deepEqual(RELEASE_DATA_FILES, ["scripts/release/controller-schema.json"])
+    assert.deepEqual(RELEASE_DATA_FILES, [
+      "scripts/release/controller-schema.json",
+      "scripts/release/recovery/policy.json",
+    ])
   })
 
   await t.test("a pinned module that disappeared fails closed", async () => {
@@ -4155,7 +4225,10 @@ function classifyExecutables(file, actual, expected) {
   const classifications = new Map()
   for (let index = 0; index < actual.length; index += 1) {
     const allowed = expected[index]
-    if (!isRecord(allowed) || !["safe", "publication"].includes(allowed.classification))
+    if (
+      !isRecord(allowed) ||
+      !["safe", "publication", "recovery-publication"].includes(allowed.classification)
+    )
       throw unauditedEntrypoint()
     const identity = {
       job: allowed.job,
@@ -4166,12 +4239,24 @@ function classifyExecutables(file, actual, expected) {
     }
     if (canonicalJson(actual[index]) !== canonicalJson(identity)) throw unauditedEntrypoint()
     const publication = isReleaseMutationExecutable(file, actual[index])
+    const recovery = isRecoveryMutationExecutable(actual[index])
     if (allowed.classification === "publication") {
-      if (file !== "release.yml" || !publication) throw unauditedEntrypoint()
-    } else if (publication) throw unauditedEntrypoint()
+      if (file !== "release.yml" || !publication || recovery) throw unauditedEntrypoint()
+    } else if (allowed.classification === "recovery-publication") {
+      if (file !== "release-postpublication.yml" || !recovery) throw unauditedEntrypoint()
+    } else if (publication || recovery) throw unauditedEntrypoint()
     classifications.set(executableIdentity(actual[index]), allowed.classification)
   }
   return classifications
+}
+
+function isRecoveryMutationExecutable(entry) {
+  return (
+    entry.kind === "run" &&
+    /scripts\/release\/recovery\/cli\.mjs\s+(?:adopt|reconcile-verification|dispatch-audit|reconcile-audit|finalize|publish)\b/u.test(
+      entry.value,
+    )
+  )
 }
 
 function isReleaseMutationExecutable(file, entry) {
@@ -4278,7 +4363,8 @@ function workflowDescriptor(workflow, classifications) {
               value: hasRun ? step.run : step.uses,
             }
             const classification = classifications.get(executableIdentity(executable))
-            if (!["safe", "publication"].includes(classification)) throw unauditedEntrypoint()
+            if (!["safe", "publication", "recovery-publication"].includes(classification))
+              throw unauditedEntrypoint()
             return {
               classification,
               descriptor: snapshotDescriptor(step),

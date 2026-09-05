@@ -269,3 +269,64 @@ function stableInputError(error) {
     })
   )
 }
+
+test("git showFile composes recovery cancellation and a narrower deadline", async () => {
+  const calls = [],
+    signal = new AbortController().signal
+  const git = createGitReader({
+    root: "/repo",
+    run: async (...args) => {
+      calls.push(args)
+      return "bytes"
+    },
+  })
+  assert.equal(
+    await git.showFile(
+      { ref: "a".repeat(40), path: "scripts/file.mjs" },
+      { signal, timeoutMs: 123 },
+    ),
+    "bytes",
+  )
+  assert.equal(calls[0][2].signal, signal)
+  assert.equal(calls[0][2].timeout, 123)
+  const abort = new AbortController()
+  abort.abort()
+  await assert.rejects(async () =>
+    git.showFile(
+      { ref: "a".repeat(40), path: "scripts/file.mjs" },
+      { signal: abort.signal, timeoutMs: 123 },
+    ),
+  )
+  assert.equal(calls.length, 1)
+})
+
+test("production git byte decoding rejects invalid UTF-8 and preserves a UTF-8 BOM", async (t) => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { execFileSync } = await import("node:child_process")
+  const root = await mkdtemp(join(tmpdir(), "recovery-git-bytes-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  execFileSync("git", ["init", "-q", root])
+  await writeFile(join(root, "invalid.txt"), Buffer.from([0xff]))
+  await writeFile(join(root, "bom.txt"), Buffer.from([0xef, 0xbb, 0xbf, 0x61]))
+  execFileSync("git", ["-C", root, "add", "."])
+  execFileSync("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "-qm",
+    "fixture",
+  ])
+  const reader = createGitReader({ root })
+  await assert.rejects(() => reader.showFile({ ref: "HEAD", path: "invalid.txt" }))
+  assert.equal(await reader.showFile({ ref: "HEAD", path: "bom.txt" }), "\ufeffa")
+  await assert.rejects(
+    () => reader.listFirstParentHistory({ ref: "not-found" }),
+    (error) => error.code === "REF_NOT_FOUND",
+  )
+})

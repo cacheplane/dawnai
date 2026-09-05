@@ -1,0 +1,86 @@
+name: Release Post-publication Audit
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Exact dispatch request_id
+        required: true
+        type: string
+      intent_sha256:
+        description: Exact dispatch intent_sha256
+        required: true
+        type: string
+      expected_controller_sha:
+        description: Exact dispatch expected_controller_sha
+        required: true
+        type: string
+      release_id:
+        description: Exact dispatch release_id
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: dawn-recovery-audit-${{ inputs.request_id }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  recovery-audit:
+    name: recovery-audit
+    if: github.ref == 'refs/heads/main' && inputs.expected_controller_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: read
+    steps:
+      - name: Checkout exact reviewed controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Assert bundled npm
+        run: test "$(npm --version)" = "11.17.0"
+      - name: Install controller dependencies without lifecycles
+        run: '"$PNPM_HOME/pnpm" install --filter . --frozen-lockfile --ignore-scripts'
+      - name: Resolve and bind immutable audit dispatch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_EXPECTED_CONTROLLER_SHA: ${{ inputs.expected_controller_sha }}
+          INPUT_REQUEST_ID: ${{ inputs.request_id }}
+          INPUT_INTENT_SHA256: ${{ inputs.intent_sha256 }}
+          INPUT_RELEASE_ID: ${{ inputs.release_id }}
+        run: node scripts/release/recovery/workflow-request.mjs --command audit --output "$RUNNER_TEMP/request.json"
+      - name: Run independent read-only audit
+        id: audit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release/recovery/cli.mjs audit --request "$RUNNER_TEMP/request.json" --output "$RUNNER_TEMP/result.json"
+        if: always()
+      - name: Retain exact audit result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.audit.outputs.artifact_name }}
+          path: ${{ steps.audit.outputs.evidence_directory }}/*.json
+          if-no-files-found: error
+          overwrite: false
+      - name: Retain audit diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovery-v2-audit-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error
+          overwrite: false
