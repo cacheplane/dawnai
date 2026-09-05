@@ -699,6 +699,30 @@ source copy was removed; repository source was never weakened. Scoped
 Biome checked 18 files; inventory, docs, and diff checks passed. Policy
 remains dormant, with no production admission or live recovery effects.
 
+## Runtime integration findings (Task 10 preparation)
+
+The production runtime still needs trusted repository/default-branch and
+numeric job identity observation, immutability-policy observation, and an
+operational legacy-fence adapter. The current policy contains approved fence
+digests only; a bounded contract format and fixed git locator must connect
+reviewed service evidence to fresh disabled/drained observations. No real
+service fence has been demonstrated, and the contract inventory remains empty.
+
+Root independently read the repository immutability endpoint on 2026-09-05:
+`enabled: true`, `enforced_by_owner: false`
+(`/tmp/dawn-recovery-immutable-policy-current.json`). This proves the setting
+under the existing local operator credential, not access from a workflow token.
+GitHub documents Administration(read) for this GET. Runtime wiring must keep
+a separate policy-read credential/channel out of smoke processes; unavailable
+proof must block publication. See the [GitHub endpoint contract](https://docs.github.com/en/rest/repos/repos?apiVersion=2026-03-10#check-if-immutable-releases-are-enabled-for-a-repository).
+
+The dormant recovery profile originally names Node 24.17.0, whose bundled npm
+is 11.13.0. Existing release workflows now pin Node 24.19.0 and assert npm
+11.17.0. Task 10 will align the dormant profile and its fixtures with that
+existing pair, preserving the exact official npm verifier contract and avoiding
+an additional tooling installation. The [Node 24.19.0 release](https://nodejs.org/id/blog/release/v24.19.0)
+records the npm 11.17.0 update. No active recovery evidence is being migrated.
+
 ## Final validation investigation
 
 A bounded investigation independently reproduced a PID-readiness defect in
@@ -757,3 +781,26 @@ The full `ci:validate` invocation is **not green** because of the source-suite
 failure above. This commit preserves the reviewed local feasibility work; it
 does not claim that the complete implementation, repository Definition of Done,
 live fence experiment, or production recovery is complete.
+
+## Finalization implementation verification (Task 9)
+
+The fixed finalization asset now commits to the complete nonrecursive inventory,
+including retained audit bookkeeping and escrow. Its verified existence freezes
+new evidence and dispatch even after an interrupted upload or missing marker.
+A draft can reconstruct canonical metadata from that fixed proof; publication
+requires fresh independent evidence and immutable-release policy. Published
+completion remains terminal after mutable title/body edits, reporting drift
+without reopening the release or writing a completion stamp.
+
+Metadata write bounds are checked before the final asset can become durable.
+The guarded writer also retains managed npm verifier ownership from raw factory
+creation through verification and cleanup, including nested timeouts and late
+settlement. A pending harmless GET does not keep that lease; the stopped
+invocation still cannot start managed work or perform a late mutation.
+
+On 2026-09-05, independent specification and quality reviews approved Task 9.
+The definitive controller run passed 2,875 tests, zero failures (about 150 seconds),
+recorded locally at `/tmp/dawn-recovery-task9-controller-verified.log`.
+Root's metadata-bound and managed-lifecycle mutation experiments both failed the
+intended regression when the guard was removed. These are code and fixture
+checks; production recovery and disposable service rehearsal remain unrun.

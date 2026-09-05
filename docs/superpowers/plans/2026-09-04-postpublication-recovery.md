@@ -500,32 +500,42 @@ checks passed. No workflow dispatch, activation, or production mutation occurred
 
 **Files:** Create `recovery/finalize.mjs`, `test/recovery-finalize.test.mjs`.
 
-- [ ] Write tests for the nonrecursive finalization inventory, lost upload/body/
+- [x] Write tests for the nonrecursive finalization inventory, lost upload/body/
   publish responses, later title/body edits including removal of the marker,
   extra assets, invalid finalization, and exact no-op replay.
-- [ ] Run `node --test scripts/release/test/recovery-finalize.test.mjs` for red.
-- [ ] Build `recovery-v2-finalization.json` from the accepted audit selection plus
+- [x] Run `node --test scripts/release/test/recovery-finalize.test.mjs` for red.
+- [x] Build `recovery-v2-finalization.json` from the accepted audit selection plus
   permitted audit bookkeeping. Inventory includes every other final asset, not
   itself. Render canonical title/body from semantic metadata plus the computed
   finalization digest. No field hashes the body that embeds its own digest.
-- [ ] The upload freeze begins as soon as the canonical finalization asset exists,
+- [x] The upload freeze begins as soon as the canonical finalization asset exists,
   even if its upload response was lost or the marker still says `AUDIT_VERIFIED`.
   Every writer entrypoint checks this before any new evidence upload or audit
   dispatch. Re-read finalization bytes, then write `PUBLICATION_READY`. Existing
   valid finalization is reused; an ineligible selection blocks without overwrite
   or silent new audit.
-- [ ] Interrupt immediately after finalization upload, before the marker update.
+- [x] Interrupt immediately after finalization upload, before the marker update.
   Attempt every receipt-producing entrypoint and require zero new uploads;
   retry must reconstruct readiness from existing finalization bytes alone.
   Extend read-only observation to expose the independently verified existing
   finalization proof when a draft marker is missing or corrupt, so repair can
   consume those facts without fabricating a persisted marker.
-- [ ] After fresh registry/tag/asset/fence checks, publish the existing draft;
+- [x] After fresh registry/tag/asset/fence checks, publish the existing draft;
   re-observe immutable assets/tag and derive completion. Never write a complete
   stamp afterward. Future mutable display edits report drift without reopening
   ownership or npm publication.
-- [ ] Run the task tests and routing tests together; prove a marker claiming
+- [x] Run the task tests and routing tests together; prove a marker claiming
   readiness without its finalization asset cannot publish. Commit.
+
+Task 9 is implemented and independently reviewed as dormant code. The final
+controller suite passed 2,875 tests with zero failures in about 150 seconds.
+Root passed four targeted lifecycle checks and two isolated mutation experiments:
+removing the metadata bound failed its regression, and removing the managed
+verifier lease failed both nested-timeout regressions. Specification and quality
+reviews approved the corrected lifecycle, including late verifier rejection and
+delayed disposal. The affected correction suite passed 351 tests. Scoped Biome
+checked 12 files; release inventory, docs and diff checks passed. No release
+mutation, workflow dispatch, activation or publication occurred.
 
 ## Task 10: Compose CLI, workflows, and truthful outcomes
 
@@ -533,6 +543,17 @@ checks passed. No workflow dispatch, activation, or production mutation occurred
 `test/recovery-cli.test.mjs`, `test/recovery-workflow.test.mjs`, and the two
 workflow files in the map. Modify `package.json` to add `release:recover:inspect`
 as a read-only CLI wrapper; keep mutation available only through explicit commands.
+
+Runtime preparation found three missing production adapters: trusted
+repository/invocation/numeric-job observation, repository immutability policy
+read, and legacy-fence observation. Add bounded GET-only GitHub methods and
+a small recovery fence-contract module with digest-derived git locators.
+Keep the contract directory empty until actual service rehearsal is reviewed;
+a disabled workflow flag alone cannot authorize recovery.
+
+Implement Task 10 in two sequential reviewed slices: first the missing read
+adapters and [fence contract](../specs/2026-09-05-recovery-fence-contract.md), then
+runtime/CLI/workflows. This keeps source ownership and review boundaries clear.
 
 - [ ] Implement strict subcommands: `inspect`, `adopt`, `smoke`,
   `reconcile-verification`, `dispatch-audit`, `audit`, `reconcile-audit`,
@@ -552,8 +573,16 @@ as a read-only CLI wrapper; keep mutation available only through explicit comman
   contents-write for draft visibility; no tokens flow into smoke commands.
   Audit dispatch alone needs actions-write. No OIDC, npm token, build, pack, or
   package lifecycle script runs in the metadata writer jobs.
+- [ ] Supply the immutability-policy GET through a separate read-only policy
+  credential/channel, confined to that adapter and metadata jobs. The endpoint
+  requires Administration(read), which ordinary contents-write alone does not
+  document. Never grant administration-write or pass this credential to smoke
+  processes. Missing/denied policy proof blocks before publication effects.
 - [ ] Every checkout uses `github.sha`; each workflow requires expected SHA
-  equality. Use the existing pinned Node/pnpm/action versions. Avoid injecting
+  equality. Align dormant recovery policy and fixtures with the repository's
+  actual Node 24.19.0 / bundled npm 11.17.0 pair, pnpm 10.33.0, and pinned
+  actions. The earlier Node 24.17.0 profile bundles npm 11.13.0 and would
+  fail the required npm verifier check. Avoid injecting
   workflow input strings directly into shell program text; pass environment
   strings or validated canonical request files.
 - [ ] Wire audit job `recovery-audit` and owner escrow job

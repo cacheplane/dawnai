@@ -18,10 +18,11 @@ const archiveInput = (r) => ({
   contentBase64: Buffer.from(r.legacyBody).toString("base64"),
 })
 
-test("recovery writer exposes only bounded release effects and independent audit dispatch", async () => {
+test("recovery writer exposes bounded effects plus read-only guarded inspection", async () => {
   const r = await recoveryWriteRemote()
   assert.deepEqual(Object.keys(writer(r)).sort(), [
     "dispatchRecoveryAudit",
+    "inspectRecoveryCandidate",
     "publishRecoveryDraft",
     "updateRecoveryDraft",
     "uploadRecoveryAsset",
@@ -534,4 +535,162 @@ test("direct selection upload cannot invent independent provenance or omit retai
     /independently persisted escrow/,
   )
   assert.equal(r.effects.length, effects)
+})
+
+test("late harmless GET settlement cannot start managed work after inspection timeout", async () => {
+  const r = await recoveryWriteRemote()
+  let created = 0
+  const create = r.args.npmAuditFactory.create
+  r.args.npmAuditFactory.create = async () => {
+    created++
+    return create()
+  }
+  let start, settle
+  const started = new Promise((resolve) => {
+    start = resolve
+  })
+  const pending = new Promise((resolve) => {
+    settle = resolve
+  })
+  const getRelease = r.args.github.getRelease
+  r.args.github.getRelease = async () => {
+    start()
+    return pending
+  }
+  const originalSet = globalThis.setTimeout
+  const originalClear = globalThis.clearTimeout
+  const timers = []
+  globalThis.setTimeout = (fn, delay) => {
+    const timer = { fn, delay }
+    timers.push(timer)
+    return timer
+  }
+  globalThis.clearTimeout = () => {}
+  try {
+    const w = writer(r)
+    const result = w.inspectRecoveryCandidate(r.request)
+    await started
+    timers.find((t) => t.delay === 1200000).fn()
+    await assert.rejects(result, /deadline/)
+    assert.doesNotThrow(() => writer(r))
+    assert.equal(r.effects.length, 0)
+    settle(await getRelease({ releaseId: r.c.releaseId }))
+    await pending
+    for (let i = 0; i < 1000; i++) await Promise.resolve()
+    assert.equal(created, 0)
+    await assert.rejects(w.inspectRecoveryCandidate(r.request), /stopped/)
+    assert.equal(r.effects.length, 0)
+  } finally {
+    globalThis.setTimeout = originalSet
+    globalThis.clearTimeout = originalClear
+  }
+})
+
+for (const stalled of ["create", "verifyPackage"])
+  test(`nested observation timeout retains raw ${stalled} and late disposal until fresh resume`, async () => {
+    const r = await recoveryWriteRemote()
+    r.activate([...r.baseAssets, r.adoption.archive, r.adoptionRef])
+    r.release.body = renderRecoveryReleaseBody({ marker: r.marker, body: "notes" })
+    const originalCreate = r.args.npmAuditFactory.create
+    let start, settle, cleanupStart, cleanupSettle
+    const started = new Promise((resolve) => {
+      start = resolve
+    })
+    const raw = new Promise((resolve) => {
+      settle = resolve
+    })
+    const cleanupStarted = new Promise((resolve) => {
+      cleanupStart = resolve
+    })
+    const cleanup = new Promise((resolve) => {
+      cleanupSettle = resolve
+    })
+    let created = 0,
+      disposed = 0
+    r.args.npmAuditFactory.create = async () => {
+      const index = ++created
+      const actual = await originalCreate()
+      const instance = {
+        async verifyPackage(args) {
+          if (index === 1 && stalled === "verifyPackage") {
+            start()
+            await raw
+          }
+          return actual.verifyPackage(args)
+        },
+        async dispose() {
+          disposed++
+          if (index === 1) {
+            cleanupStart()
+            await cleanup
+          }
+          return actual.dispose()
+        },
+      }
+      if (index === 1 && stalled === "create") {
+        start()
+        await raw
+      }
+      return instance
+    }
+    const originalSet = globalThis.setTimeout
+    const originalClear = globalThis.clearTimeout
+    const timers = []
+    globalThis.setTimeout = (fn, delay) => {
+      const timer = { fn, delay, cleared: false }
+      timers.push(timer)
+      return timer
+    }
+    globalThis.clearTimeout = (timer) => {
+      if (timer) timer.cleared = true
+    }
+    try {
+      const w = writer(r)
+      const result = w.inspectRecoveryCandidate(r.request)
+      await started
+      const [outer, inner] = timers.filter((t) => !t.cleared && t.delay > 1000000)
+      assert.ok(outer && inner)
+      outer.fn()
+      await assert.rejects(result, /deadline/)
+      inner.fn()
+      for (let i = 0; i < 60; i++) await Promise.resolve()
+      assert.throws(() => writer(r), /unsettled/)
+      assert.equal(created, 1)
+      assert.equal(disposed, 0)
+      assert.equal(r.effects.length, 0)
+      settle()
+      await cleanupStarted
+      assert.throws(() => writer(r), /unsettled/)
+      assert.equal(disposed, 1)
+      assert.equal(created, 1)
+      cleanupSettle()
+      for (let i = 0; i < 60; i++) await Promise.resolve()
+      await assert.rejects(w.inspectRecoveryCandidate(r.request), /stopped/)
+      const resumed = await writer(r).inspectRecoveryCandidate(r.request)
+      assert.equal(resumed.phase, "RECOVERY_ADOPTED")
+      assert.equal(created, 2)
+      assert.equal(disposed, 2)
+      assert.equal(r.effects.length, 0)
+    } finally {
+      settle()
+      cleanupSettle()
+      globalThis.setTimeout = originalSet
+      globalThis.clearTimeout = originalClear
+    }
+  })
+
+test("managed disposal failure remains explicit and cannot produce readiness", async () => {
+  const r = await recoveryWriteRemote()
+  const create = r.args.npmAuditFactory.create
+  let disposed = 0
+  r.args.npmAuditFactory.create = async () => ({
+    ...(await create()),
+    async dispose() {
+      disposed++
+      throw new Error("managed cleanup failed")
+    },
+  })
+  await assert.rejects(writer(r).inspectRecoveryCandidate(r.request), /managed cleanup failed/)
+  assert.equal(disposed, 1)
+  assert.equal(r.effects.length, 0)
 })

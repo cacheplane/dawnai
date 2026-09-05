@@ -24,11 +24,7 @@ import {
   verifyRecoveryEscrowProducer,
   verifyRecoveryProvenanceBindings,
 } from "./evidence-proof.mjs"
-import {
-  parseRecoveryReleaseMarker,
-  renderRecoveryFinalMetadata,
-  renderRecoveryReleaseBody,
-} from "./metadata.mjs"
+import { renderRecoveryFinalMetadata, validateRecoveryDraftMetadata } from "./metadata.mjs"
 import { planRecovery, verifyRecoveryObservedPhase } from "./model.mjs"
 import { normalizeRecoveryAssetInventory, observeRecoveryCandidate } from "./observe.mjs"
 import { RECOVERY_RETRY, recoveryMethods, runRecoveryRead } from "./policy.mjs"
@@ -148,6 +144,45 @@ export function createRecoveryWriter(config, dependencies) {
       () => pending.delete(p),
     )
     return p
+  }
+  // A managed verifier owns resources from creation through disposal. The lease
+  // bridges raw operation settlement to the observer's late-cleanup callback:
+  // nested timeouts must never release shared ownership while resources remain.
+  const npmAuditFactory = observation.npmAuditFactory
+  observation.npmAuditFactory = {
+    async create() {
+      active()
+      let release
+      const lease = new Promise((resolve) => {
+        release = resolve
+      })
+      pending.add(lease)
+      lease.then(() => pending.delete(lease))
+      let verifier
+      try {
+        verifier = await track(() => recoveryMethods(npmAuditFactory, ["create"]).create())
+      } catch (error) {
+        release()
+        throw error
+      }
+      let disposal = null
+      return {
+        verifyPackage(args) {
+          active()
+          return track(() => recoveryMethods(verifier, ["verifyPackage"]).verifyPackage(args))
+        },
+        dispose() {
+          disposal ??= track(async () => {
+            try {
+              return await recoveryMethods(verifier, ["dispose"]).dispose()
+            } finally {
+              release()
+            }
+          })
+          return disposal
+        },
+      }
+    },
   }
   const fetchTracked = async (...args) => {
     const response = await track(() => fetchImpl(...args))
@@ -429,6 +464,17 @@ export function createRecoveryWriter(config, dependencies) {
   const dispatchReceipts = new Map()
   const freshAuditIntents = new Set()
   return Object.freeze({
+    // Read-only orchestration entrypoint, bounded by this writer's original deadline.
+    // It returns observations, never mutation authority or a persisted marker.
+    inspectRecoveryCandidate(input) {
+      return transaction(async () => {
+        const request = exact(input, "candidate expectedControllerSha intentPath")
+        const args = validate({ ...request, expectedBodySha256: "0".repeat(64) }, "")
+        const current = await observe(args)
+        if (!current.terminal) await capture(args, current, "finalize")
+        return current
+      })
+    },
     dispatchRecoveryAudit(input) {
       return transaction(async () => {
         const args = validate(input, "intentRef")
@@ -767,6 +813,16 @@ export function createRecoveryWriter(config, dependencies) {
               args.name === "recovery-v2-finalization.json",
               "fixed finalization name required",
             )
+            // Use the maximum permitted persisted asset ID width to prove that
+            // the eventual canonical marker fits before making the freeze durable.
+            validateRecoveryDraftMetadata(
+              renderRecoveryFinalMetadata(receipt, {
+                assetName: args.name,
+                id: "9".repeat(32),
+                sha256: hash(bytes),
+                size: bytes.length,
+              }),
+            )
             await immutablePolicy(args)
           }
         }
@@ -827,24 +883,8 @@ export function createRecoveryWriter(config, dependencies) {
     updateRecoveryDraft(input) {
       return transaction(async () => {
         const args = validate(input, "title body")
-        requireThat(
-          typeof args.title === "string" &&
-            args.title.length > 0 &&
-            Buffer.byteLength(args.title) <= 512,
-          "bounded title required",
-        )
-        const marker = parseRecoveryReleaseMarker(args.body)
+        const marker = validateRecoveryDraftMetadata(args)
         same(marker.candidate, args.candidate, "marker candidate differs")
-        const markerStart = args.body.indexOf("\n\n<!-- DAWN_RELEASE_CONTROLLER_MARKER\n")
-        requireThat(
-          markerStart >= 0 &&
-            args.body ===
-              renderRecoveryReleaseBody({
-                marker,
-                body: args.body.slice(0, markerStart),
-              }),
-          "canonical v2 body required",
-        )
         const current = await observe(args)
         if (current.facts.release.body === args.body && current.facts.release.name === args.title)
           return current

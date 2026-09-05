@@ -5,6 +5,7 @@
 // These facts are an adapter boundary, not an authorization parser for user JSON.
 import { createHash } from "node:crypto"
 import { RECOVERY_AUDIT_CHECKS } from "./audit-proof.mjs"
+import { renderRecoveryFinalMetadata } from "./metadata.mjs"
 import {
   canonicalRecoveryBytes,
   metadataCheckName,
@@ -534,6 +535,10 @@ export function planRecovery(input) {
           "Finalization cannot regress or reuse a valid marker revision",
         )
       }
+      if (ready && facts.release) {
+        const rendered = renderRecoveryFinalMetadata(finalization, facts.finalization.ref)
+        ready = facts.release.name === rendered.title && facts.release.body === rendered.body
+      }
       if (!ready)
         effects.push({
           operation: "write-marker",
@@ -641,6 +646,16 @@ export function planRecovery(input) {
 export function verifyRecoveryObservedPhase(input) {
   const facts = snapshotRecoveryData(input, 16 * 1024 * 1024)
   adoptionProof(facts)
+  if (facts.finalization) {
+    const finalization = finalProof(facts, facts.finalization)
+    same(
+      facts.assets,
+      sortedAssets([...finalization.assets, facts.finalization.ref]),
+      "Frozen asset inventory differs from finalization",
+    )
+    if (facts.marker) markerProof(facts)
+    return facts.marker?.phase ?? "UNKNOWN"
+  }
   const marker = markerProof(facts)
   const index = RECOVERY_PHASES.indexOf(marker.phase)
   if (index >= 1) verificationProof(facts)

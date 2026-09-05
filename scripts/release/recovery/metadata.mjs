@@ -64,3 +64,14 @@ export function renderRecoveryFinalMetadata(finalization, finalizationRef) {
     body: renderRecoveryReleaseBody({ marker, body: value.metadata.body }),
   })
 }
+
+// Shared downstream write bounds, checked before the fixed asset can freeze metadata.
+export function validateRecoveryDraftMetadata({ title, body }) {
+  if (typeof title !== "string" || title.length === 0 || Buffer.byteLength(title) > 512)
+    throw new TypeError("Bounded recovery title required")
+  const marker = parseRecoveryReleaseMarker(body)
+  const start = body.indexOf("\n\n<!-- DAWN_RELEASE_CONTROLLER_MARKER\n")
+  if (start < 0 || body !== renderRecoveryReleaseBody({ marker, body: body.slice(0, start) }))
+    throw new TypeError("Canonical v2 body required")
+  return marker
+}

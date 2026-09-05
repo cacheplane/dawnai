@@ -674,3 +674,19 @@ test("an injected recovery-looking discovery result still receives independent o
   assert.equal(result.disposition, "recovery-owned")
   assert.equal(r.calls.filter((call) => call === "dispose").length, 1)
 })
+
+for (const body of ["", "corrupt <!-- DAWN_RELEASE_CONTROLLER_MARKER\n{"])
+  test(`frozen draft remains recovery-owned after display loss ${JSON.stringify(body)}`, async () => {
+    const r = await recoveryRemote()
+    r.setAssets(r.allAssets)
+    r.release.body = body
+    r.release.name = "edited title"
+    r.args.git.listTree = async () => ""
+    const result = await route(r)
+    assert.equal(result.state, "RECOVERY_REQUIRED")
+    assert.equal(result.disposition, "recovery-owned")
+    const observed = await routing.observeRecoveryCandidate(r.args)
+    assert.equal(observed.facts.marker, null)
+    assert.equal(observed.facts.release.body, body)
+    assert.deepEqual(observed.facts.finalization.ref, r.finalRef)
+  })

@@ -1029,7 +1029,22 @@ export async function observeRecoveryCandidate(input) {
         })
       : null
     let marker = null
-    if (release.draft || !finalization) {
+    if (finalization) {
+      if (release.draft) {
+        try {
+          marker = parseRecoveryReleaseMarker(release.body)
+        } catch {
+          // Missing/corrupt display never fabricates a persisted readiness marker.
+          let legacy = null
+          try {
+            legacy = parseReleaseMarker(release.body)
+          } catch {
+            /* An unsupported display body may be reconstructed from fixed proof. */
+          }
+          requireThat(legacy === null, "legacy marker cannot contain recovery finalization")
+        }
+      }
+    } else {
       try {
         marker = parseRecoveryReleaseMarker(release.body)
       } catch {
@@ -1196,7 +1211,7 @@ export async function observeRecoveryCandidate(input) {
         16 * 1024 * 1024,
       )
     }
-    if (marker) {
+    if (marker || finalization) {
       if (finalization)
         facts.finalization = {
           receipt: finalization,
@@ -1398,6 +1413,7 @@ export async function routeRecoveryCandidate(input) {
     const release = matches[0]
     let marker = null
     let legacyMarkerValid = false
+    let unsupportedDraftMarker = false
     try {
       marker = parseRecoveryReleaseMarker(release.body)
     } catch {
@@ -1411,8 +1427,7 @@ export async function routeRecoveryCandidate(input) {
           legacyMarkerValid = true
         } catch {
           // Published finalization may still prove completion after display corruption.
-          if (release.draft !== false)
-            throw new TypeError("Unsupported recovery/legacy marker blocks routing")
+          unsupportedDraftMarker = release.draft !== false
         }
       }
     }
@@ -1422,6 +1437,10 @@ export async function routeRecoveryCandidate(input) {
     })
     requireThat(Array.isArray(assets), "ownership asset discovery unavailable")
     const final = await readFixedFinalization(context, assets)
+    requireThat(
+      !unsupportedDraftMarker || final,
+      "Unsupported recovery/legacy marker blocks routing",
+    )
     if (marker && (release.draft !== false || !final)) {
       if (identity)
         same(identity, marker.candidate, "reservation and durable marker candidate differ")

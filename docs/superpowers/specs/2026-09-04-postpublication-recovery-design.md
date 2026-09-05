@@ -152,6 +152,32 @@ alongside schemas and test the maximum accepted/rejected shapes. Do not encode
 today's package count as a general invariant; derive the exact set from the
 verified manifest and release inventory.
 
+## Recovery flow
+
+The controller can change through review while the candidate and published
+package identity stay fixed. Every arrow below requires independently verified
+proof; an incomplete or conflicting observation stops advancement.
+
+```mermaid
+flowchart LR
+    C[Sealed candidate and exact npm packages] --> V[Five verification lanes]
+    R[Reviewed controller and admission] --> O[Reserve and adopt]
+    O --> V
+    V --> E[Escrow exact evidence]
+    E --> A[Independent audit run]
+    C --> A
+    A --> F[Finalization asset]
+    F --> P[Publish existing draft]
+    P --> T[Derive completion from immutable assets and tag]
+    F --> U[Interrupted write: reuse finalization and reconstruct metadata]
+    U --> P
+```
+
+The finalization asset freezes the evidence selection before publication. A
+later title or body edit changes the displayed metadata, not the historical
+completion proof. The normal writer and the independent auditor use separate
+concurrency groups, so waiting for an audit does not block that audit from running.
+
 ## Transition contract
 
 | From | Operation | Required proof before advancing | To |
