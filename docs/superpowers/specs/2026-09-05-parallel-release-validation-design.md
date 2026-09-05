@@ -45,3 +45,16 @@ A rejected concurrent hard-link contender must release only reservations it acqu
 The regression pauses the first report read, rejects an alias, then retries the alias
 before allowing the first read to finish. Both alias attempts must reject. Explicit
 ownership flags preserve the first operation's canonical-path and inode reservations.
+
+## Cancellation efficiency
+
+Cancelling superseded CI runs showed that four metadata-scoped infrastructure jobs
+continued because their job conditions used `always()`. Replace that status function
+with `!cancelled()` while preserving the rest of the classification expression.
+Classification failure or unavailable metadata still runs every infrastructure lane
+on an active workflow. Explicit workflow cancellation stops those runner-local jobs.
+Keep step-level cleanup conditions and the short required `validate` aggregate unchanged.
+A truth table evaluates each checked-in expression across cancellation, event,
+classification result and metadata output combinations. GitHub's cancellation reference
+explains job-condition reevaluation:
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation

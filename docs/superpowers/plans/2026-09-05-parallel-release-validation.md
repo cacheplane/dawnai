@@ -22,3 +22,5 @@
 - [x] Add red descriptor-retention, failure cleanup, pending-disposal, hard-link rewrite and harness lifecycle assertions.
 - [x] Retain accepted descriptors, implement awaited disposal, wire all harness paths.
 - [ ] Run full Kubernetes unit suite/typecheck, integrity preflight, independent review and corrected CI.
+
+- [x] Reproduce cancellation-insensitive infrastructure jobs from obsolete runs; add 240-case expression truth table, replace four job-level status guards and update exact workflow fixture. All 21 scope tests and 162 integrity tests pass; independent review approves.
