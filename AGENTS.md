@@ -105,30 +105,30 @@ scripts respectively) — not workspace packages.
 
 ## Definition of Done
 
-The exact gates a change must pass are the `validate` job in
-`.github/workflows/ci.yml`, in order:
+The `validate` job in `.github/workflows/ci.yml` runs these gates in order,
+after installing dependencies:
 
-1. `pnpm lint`
-2. `pnpm check:build-cache`
-3. `pnpm build`
-4. `pnpm typecheck`
-5. `pnpm test`
-6. `pnpm check:release-inventory`
-7. `pnpm test:release-controller`
-8. `node scripts/check-docs.mjs`
-9. `pnpm pack:check`
-10. `pnpm verify:typescript-tooling-pack`
-11. `pnpm verify:harness:self-test`
-12. `pnpm verify:harness:framework`
-13. `pnpm verify:harness:runtime`
-14. `pnpm verify:harness:smoke`
+1. `pnpm test:release-integrity` — early content pins and recovery-policy checks
+2. `pnpm lint`
+3. `pnpm check:build-cache`
+4. `pnpm build`
+5. `pnpm typecheck`
+6. `pnpm test`
+7. `pnpm check:release-inventory`
+8. `pnpm test:release-controller` — the complete suite, including the early checks
+9. `node scripts/check-docs.mjs`
+
+The separate `pack-smoke` job runs `pnpm pack:check` and
+`pnpm verify:typescript-tooling-pack`. The separate `harness-verify` job runs
+`pnpm verify:harness:self-test` and the framework, runtime, and smoke harnesses.
+These gates remain part of repository validation.
 
 On pull requests, a separate `changesets` job also runs
 `node scripts/check-changesets.mjs` to require a changeset for user-facing
 package changes.
 
 Run `pnpm ci:validate` locally to approximate this lane (it exists as a
-script in the root `package.json`). It runs the same lint → build-cache →
+script in the root `package.json`). It runs the same release-integrity → lint → build-cache →
 build → typecheck → source-test → release-inventory → release-controller-test →
 docs-check → pack-check → TypeScript-tooling-pack → harness sequence, plus
 the local-only `test:sync-chart-appversion` release-script unit test, which is

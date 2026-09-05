@@ -89,6 +89,9 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Release Integrity Preflight
+        run: pnpm test:release-integrity
+
       - name: Lint
         run: pnpm lint
 

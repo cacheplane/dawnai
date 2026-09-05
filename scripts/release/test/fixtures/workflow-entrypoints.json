@@ -1494,6 +1494,13 @@
             {
               "classification": "safe",
               "descriptor": {
+                "name": "Release Integrity Preflight",
+                "run": "pnpm test:release-integrity"
+              }
+            },
+            {
+              "classification": "safe",
+              "descriptor": {
                 "name": "Lint",
                 "run": "pnpm lint"
               }
