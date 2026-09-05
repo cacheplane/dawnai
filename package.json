@@ -46,7 +46,7 @@
     "test:pack-check": "node --test scripts/pack-check.test.mjs",
     "test:published-artifacts": "node --test scripts/published-artifacts.test.mjs",
     "test:release-controller": "node --test scripts/published-artifacts.test.mjs scripts/release/test/*.test.mjs",
-    "test:release-fault-harness": "node --test --test-concurrency=1 scripts/release/test/fault-harness.integration.mjs scripts/release/test/rehearsal.test.mjs",
+    "test:release-fault-harness": "node --test --test-concurrency=1 scripts/release/test/fault-harness.integration.mjs scripts/release/test/rehearsal.test.mjs scripts/release/test/recovery-rehearsal.test.mjs",
     "test:runtime": "pnpm exec vitest --run --config test/runtime/vitest.config.ts",
     "test:test-runner": "node --test scripts/test.test.mjs",
     "verify:harness": "node scripts/harness-report.mjs framework runtime smoke",

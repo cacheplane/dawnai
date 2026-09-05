@@ -155,7 +155,7 @@
       "sha256": "ec887de50b70263edef728079f4707fd0c0d7b9b2c4566cb6c0c0e4740cfa48c"
     },
     "scripts/release/recovery/fence.mjs": {
-      "sha256": "9d488b39708b1651b72b55338bed63837a47cbbd60dc6e77069e4427f7b48298"
+      "sha256": "6bbcf6880a39d3fb13bce08cf133eb2101100142eebaf50494b51677546d55b1"
     },
     "scripts/release/recovery/finalize.mjs": {
       "sha256": "87ef742e4300aaabe76d52aa48dacc2a2463dc94cf9760d9274eaf9ddf9547e5"
@@ -176,7 +176,7 @@
       "sha256": "bfe8d23eb87cb31afc474f77fa4742784508e20d985b44717479f22ad918c517"
     },
     "scripts/release/recovery/policy.json": {
-      "sha256": "fa2edf39ca80f331d4208d81d85ba000772298d7c3fcb8063c378aafe5b12d4e"
+      "sha256": "acb19a1d216c4fe39685118630cbfc1ab62acaf9fc7c6bde2416354de6dc8f80"
     },
     "scripts/release/recovery/policy.mjs": {
       "sha256": "77e3651e87b6964b84333a6c324087e855035a77987054e4fc73a412ff148ad2"

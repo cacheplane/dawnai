@@ -736,12 +736,12 @@ preserves the read-only boundary, rather than adding another lifecycle manager.
 - [ ] Slice 12c: production-adapter fault rehearsal, explicit service-probe
   entrypoint, and eligible Linux runner CI evidence.
 
-- [ ] Reuse production effects and adapters against disposable local HTTP/npm
+- [x] Reuse production effects and adapters against disposable local HTTP/npm
   fixtures, with independent readback. Exercise the whole legacy adoption ->
   five lanes -> audit -> finalization -> publish -> no-op -> next-version path.
   Interrupt after every external effect. Separate fixture trust roots from
   production; never add an environment bypass to production signature checks.
-- [ ] Run `node --test --test-concurrency=1 scripts/release/test/recovery-rehearsal.test.mjs`.
+- [x] Run `node --test --test-concurrency=1 scripts/release/test/recovery-rehearsal.test.mjs`.
   Expected: each fault resumes with unchanged payload bytes or an intentional,
   specifically classified conflict. Require zero duplicate drafts or republish
   attempts, and exact retained evidence inventory. Retain deterministic regressions
@@ -749,7 +749,7 @@ preserves the read-only boundary, rather than adding another lifecycle manager.
   recreation, and a late observation resolving after the phase deadline; neither
   may permit a late or overlapping mutation. Task 5 quality review verified
   these cases with independent probes.
-- [ ] Measure the production-adapter work per complete recovery phase. The
+- [x] Measure the production-adapter work per complete recovery phase. The
   Task 7 deterministic fixture exposed 2,322 Release-asset downloads, 861
   npm tarball downloads, and 41 npm-audit setups for 19 writes. Reduce
   repeated payload transfer/setup within one invocation before calling the
@@ -863,3 +863,31 @@ after independent review and reference checks. Executable implementation require
 the tests above. Live recovery requires the separately authorized activation and
 fresh terminal evidence. Keep original tag/tarball/provenance identity visible in
 all three reports.
+
+
+### Task 12c local verification update
+
+The complete production HTTP adapter rehearsal passed 67 tests, including
+interruptions before and after all 32 durable writes (64 fault cases), in
+545.83 seconds. Every case reached COMPLETE with the original 45 assets,
+no duplicate uploads, no repeated audit request IDs, no duplicate drafts,
+no npm publication, a zero-write published retry, and next-version selection.
+Fixtures supply npm/attestation trust, five lane artifacts, admission/fence
+callbacks, and immutable-release policy; this is not live smoke or provenance
+proof. Log: `/tmp/dawn-task12c-full-rehearsal.log`.
+
+The real GitHub workflow-fence entrypoint now prepares distinct historical and
+current fixture revisions and tags, retains the pre-advance seed lineage,
+collects the full 36-case matrix with paginated all-SHA inventories, restores
+and drains after ambiguous effects, and projects untouched raw calls through
+the production evidence validator. Its executable closure is pinned as 13
+files. Six new local service-driver tests and the existing fence, policy,
+workflow and runner-gate tests passed (224 total). Log:
+`/tmp/dawn-task12c-focused.log`. The external lane is still unrun: no authorized
+disposable repository has been supplied. Publication/credential service
+contracts and the platform workflow topology gap remain open.
+
+The bounded read-only Ubuntu job is wired. The negative-host regression was
+verified failing against the former skip behavior and passing after the fix.
+A macOS opt-out is reported as skipped, never eligible-runner evidence. Actual
+Linux CI and the complete final implementation gates remain pending.

@@ -14,13 +14,10 @@ const environment = process.env
 const enabled = environment.DAWN_TEST_RECOVERY_RUNNER === "1"
 const eligible = process.platform === "linux" && environment.ImageOS === "ubuntu24"
 test("recovery uses real systemd execution and removes detached descendants", {
-  skip: !enabled
-    ? "DAWN_TEST_RECOVERY_RUNNER=1 is required"
-    : !eligible
-      ? "ineligible host: requires the actual Linux ubuntu24 systemd runner"
-      : false,
+  skip: !enabled ? "DAWN_TEST_RECOVERY_RUNNER=1 is required" : false,
   timeout: 60_000,
 }, async () => {
+  assert.ok(eligible, "ineligible host: requires the actual Linux ubuntu24 systemd runner")
   assert.deepEqual(STRICT_SMOKE_COMMAND_OPTION_FIELDS, [
     "acceptedExitCodes",
     "cwd",

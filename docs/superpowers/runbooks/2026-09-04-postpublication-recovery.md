@@ -995,3 +995,47 @@ still outstanding. Logs: `/tmp/dawn-task13-vercel-red.log`,
 `/tmp/dawn-task13-vercel-green.log`, `/tmp/dawn-task13-pid-red.log`,
 `/tmp/dawn-task13-pid-green.log`, `/tmp/dawn-task13-cli-typecheck.log`, and
 `/tmp/dawn-task13-k8s-typecheck.log`.
+
+
+## Local recovery arc and service-probe verification (Task 12c)
+
+The owned-loopback rehearsal runs production GitHub/npm readers and the guarded
+HTTP writer through adoption, five-lane evidence collection, independent audit,
+finalization, publication, published retry and next-version arbitration. Its
+baseline has 32 durable writes. All 64 before/after interruptions resumed to
+COMPLETE; the suite passed 67 tests in 545.83 seconds. It checks unchanged
+original asset bytes and exact final receipt inventory, zero duplicate uploads
+or audit request IDs, zero duplicate drafts/npm publications, and zero writes
+on a published retry. Evidence: `/tmp/dawn-task12c-full-rehearsal.log`.
+
+The fixture supplies synthetic npm signatures/attestations, five lane artifacts,
+Git policy/invocation/fence callbacks and immutable-release policy. Canonical
+service hosts are mapped only to the fixture's owned loopback server. These
+seams never enter production verification. Actual service requests and counts
+are recorded in `/tmp/dawn-task12c-http-cost.json`; these are fixture HTTP counts,
+not production latency or provenance evidence.
+
+The GitHub fence lane now advances the installed historical fixture on the
+explicitly authorized disposable default branch, creates two UUID-named tags,
+and exercises all 36 combinations of source, workflow state and replay method.
+It preserves the pre-advance historical run for reruns. Every inventory is
+unfiltered, paginated and drained; denials settle for at least five seconds.
+It restores the workflow and checks drainage after uncertain disable/dispatch
+outcomes without blindly repeating the ambiguous mutation. Raw polling/setup
+calls remain in a bounded ledger; a separate digest-bound witness is validated
+with the production parser. Tags, fixture commits and owned runs are retained
+and listed for review. No broad resource deletion or production mutation occurs.
+
+Six local driver regressions plus fence, policy, workflow and runner checks
+passed (224 tests). They exercise two-page inventories, changed totals, duplicate
+IDs, active runs, exact 36-case correlations, complete source closure, and
+restoration after rejected or unknown responses. The real GitHub lane remains
+unrun until a disposable repository is explicitly authorized. This lane covers
+workflow fencing; release publication credentials and platform-owned workflow
+fencing still require separate service evidence.
+
+CI now contains a five-minute, contents-read-only `recovery-strict-runner` job
+on Ubuntu 24.04 with pinned checkout/Node actions. An opted-in ineligible host
+fails, preventing a skipped check from being mistaken for containment proof.
+The local macOS integration remains explicitly skipped; actual Linux evidence
+must come from CI. No production activation or release writes were performed.

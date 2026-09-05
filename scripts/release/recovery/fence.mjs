@@ -49,6 +49,7 @@ export const RECOVERY_FENCE_PROBE_INPUTS = Object.freeze([
   "scripts/release/semver.mjs",
   "scripts/release/test/recovery-github.integration.mjs",
   "scripts/release/test/support/recovery-github-fence.mjs",
+  "scripts/release/test/support/recovery-github-probe.mjs",
 ])
 const PROBE_PATHS = new Set(RECOVERY_FENCE_PROBE_INPUTS)
 const SHA = /^[a-f0-9]{40}$/u,

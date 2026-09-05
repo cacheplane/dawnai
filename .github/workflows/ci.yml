@@ -1129,3 +1129,22 @@ jobs:
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" rollout status deploy/dawn-app --timeout=120s
           kubectl --context "$DAWN_TEST_K8S_CONTEXT" run curl --image="$REACHABILITY_IMAGE" --restart=Never --rm -i --quiet -- \
             curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo "app served OK"
+
+  recovery-strict-runner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+      - name: Verify real recovery process containment
+        env:
+          DAWN_TEST_RECOVERY_RUNNER: "1"
+        run: node --test scripts/release/test/recovery-strict-runner.integration.mjs

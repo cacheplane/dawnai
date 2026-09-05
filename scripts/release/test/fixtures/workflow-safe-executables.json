@@ -1291,6 +1291,30 @@
         "step": "Install dawn-app (placeholder image) and verify it serves",
         "kind": "run",
         "value": "set -eu\nPLACEHOLDER_IMAGE=\"$(jq -er '.images.placeholderApp' .github/kubernetes-compatibility.json)\"\nREACHABILITY_IMAGE=\"$(jq -er '.images.reachabilityProbe' .github/kubernetes-compatibility.json)\"\nPLACEHOLDER_WITH_TAG=\"${PLACEHOLDER_IMAGE%@sha256:*}\"\nPLACEHOLDER_REPOSITORY=\"${PLACEHOLDER_WITH_TAG%:*}\"\nPLACEHOLDER_DIGEST=\"sha256:${PLACEHOLDER_IMAGE##*@sha256:}\"\nprintf '%s\\n' \"$PLACEHOLDER_DIGEST\" | grep -Eq '^sha256:[0-9a-f]{64}$'\nprintf '%s\\n' \"$REACHABILITY_IMAGE\" | grep -Eq '@sha256:[0-9a-f]{64}$'\nhelm --kube-context \"$DAWN_TEST_K8S_CONTEXT\" install dawn-app charts/dawn-app \\\n  --set-string image.repository=\"$PLACEHOLDER_REPOSITORY\" \\\n  --set-string image.digest=\"$PLACEHOLDER_DIGEST\" \\\n  --set containerPort=8080 --set healthPath=/ \\\n  --wait --timeout 3m\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" rollout status deploy/dawn-app --timeout=120s\nkubectl --context \"$DAWN_TEST_K8S_CONTEXT\" run curl --image=\"$REACHABILITY_IMAGE\" --restart=Never --rm -i --quiet -- \\\n  curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo \"app served OK\"\n"
+      },
+      {
+        "classification": "safe",
+        "job": "recovery-strict-runner",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      },
+      {
+        "classification": "safe",
+        "job": "recovery-strict-runner",
+        "stepIndex": 1,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
+      },
+      {
+        "classification": "safe",
+        "job": "recovery-strict-runner",
+        "stepIndex": 2,
+        "step": "Verify real recovery process containment",
+        "kind": "run",
+        "value": "node --test scripts/release/test/recovery-strict-runner.integration.mjs"
       }
     ],
     "claude-review.yml": [

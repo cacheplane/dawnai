@@ -103,7 +103,7 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for Task 10a: strict GitHub inventories, bounded exact git reads, and dormant verifier closure.
 // Repinned for Task 12a: fresh complete-inventory npm signature batching.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "12fed64f23d409b195217f4e13cfe1c1dbbf9224f47732284f428049e731c5ab"
+  "aa61495720a9fe3260cef35bde93462fdf9a7577258aa75ac8dbcebe9c93c970"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
@@ -1707,6 +1707,27 @@ test("workflow entrypoints fail closed unless their exact normalized form is exp
       ),
     /not explicitly audited/u,
   )
+})
+
+test("recovery containment runs on an actual eligible Linux host without publication credentials", async () => {
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
+  const ci = parseWorkflowSource(sources["ci.yml"], "ci.yml")
+  const job = ci.jobs["recovery-strict-runner"]
+  assert.ok(job, "dedicated recovery strict-runner CI job required")
+  assert.equal(job["runs-on"], "ubuntu-24.04")
+  assert.equal(job["timeout-minutes"], 5)
+  assert.deepEqual(job.permissions, { contents: "read" })
+  assert.equal(job.steps.length, 3)
+  assert.equal(job.steps[0].uses, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")
+  assert.deepEqual(job.steps[0].with, { "persist-credentials": false })
+  assert.equal(job.steps[1].uses, "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020")
+  assert.deepEqual(job.steps[1].with, { "node-version": "24.19.0" })
+  assert.deepEqual(job.steps[2].env, { DAWN_TEST_RECOVERY_RUNNER: "1" })
+  assert.equal(
+    job.steps[2].run,
+    "node --test scripts/release/test/recovery-strict-runner.integration.mjs",
+  )
+  assert.equal(job.env, undefined, "runner identity must come from the real host")
 })
 
 test("testing-windows has the exact safe descriptors and executable classifications", async () => {

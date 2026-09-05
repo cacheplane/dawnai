@@ -6,44 +6,67 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { promisify } from "node:util"
-import { authorizeFenceProbe, classifyFenceProbe } from "./support/recovery-github-fence.mjs"
+import {
+  FENCE_API_VERSION,
+  FENCE_FIXTURES,
+  fenceCanonical,
+  fenceDigest,
+  projectRecoveryFenceEvidence,
+} from "../recovery/fence-evidence.mjs"
+import { authorizeFenceProbe } from "./support/recovery-github-fence.mjs"
+import {
+  exerciseRecoveryFenceMatrix,
+  PROBE_SOURCE_PATHS,
+  readProbeInventory,
+} from "./support/recovery-github-probe.mjs"
 
-const execute = promisify(execFile)
-const workflowFile = "recovery-fence-probe.yml"
-const workflowPath = `.github/workflows/${workflowFile}`
-
-// No network or credentials are accessed unless this dedicated lane is opted in.
-// Provision the exact fixture on the authorized disposable default branch first.
-test("disposable GitHub workflow disable versus historical reruns", {
+// Explicit service lane only. Install the historical fixture verbatim on the
+// separately authorized disposable default branch. This probe advances that
+// fixture, creates two named tags, and retains commits/runs as evidence. No
+// production identity, release resource, or npm publication is allowed here.
+test("disposable GitHub workflow disable across current and historical sources", {
   skip: Reflect.get(process.env, "DAWN_TEST_RECOVERY_GITHUB") !== "1",
   timeout: 3_000_000,
 }, async (t) => {
   const repository = authorizeFenceProbe(process.env)
-  const prefix = `repos/${repository}`
-  const ledgerPath = join(await mkdtemp(join(tmpdir(), "dawn-recovery-fence-")), "evidence.json")
+  const base = `/repos/${repository}`
+  const directory = await mkdtemp(join(tmpdir(), "dawn-recovery-fence-"))
+  const ledgerPath = join(directory, "raw-ledger.json")
   const ledger = {
     repository,
     startedAt: new Date().toISOString(),
-    requests: [],
-    observations: [],
+    calls: [],
     ownedRunIds: [],
-    runs: [],
-    outcome: "inconclusive",
+    ownedTags: [],
     restoration: "not-needed",
+    outcome: "inconclusive",
   }
   const persist = async () => {
-    await writeFile(`${ledgerPath}.tmp`, `${JSON.stringify(ledger, null, 2)}\n`, { mode: 0o600 })
+    const bytes = Buffer.from(`${JSON.stringify(ledger, null, 2)}\n`)
+    assert.ok(bytes.length <= 32 * 1024 * 1024, "raw ledger byte bound")
+    await writeFile(`${ledgerPath}.tmp`, bytes, { mode: 0o600 })
     await rename(`${ledgerPath}.tmp`, ledgerPath)
   }
   await persist()
-  t.diagnostic(`Evidence (including incomplete attempts): ${ledgerPath}`)
-
-  async function api(method, path, body) {
-    // No arbitrary host, absolute URL, shell interpolation, or unrecorded effect.
-    assert.ok(path.startsWith(`${prefix}/`) || path === prefix)
-    const entry = { method, path, ...(body ? { body } : {}), startedAt: new Date().toISOString() }
-    ledger.requests.push(entry)
+  t.diagnostic(`Raw service observations and incomplete attempts: ${ledgerPath}`)
+  async function api(method, path, body = null) {
+    assert.ok(path === base || path.startsWith(`${base}/`), "endpoint confinement")
+    assert.ok(!path.includes("..") && !path.includes("#") && !path.includes("%"))
+    assert.ok(
+      ledger.calls.length < 9999 && Date.now() - Date.parse(ledger.startedAt) < 2_900_000,
+      "probe bound",
+    )
+    const call = {
+      id: `call-${String(ledger.calls.length + 1).padStart(4, "0")}`,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      method,
+      path,
+      body,
+      status: null,
+      response: null,
+    }
+    ledger.calls.push(call)
     await persist()
     const args = [
       "api",
@@ -53,229 +76,234 @@ test("disposable GitHub workflow disable versus historical reruns", {
       "--method",
       method,
       "-H",
-      "X-GitHub-Api-Version: 2026-03-10",
-      path,
+      `X-GitHub-Api-Version: ${FENCE_API_VERSION}`,
+      path.slice(1),
     ]
-    // Every body value is a fixed key or a validated branch/UUID. gh raw fields
-    // avoid shell interpretation, with nested inputs supported by gh itself.
-    for (const [key, value] of Object.entries(body ?? {})) {
-      args.push("--raw-field", `${key}=${value}`)
-    }
+    if (body !== null) args.push("--input", "-")
     let stdout
     try {
-      ;({ stdout } = await execute("gh", args, { timeout: 30_000, maxBuffer: 2 * 1024 * 1024 }))
-    } catch (error) {
-      if (!error.stdout?.startsWith("HTTP/"))
-        throw new Error(`Unknown response to ${method} ${path}; inspect ledger`, { cause: error })
-      stdout = error.stdout
-    }
-    const separator = stdout.search(/\r?\n\r?\n/)
-    assert.ok(separator >= 0, "GitHub response has headers")
-    const status = Number(/^HTTP\/\S+ (\d+)/.exec(stdout)?.[1])
-    assert.ok(Number.isInteger(status) && status >= 100)
-    const text = stdout.slice(separator).trim()
-    const data = text ? JSON.parse(text) : null
-    entry.status = status
-    // Retain correlation and error details, never response headers or auth data.
-    entry.result = data
-    await persist()
-    return { status, data }
-  }
-  async function get(path) {
-    const response = await api("GET", path)
-    assert.equal(response.status, 200)
-    return response.data
-  }
-  async function waitFor(runId, attempt, method, requestId) {
-    const deadline = Date.now() + 240_000
-    while (Date.now() < deadline) {
-      const run = await get(`${prefix}/actions/runs/${runId}`)
-      assert.equal(run.id, runId)
-      assert.equal(run.workflow_id, ledger.workflowId)
-      assert.equal(run.head_sha, ledger.headSha)
-      assert.equal(run.event, "workflow_dispatch")
-      if (method === "dispatch") assert.equal(run.display_title, `recovery-fence-${requestId}`)
-      if (run.run_attempt >= attempt && run.status === "completed") {
-        assert.equal(run.run_attempt, attempt, "unexpected concurrent rerun")
-        assert.equal(run.conclusion, "failure")
-        const result = await get(
-          `${prefix}/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`,
+      stdout = await new Promise((resolve, reject) => {
+        const child = execFile(
+          "gh",
+          args,
+          { timeout: 30000, maxBuffer: 2 * 1024 * 1024 },
+          (error, output) => {
+            if (error && !output.startsWith("HTTP/")) reject(error)
+            else resolve(output)
+          },
         )
-        assert.ok(result.total_count <= 2, "unexpected fixture jobs")
-        const writer = result.jobs.find((job) => job.name === "writer")
-        assert.equal(writer?.status, "completed")
-        assert.equal(
-          writer?.conclusion,
-          "failure",
-          "historical detect output must reach the writer",
-        )
-        assert.ok(Number.isSafeInteger(writer.id))
-        const step = writer.steps.find(
-          ({ name }) => name === "Prove historical writer reachability without writing",
-        )
-        assert.equal(step?.status, "completed", "runner setup failure is not writer execution")
-        assert.equal(step?.conclusion, "failure")
-        if (method === "dispatch" || method === "all") {
-          assert.equal(result.jobs.find(({ name }) => name === "detect")?.conclusion, "success")
-        }
-        ledger.runs.push({
-          id: runId,
-          attempt,
-          writerJobId: writer.id,
-          writerStep: { name: step.name, status: step.status, conclusion: step.conclusion },
-          jobs: result.jobs.map(({ id, name, conclusion }) => ({ id, name, conclusion })),
-        })
-        await persist()
-        return { id: runId, attempt, writerJobId: writer.id }
-      }
-      await delay(5000)
-    }
-    throw new Error(
-      `Run ${runId} did not drain; inspect and stop fixture runs before using results`,
-    )
-  }
-  async function state(expected) {
-    const workflow = await get(`${prefix}/actions/workflows/${ledger.workflowId}`)
-    assert.equal(workflow.state, expected)
-  }
-  async function inventory() {
-    const result = await get(`${prefix}/actions/workflows/${ledger.workflowId}/runs?per_page=100`)
-    // This minimal experiment refuses larger inventories; Task 12 adds pagination.
-    assert.ok(result.total_count <= 100 && result.total_count === result.workflow_runs.length)
-    for (const run of result.workflow_runs) {
-      assert.equal(run.status, "completed", `fixture run ${run.id} has not drained`)
-      if (ledger.initialRunIds)
-        assert.ok(
-          [...ledger.initialRunIds, ...ledger.ownedRunIds].includes(run.id),
-          `unowned or ambiguous fixture run ${run.id}; inspect ledger`,
-        )
-    }
-    return result.workflow_runs
-      .map(({ id, run_attempt }) => ({ id, run_attempt }))
-      .sort((a, b) => a.id - b.id)
-  }
-  let current
-  async function probe(stage, method) {
-    await state(stage === "disabled" ? "disabled_manually" : "active")
-    const before = current
-    const beforeInventory = await inventory()
-    const requestId = randomUUID()
-    const path =
-      method === "dispatch"
-        ? `${prefix}/actions/workflows/${ledger.workflowId}/dispatches`
-        : method === "job"
-          ? `${prefix}/actions/jobs/${current.writerJobId}/rerun`
-          : `${prefix}/actions/runs/${current.id}/${method === "all" ? "rerun" : "rerun-failed-jobs"}`
-    if (method === "dispatch") {
-      const tip = await get(`${prefix}/commits/${encodeURIComponent(ledger.defaultBranch)}`)
-      assert.equal(tip.sha, ledger.headSha, "fixture default branch moved before dispatch")
-    }
-    const response = await api(
-      "POST",
-      path,
-      method === "dispatch"
-        ? { ref: ledger.defaultBranch, "inputs[probe_id]": requestId }
-        : undefined,
-    )
-    const accepted = response.status >= 200 && response.status < 300
-    const observation = { stage, method, status: response.status, accepted, requestId }
-    ledger.observations.push(observation)
-    await persist()
-    if (accepted) {
-      const id = method === "dispatch" ? response.data?.workflow_run_id : current.id
-      assert.ok(Number.isSafeInteger(id) && id > 0, "direct run correlation required")
-      if (method === "dispatch") ledger.ownedRunIds.push(id)
+        child.stdin.on("error", () => {})
+        child.stdin.end(body === null ? undefined : JSON.stringify(body))
+      })
+      const separator = stdout.search(/\r?\n\r?\n/u)
+      assert.ok(separator >= 0, "response headers required")
+      call.status = Number(/^HTTP\/\S+ (\d+)/u.exec(stdout)?.[1])
+      assert.ok(Number.isSafeInteger(call.status) && call.status >= 200 && call.status <= 599)
+      const raw = stdout.slice(separator).trim()
+      call.response = raw ? JSON.parse(raw) : null
+      call.finishedAt = new Date().toISOString()
+      if (
+        method === "POST" &&
+        path.endsWith("/dispatches") &&
+        Number.isSafeInteger(call.response?.workflow_run_id)
+      )
+        ledger.ownedRunIds.push(call.response.workflow_run_id)
       await persist()
-      current = await waitFor(
-        id,
-        method === "dispatch" ? 1 : current.attempt + 1,
-        method,
-        requestId,
-      )
-      observation.run = current
-    } else if (stage === "disabled") {
-      // Observe after a short settlement period; an HTTP error alone is no fence.
-      await delay(5000)
-      const run = await get(`${prefix}/actions/runs/${before.id}`)
-      observation.unchanged = run.run_attempt === before.attempt && run.status === "completed"
-      assert.deepEqual(await inventory(), beforeInventory, "denial created a new run or attempt")
-    } else {
+      return call
+    } catch (error) {
+      call.finishedAt = new Date().toISOString()
+      ledger.outcome = "unknown-response-requires-inspection"
+      await persist()
       throw new Error(
-        `Positive ${stage}/${method} control rejected (${response.status}); inconclusive`,
+        `Unknown or invalid response to ${method} ${path}; no automatic mutation retry`,
+        { cause: error },
       )
     }
-    await state(stage === "disabled" ? "disabled_manually" : "active")
-    await inventory()
-    await persist()
   }
-
-  const repo = await get(prefix)
-  assert.notEqual(repo.id, 1210070282, "production repository ID forbidden, including aliases")
+  const get = async (path) => {
+    const call = await api("GET", path)
+    assert.equal(call.status, 200, path)
+    return call
+  }
+  const fixtureBytes = Object.fromEntries(
+    await Promise.all(
+      Object.entries(FENCE_FIXTURES).map(async ([revision, fixture]) => {
+        const bytes = await readFile(fixture.path, "utf8")
+        assert.equal(fenceDigest(bytes), fixture.sha256)
+        return [revision, bytes]
+      }),
+    ),
+  )
+  // All local source dependencies are explicit; hash actual bytes, not a claimed
+  // source revision. This is a review manifest, never admission by itself.
+  const closure = await Promise.all(
+    PROBE_SOURCE_PATHS.map(async (path) => ({ path, sha256: fenceDigest(await readFile(path)) })),
+  )
+  const repositoryCall = await get(base)
+  const repo = repositoryCall.response
+  assert.notEqual(repo.id, 1210070282, "production repository ID forbidden")
+  assert.equal(repo.full_name.toLowerCase(), repository.toLowerCase(), "redirect forbidden")
+  assert.match(repo.default_branch, /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/u)
+  const defaultBranch = repo.default_branch,
+    workflow = ".github/workflows/recovery-fence-probe.yml"
+  const initial = await get(`${base}/git/ref/heads/${defaultBranch}`)
+  const historicalSha = initial.response.object.sha
+  const historicalFixtureCall = await get(`${base}/contents/${workflow}?ref=${historicalSha}`)
+  assert.equal(historicalFixtureCall.response.encoding, "base64")
   assert.equal(
-    repo.full_name.toLowerCase(),
-    repository.toLowerCase(),
-    "redirected repository forbidden",
+    Buffer.from(historicalFixtureCall.response.content, "base64").toString("utf8"),
+    fixtureBytes.historical,
+    "install exact historical fixture first",
   )
-  ledger.repositoryId = repo.id
-  ledger.defaultBranch = repo.default_branch
-  const branch = await get(`${prefix}/commits/${encodeURIComponent(repo.default_branch)}`)
-  ledger.headSha = branch.sha
-  assert.match(ledger.headSha, /^[a-f0-9]{40}$/)
-  const fixture = await readFile(
-    new URL("./fixtures/recovery-contract-workflow.yml", import.meta.url),
-    "utf8",
-  )
-  const content = await get(`${prefix}/contents/${workflowPath}?ref=${ledger.headSha}`)
-  assert.equal(content.encoding, "base64")
-  assert.equal(
-    Buffer.from(content.content, "base64").toString("utf8"),
-    fixture,
-    "install the exact harmless fixture first",
-  )
-  const workflow = await get(`${prefix}/actions/workflows/${workflowFile}`)
-  assert.equal(workflow.path, workflowPath)
-  assert.equal(workflow.state, "active", "pre-existing workflow state must be active")
-  ledger.workflowId = workflow.id
-  ledger.initialRunIds = (await inventory()).map(({ id }) => id)
-  await persist()
-  try {
-    for (const method of ["dispatch", "all", "failed", "job"]) await probe("active-before", method)
-    // Mark restoration required BEFORE a possibly ambiguous disable response.
-    ledger.restoration = "required"
-    await persist()
-    assert.equal(
-      (await api("PUT", `${prefix}/actions/workflows/${workflow.id}/disable`)).status,
-      204,
-    )
-    for (const method of ["dispatch", "all", "failed", "job"]) await probe("disabled", method)
-  } finally {
-    ledger.outcome = classifyFenceProbe(ledger.observations)
-    if (ledger.restoration === "required") {
-      try {
-        assert.equal(
-          (await api("PUT", `${prefix}/actions/workflows/${workflow.id}/enable`)).status,
-          204,
-        )
-        await state("active")
-        ledger.restoration = "restored-active"
-      } catch {
-        ledger.restoration = "failed-requires-operator"
-      }
+  const initialBranchCall = await get(`${base}/git/ref/heads/${defaultBranch}`)
+  assert.equal(initialBranchCall.response.object.sha, historicalSha)
+  const workflowCall = await get(`${base}/actions/workflows/recovery-fence-probe.yml`)
+  const workflowId = String(workflowCall.response.id),
+    wf = `${base}/actions/workflows/${workflowId}`
+  assert.equal(workflowCall.response.path, workflow)
+  assert.equal(workflowCall.response.state, "active")
+  ledger.initialRunIds = (await readProbeInventory(get, wf)).records.map((r) => r.id)
+  const historicalSeedDispatchCall = await api("POST", `${wf}/dispatches`, {
+    ref: defaultBranch,
+    inputs: { probe_id: "historical-seed" },
+  })
+  assert.equal(historicalSeedDispatchCall.status, 200)
+  const seedId = historicalSeedDispatchCall.response?.workflow_run_id
+  assert.ok(Number.isSafeInteger(seedId) && seedId > 0, "direct seed ID required")
+  let historicalSeedRunCall, historicalSeedJobsCall
+  const deadline = Date.now() + 240000
+  while (Date.now() < deadline) {
+    const call = await api("GET", `${base}/actions/runs/${seedId}/attempts/1`)
+    if (call.status === 404) {
+      await delay(5000)
+      continue
     }
-    await persist()
+    assert.equal(call.status, 200)
+    if (call.response.status !== "completed") {
+      await delay(5000)
+      continue
+    }
+    historicalSeedRunCall = call
+    historicalSeedJobsCall = await get(
+      `${base}/actions/runs/${seedId}/attempts/1/jobs?per_page=100&page=1`,
+    )
+    break
   }
-  assert.equal(ledger.restoration, "restored-active")
-  for (const method of ["dispatch", "all", "failed", "job"]) await probe("active-after", method)
-  await inventory()
-  ledger.outcome = classifyFenceProbe(ledger.observations)
-  ledger.finishedAt = new Date().toISOString()
-  await persist()
-  t.diagnostic(
-    `Fence result: ${ledger.outcome}. Fixture runs are retained as evidence; no release resources were created.`,
+  assert.ok(
+    historicalSeedRunCall && historicalSeedJobsCall,
+    "seed must drain before advancing branch",
   )
+  assert.equal(historicalSeedRunCall.response.head_sha, historicalSha)
+  assert.equal(historicalSeedRunCall.response.conclusion, "failure")
   assert.equal(
-    ledger.outcome,
-    "disposable-fence-observed",
-    "workflow disable is not a demonstrated fence; production recovery remains blocked",
+    historicalSeedJobsCall.response.jobs
+      .find((j) => j.name === "writer")
+      ?.steps.find((s) => s.name === FENCE_FIXTURES.historical.step)?.conclusion,
+    "failure",
   )
+  const beforeAdvance = await get(`${base}/git/ref/heads/${defaultBranch}`)
+  assert.equal(
+    beforeAdvance.response.object.sha,
+    historicalSha,
+    "default branch moved before fixture advance",
+  )
+  const advancedWrite = await api("PUT", `${base}/contents/${workflow}`, {
+    message: "test(release): advance disposable fence fixture",
+    content: Buffer.from(fixtureBytes.current).toString("base64"),
+    sha: historicalFixtureCall.response.sha,
+    branch: defaultBranch,
+  })
+  assert.equal(advancedWrite.status, 200)
+  const currentSha = advancedWrite.response.commit.sha
+  const advancedBranchCall = await get(`${base}/git/ref/heads/${defaultBranch}`)
+  assert.equal(advancedBranchCall.response.object.sha, currentSha)
+  const currentFixtureCall = await get(`${base}/contents/${workflow}?ref=${currentSha}`)
+  const suffix = randomUUID(),
+    currentTag = `fence-current-${suffix}`,
+    historicalTag = `fence-historical-${suffix}`
+  const tagCalls = []
+  for (const [tag, sha] of [
+    [currentTag, currentSha],
+    [historicalTag, historicalSha],
+  ]) {
+    ledger.ownedTags.push({ tag, sha, creation: "pending" })
+    await persist()
+    const created = await api("POST", `${base}/git/refs`, { ref: `refs/tags/${tag}`, sha })
+    assert.equal(created.status, 201)
+    ledger.ownedTags.at(-1).creation = "confirmed"
+    tagCalls.push(await get(`${base}/git/ref/tags/${tag}`))
+  }
+  const evidence = {
+    schemaVersion: 1,
+    kind: "recovery-workflow-disable-evidence",
+    apiVersion: FENCE_API_VERSION,
+    startedAt: ledger.startedAt,
+    repository,
+    repositoryId: String(repo.id),
+    workflowId,
+    workflow,
+    defaultBranch,
+    historicalSha,
+    currentSha,
+    currentTag,
+    historicalTag,
+    probeClosureSha256: fenceDigest(fenceCanonical(closure)),
+    fixtureDigests: Object.fromEntries(
+      Object.entries(fixtureBytes).map(([k, v]) => [k, fenceDigest(v)]),
+    ),
+    setup: Object.fromEntries(
+      Object.entries({
+        repositoryCall,
+        historicalFixtureCall,
+        currentFixtureCall,
+        initialBranchCall,
+        advancedBranchCall,
+        currentTagCall: tagCalls[0],
+        historicalTagCall: tagCalls[1],
+        historicalSeedDispatchCall,
+        historicalSeedRunCall,
+        historicalSeedJobsCall,
+      }).map(([k, v]) => [k, v.id]),
+    ),
+  }
+  ledger.probeClosure = closure
+  try {
+    const matrix = await exerciseRecoveryFenceMatrix({
+      evidence: { ...evidence, seed: { id: seedId, attempt: 1 } },
+      api,
+      sleep: delay,
+      persist: async (progress) => {
+        ledger.progress = progress
+        ledger.restoration = progress.restorationRequired
+          ? "required"
+          : ledger.restoration === "required" || progress.transitions.disableCall
+            ? "active-and-drained"
+            : "not-needed"
+        await persist()
+      },
+    })
+    const witness = projectRecoveryFenceEvidence(
+      ledger.calls,
+      { ...evidence, ...matrix, finishedAt: new Date().toISOString() },
+      { fixtureBytes, probeClosureSha256: evidence.probeClosureSha256 },
+    )
+    const bytes = fenceCanonical(witness)
+    const evidenceSha256 = fenceDigest(bytes)
+    await writeFile(join(directory, `${evidenceSha256}.json`), bytes, { mode: 0o600 })
+    ledger.outcome = "disposable-fence-observed"
+    ledger.evidenceSha256 = evidenceSha256
+    ledger.restoration = "active-and-drained"
+  } finally {
+    // Retain only the explicitly ledger-owned tags, commits and runs for review.
+    // No broad delete, branch reset, or unowned run cancellation is performed.
+    ledger.finishedAt = new Date().toISOString()
+    await persist()
+    const rawLedgerSha256 = fenceDigest(await readFile(ledgerPath))
+    await writeFile(
+      join(directory, "report.json"),
+      `${JSON.stringify({ outcome: ledger.outcome, rawLedgerSha256, evidenceSha256: ledger.evidenceSha256 ?? null, retainedResources: { tags: ledger.ownedTags, runs: ledger.ownedRunIds }, restoration: ledger.restoration, serviceScope: "workflow-disable only; release publication and production topology remain separate" }, null, 2)}\n`,
+      { mode: 0o600 },
+    )
+  }
+  assert.equal(ledger.outcome, "disposable-fence-observed")
 })
