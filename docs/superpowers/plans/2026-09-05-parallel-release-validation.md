@@ -1,0 +1,16 @@
+# Parallel Release Validation Implementation Plan
+
+> **For agentic workers:** Use superpowers:executing-plans inline with independent review.
+
+**Goal:** Overlap controller verification with source verification without losing release gates.
+
+**Architecture:** Separate source and controller jobs, with the stable validate check aggregating their results plus packaging/harness checks.
+
+**Tech Stack:** Node 24, pnpm 10.33.0, GitHub Actions, node:test and YAML parser.
+
+- [x] Extend `scripts/release/test/release-integrity.test.mjs` with lane/wiring assertions and executable aggregate truth-table tests; run red.
+- [x] Update `.github/workflows/ci.yml` with source-validate, release-controller and aggregate validate jobs. Retain complete commands; no test exclusions or optional aggregate dependencies.
+- [x] Update exact workflow-entrypoints.json and workflow-safe-executables.json fixtures, preserving unrelated descriptors/classifications.
+- [x] Update AGENTS.md and CONTRIBUTORS.md with the new CI graph and unchanged local sequential validation.
+- [ ] Run focused preflight/workflow tests, lint/inventory/docs, independent review, commit and create stacked PR. CI must prove the complete controller suite works from an unbuilt checkout and all aggregate dependencies succeed.
+- [ ] Integrate after prerequisite PR #575 and required CI succeed, comparing final tested tree and recording timing evidence.
