@@ -1,5 +1,13 @@
 # @dawn-ai/inspector
 
+## 0.8.26
+
+### Patch Changes
+
+- Updated dependencies [c7fd197]
+  - @dawn-ai/core@0.8.26
+  - @dawn-ai/memory@0.8.26
+
 ## 0.8.25
 
 ### Patch Changes

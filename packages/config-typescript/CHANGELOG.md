@@ -1,5 +1,7 @@
 # @dawn-ai/config-typescript
 
+## 0.8.26
+
 ## 0.8.25
 
 ## 0.8.24

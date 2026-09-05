@@ -1,5 +1,11 @@
 # @dawn-example/research-web
 
+## 0.0.5
+
+### Patch Changes
+
+- @dawn-ai/ag-ui@0.8.26
+
 ## 0.0.4
 
 ### Patch Changes
