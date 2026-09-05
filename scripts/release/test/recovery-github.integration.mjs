@@ -282,11 +282,12 @@ test("disposable GitHub workflow disable across current and historical sources",
         await persist()
       },
     })
-    const witness = projectRecoveryFenceEvidence(
-      ledger.calls,
-      { ...evidence, ...matrix, finishedAt: new Date().toISOString() },
-      { fixtureBytes, probeClosureSha256: evidence.probeClosureSha256 },
-    )
+    ledger.witness = { ...evidence, ...matrix, finishedAt: new Date().toISOString() }
+    await persist()
+    const witness = projectRecoveryFenceEvidence(ledger.calls, ledger.witness, {
+      fixtureBytes,
+      probeClosureSha256: evidence.probeClosureSha256,
+    })
     const bytes = fenceCanonical(witness)
     const evidenceSha256 = fenceDigest(bytes)
     await writeFile(join(directory, `${evidenceSha256}.json`), bytes, { mode: 0o600 })

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { setTimeout as delay } from "node:timers/promises"
 import { FENCE_FIXTURES } from "../../recovery/fence-evidence.mjs"
+
+export async function downloadPublicationAsset(reader, assetId) {
+  const result = await reader.downloadReleaseAsset({ assetId, maximumBytes: 65536 })
+  assert.equal(result.status, "PRESENT", "production asset adapter must retrieve exact bytes")
+  return Buffer.from(result.contentBase64, "base64")
+}
 
 const digest = (value) => createHash("sha256").update(value).digest("hex")
 // Test-only service driver. Callers must separately authorize a disposable repo.
@@ -14,6 +21,7 @@ export async function runPublicationServiceProbe({
   anonymousGet,
   download,
   persist = async () => {},
+  sleep = delay,
 }) {
   assert.match(repository, /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/u)
   assert.notEqual(repository.toLowerCase(), "cacheplane/dawnai")
@@ -232,7 +240,14 @@ export async function runPublicationServiceProbe({
   assert.equal(published.draft, false)
   assert.equal(published.immutable, true)
   assert.equal(published.tag_name, tag)
-  const visible = await anonymousGet(releasePath)
+  // Public visibility can lag the authenticated immutable read. Re-observe
+  // only a 404, within a finite budget; never retry the publication mutation.
+  let visible
+  for (let attempt = 0; attempt < 12; attempt++) {
+    visible = await anonymousGet(releasePath)
+    if (visible.status !== 404 || attempt === 11) break
+    await sleep(5000)
+  }
   assert.equal(visible.status, 200)
   assert.equal(visible.body.id, owned.releaseId)
   assert.equal(digest(await download(owned.assetId)), payloadSha256)

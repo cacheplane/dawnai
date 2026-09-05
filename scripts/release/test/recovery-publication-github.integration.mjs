@@ -6,7 +6,10 @@ import { join } from "node:path"
 import test from "node:test"
 import { createGitHubReader } from "../adapters/github.mjs"
 import { authorizeFenceProbe } from "./support/recovery-github-fence.mjs"
-import { runPublicationServiceProbe } from "./support/recovery-publication-service.mjs"
+import {
+  downloadPublicationAsset,
+  runPublicationServiceProbe,
+} from "./support/recovery-publication-service.mjs"
 
 // Separate opt-in: unlike the harmless fence workflow, this leaves an immutable
 // prerelease and annotated tag in a PUBLIC disposable repository. No npm effects.
@@ -101,6 +104,11 @@ test("real annotated-tag publication, draft visibility and immutable asset readb
         ...(body === null ? {} : { body: upload ? body : JSON.stringify(body) }),
       })
       entry.status = response.status
+      entry.headers = Object.fromEntries(
+        ["date", "cache-control", "etag", "x-github-request-id", "x-ratelimit-remaining"].flatMap(
+          (name) => (response.headers.has(name) ? [[name, response.headers.get(name)]] : []),
+        ),
+      )
       const chunks = []
       let size = 0
       if (response.body)
@@ -162,17 +170,16 @@ test("real annotated-tag publication, draft visibility and immutable asset readb
           token,
           maxResponseBytes: 65536,
         })
-        const result = await reader.downloadReleaseAsset({ assetId, maximumBytes: 65536 })
-        assert.equal(result.status, "PRESENT", "production asset adapter must retrieve exact bytes")
+        const bytes = await downloadPublicationAsset(reader, assetId)
         ledger.calls.push({
           operation: "production-asset-download",
           assetId,
-          size: result.value.length,
-          sha256: hash(result.value),
+          size: bytes.length,
+          sha256: hash(bytes),
           finishedAt: new Date().toISOString(),
         })
         await save()
-        return result.value
+        return bytes
       },
       persist: async (owned) => {
         ledger.owned = structuredClone(owned)

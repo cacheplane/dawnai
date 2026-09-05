@@ -136,3 +136,25 @@ for (const failure of ["accepted-disabled", "unknown-disable", "unknown-dispatch
     assert.ok(restored[2].path.endsWith("/runs?per_page=100&page=1"))
   })
 }
+
+test("service driver accepts GitHub's empty object rerun acknowledgement and still observes execution", async () => {
+  const { fenceEvidenceFixture } = await import("./support/recovery-fence-fixture.mjs")
+  const { evidence } = await fenceEvidenceFixture()
+  let index = evidence.calls.findIndex((c) => c.id === evidence.setup.historicalTagCall) + 1
+  const seed = evidence.calls.find((c) => c.id === evidence.setup.historicalSeedRunCall).response
+  const matrix = await probe.exerciseRecoveryFenceMatrix({
+    evidence: { ...evidence, seed: { id: seed.id, attempt: 1 } },
+    sleep: async () => {},
+    api: async (method, path, body) => {
+      const call = structuredClone(evidence.calls[index++])
+      assert.deepEqual(
+        { method, path, body },
+        { method: call.method, path: call.path, body: call.body },
+      )
+      if (method === "POST" && call.status === 201) call.response = {}
+      return call
+    },
+  })
+  assert.equal(matrix.cases.length, 36)
+  assert.equal(index, evidence.calls.length)
+})

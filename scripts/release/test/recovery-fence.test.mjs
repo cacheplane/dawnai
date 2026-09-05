@@ -805,3 +805,116 @@ for (const timing of ["definitely reversed", "after observation"])
       /writer step execution/,
     )
   })
+
+test("fence evidence accepts empty object rerun acknowledgements only with independently observed attempts", async () => {
+  const subject = await import("../recovery/fence-evidence.mjs")
+  const f = await fenceEvidenceFixture()
+  for (const call of f.evidence.calls) {
+    if (call.method === "POST" && call.status === 201) call.response = {}
+  }
+  const validate = () =>
+    subject.validateRecoveryFenceEvidence(canonical(f.evidence), {
+      fixtureBytes: f.fixtureBytes,
+      probeClosureSha256: f.evidence.probeClosureSha256,
+    })
+  assert.equal(validate().cases.length, 36)
+  const call = f.evidence.calls.find((c) => c.method === "POST" && c.status === 201)
+  for (const response of [[], "", false, { workflow_run_id: 101 }]) {
+    call.response = response
+    assert.throws(validate, /rerun must advance/)
+  }
+})
+
+test("fence projection bounds each raw response and removes only unconsumed API metadata", async () => {
+  const subject = await import("../recovery/fence-evidence.mjs")
+  const f = await fenceEvidenceFixture()
+  const { calls, ...witness } = f.evidence
+  for (const c of calls) {
+    if (c.response && typeof c.response === "object" && !Array.isArray(c.response))
+      c.response.serviceMetadata = Object.fromEntries(
+        Array.from({ length: 500 }, (_, i) => [`ignored${i}`, i]),
+      )
+  }
+  const project = () =>
+    subject.projectRecoveryFenceEvidence(calls, witness, {
+      fixtureBytes: f.fixtureBytes,
+      probeClosureSha256: witness.probeClosureSha256,
+    })
+  const result = project()
+  assert.equal(result.cases.length, 36)
+  assert.ok(
+    result.calls
+      .filter((c) => c.method === "GET" && c.status === 200)
+      .every((c) => !c.response || !Object.hasOwn(c.response, "serviceMetadata")),
+  )
+  assert.ok(calls[0].response.serviceMetadata)
+  const observed = calls.find((c) => c.id === witness.cases[0].runAfterCall)
+  observed.response.head_sha = "c".repeat(40)
+  assert.throws(project, /fixture job identity mismatch|executed source mismatch/)
+})
+
+test("fence raw projection rejects accessor array entries without invoking them", async () => {
+  const subject = await import("../recovery/fence-evidence.mjs")
+  const f = await fenceEvidenceFixture()
+  const { calls, ...witness } = f.evidence
+  let invoked = false
+  Object.defineProperty(calls, "0", {
+    get() {
+      invoked = true
+      return {}
+    },
+    enumerable: true,
+  })
+  assert.throws(() =>
+    subject.projectRecoveryFenceEvidence(calls, witness, {
+      fixtureBytes: f.fixtureBytes,
+      probeClosureSha256: witness.probeClosureSha256,
+    }),
+  )
+  assert.equal(invoked, false)
+})
+
+test("fence setup accepts a branch read followed by the exact historical content read before dispatch", async () => {
+  const subject = await import("../recovery/fence-evidence.mjs")
+  const f = await fenceEvidenceFixture()
+  const contentIndex = f.evidence.calls.findIndex(
+    (c) => c.id === f.evidence.setup.historicalFixtureCall,
+  )
+  const branchIndex = f.evidence.calls.findIndex((c) => c.id === f.evidence.setup.initialBranchCall)
+  const content = f.evidence.calls[contentIndex],
+    branch = f.evidence.calls[branchIndex]
+  const interval = { startedAt: content.startedAt, finishedAt: content.finishedAt }
+  Object.assign(content, { startedAt: branch.startedAt, finishedAt: branch.finishedAt })
+  Object.assign(branch, interval)
+  f.evidence.calls[contentIndex] = branch
+  f.evidence.calls[branchIndex] = content
+  assert.equal(
+    subject.validateRecoveryFenceEvidence(canonical(f.evidence), {
+      fixtureBytes: f.fixtureBytes,
+      probeClosureSha256: f.evidence.probeClosureSha256,
+    }).cases.length,
+    36,
+  )
+})
+
+test("fence raw projection rejects oversized ledgers, sparse arrays and symbol properties", async () => {
+  const subject = await import("../recovery/fence-evidence.mjs")
+  for (const damage of ["oversized", "sparse", "symbol"]) {
+    const f = await fenceEvidenceFixture()
+    const { calls, ...witness } = f.evidence
+    if (damage === "oversized") {
+      const padding = "x".repeat(Math.ceil((33 * 1024 * 1024) / calls.length))
+      for (const c of calls) c.padding = padding
+    }
+    if (damage === "sparse") delete calls[0]
+    if (damage === "symbol") calls[Symbol("hidden")] = {}
+    assert.throws(
+      () =>
+        subject.projectRecoveryFenceEvidence(calls, witness, {
+          fixtureBytes: f.fixtureBytes,
+          probeClosureSha256: witness.probeClosureSha256,
+        }),
+      /raw ledger byte bound|dense raw call array/,
+    )
+  }
+})

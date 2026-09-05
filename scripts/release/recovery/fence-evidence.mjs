@@ -414,7 +414,7 @@ export function validateRecoveryFenceEvidence(raw, { fixtureBytes, probeClosureS
   const historicalContent = content(s.historicalFixtureCall, "historical", e.historicalSha),
     initialBranch = branch(s.initialBranchCall, e.historicalSha)
   before(repositoryCall, historicalContent)
-  before(historicalContent, initialBranch)
+  before(repositoryCall, initialBranch)
   const seedRequest = call(s.historicalSeedDispatchCall, "POST", `${wf}/dispatches`, [200])
   fenceExact(seedRequest.body, "ref inputs")
   fenceExact(seedRequest.body.inputs, "probe_id")
@@ -434,6 +434,7 @@ export function validateRecoveryFenceEvidence(raw, { fixtureBytes, probeClosureS
     "historical seed lineage mismatch",
   )
   before(initialBranch, seedRequest)
+  before(historicalContent, seedRequest)
   before(seedRequest, seed)
   before(seed, seedJobs.call)
   const advanced = branch(s.advancedBranchCall, e.currentSha),
@@ -588,7 +589,10 @@ export function validateRecoveryFenceEvidence(raw, { fixtureBytes, probeClosureS
             dispatchIds.add(runId)
           } else {
             fenceRequire(
-              request.response === null &&
+              (request.response === null ||
+                (typeof request.response === "object" &&
+                  !Array.isArray(request.response) &&
+                  Object.keys(request.response).length === 0)) &&
                 recoveryId(after.response.id) === recoveryId(target.response.id) &&
                 after.response.run_attempt === target.response.run_attempt + 1,
               "rerun must advance exactly one attempt",
@@ -631,15 +635,22 @@ export function validateRecoveryFenceEvidence(raw, { fixtureBytes, probeClosureS
   return e
 }
 
-// Task12 retains the full raw polling/setup ledger separately. This projector never
-// edits call data: the admitted document contains only explicitly referenced proof
-// witnesses, in their original order. Every selected witness is validated above.
+// Retain the full raw polling/setup ledger separately. The proof contains only
+// referenced calls, in original order, and the response fields validated above.
+// Projection preserves their values and every collection item; it invents no data.
 export function projectRecoveryFenceEvidence(rawCalls, witness, options) {
-  rawCalls = snapshotRecoveryData(rawCalls, 32 * 1024 * 1024)
   witness = snapshotRecoveryData(witness, 128 * 1024)
   fenceRequire(
-    Array.isArray(rawCalls) && rawCalls.length <= 10000 && !Object.hasOwn(witness, "calls"),
+    Array.isArray(rawCalls) &&
+      Object.getPrototypeOf(rawCalls) === Array.prototype &&
+      rawCalls.length <= 10000 &&
+      !Object.hasOwn(witness, "calls"),
     "bounded raw ledger and witness metadata required",
+  )
+  const entries = Object.getOwnPropertyDescriptors(rawCalls)
+  fenceRequire(
+    Reflect.ownKeys(entries).length === rawCalls.length + 1,
+    "dense raw call array required",
   )
   const references = new Set()
   const add = (value) => {
@@ -669,11 +680,82 @@ export function projectRecoveryFenceEvidence(rawCalls, witness, options) {
       add(c[key])
   const seen = new Set(),
     calls = []
-  for (const c of rawCalls) {
+  let rawBytes = 2
+  for (let index = 0; index < rawCalls.length; index++) {
+    const entry = entries[index]
+    fenceRequire(
+      entry && Object.hasOwn(entry, "value") && entry.enumerable,
+      "raw call data required",
+    )
+    // Retain the ledger separately. Snapshot each bounded API response before
+    // projecting: aggregate GitHub metadata must not consume the evidence's
+    // node budget, and omitted calls still receive the same input validation.
+    const c = snapshotRecoveryData(entry.value, 2 * 1024 * 1024)
+    rawBytes += Buffer.byteLength(JSON.stringify(c)) + 1
+    fenceRequire(rawBytes <= 32 * 1024 * 1024, "raw ledger byte bound")
     fenceRequire(typeof c.id === "string" && !seen.has(c.id), "unique raw call IDs required")
     seen.add(c.id)
-    if (references.has(c.id)) calls.push(c)
+    if (references.has(c.id)) calls.push({ ...c, response: projectFenceResponse(c, witness) })
   }
   fenceRequire(calls.length === references.size, "missing raw witness call")
   return validateRecoveryFenceEvidence(fenceCanonical({ ...witness, calls }), options)
+}
+
+// Preserve every field consumed by validation, every array item and its order.
+// This is a projection of observations, never normalization of their values.
+function projectFenceResponse(call, witness) {
+  if (call.method !== "GET" || call.status !== 200) return call.response
+  const pick = (value, keys) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(
+          keys
+            .split(" ")
+            .filter((key) => Object.hasOwn(value, key))
+            .map((key) => [key, value[key]]),
+        )
+      : value
+  const map = (value, project) => (Array.isArray(value) ? value.map(project) : value)
+  const run = (value) => {
+    const result = pick(
+      value,
+      "id run_attempt status conclusion head_sha head_branch event workflow_id path repository display_title",
+    )
+    if (result && Object.hasOwn(result, "repository"))
+      result.repository = pick(result.repository, "id full_name")
+    return result
+  }
+  const job = (value) => {
+    const result = pick(value, "id run_id run_attempt head_sha name status conclusion steps")
+    if (result && Object.hasOwn(result, "steps"))
+      result.steps = map(result.steps, (step) =>
+        pick(step, "name status conclusion number started_at completed_at"),
+      )
+    return result
+  }
+  const base = `/repos/${witness.repository}`
+  const workflow = `${base}/actions/workflows/${witness.workflowId}`
+  const value = call.response
+  if (call.path === base) return pick(value, "id full_name default_branch")
+  if (call.path.startsWith(`${base}/contents/`)) return pick(value, "path encoding content")
+  if (call.path.startsWith(`${base}/git/ref/`)) {
+    const result = pick(value, "ref object")
+    if (result && Object.hasOwn(result, "object")) result.object = pick(result.object, "type sha")
+    return result
+  }
+  if (call.path === workflow) return pick(value, "id path state")
+  if (call.path.startsWith(`${workflow}/runs?`)) {
+    const result = pick(value, "total_count workflow_runs")
+    if (result && Object.hasOwn(result, "workflow_runs"))
+      result.workflow_runs = map(result.workflow_runs, run)
+    return result
+  }
+  if (call.path.startsWith(`${base}/actions/runs/`)) {
+    if (call.path.includes("/jobs?")) {
+      const result = pick(value, "total_count jobs")
+      if (result && Object.hasOwn(result, "jobs")) result.jobs = map(result.jobs, job)
+      return result
+    }
+    return run(value)
+  }
+  return value
 }

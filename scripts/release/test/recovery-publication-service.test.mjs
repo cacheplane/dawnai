@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import test from "node:test"
+import { createGitHubReader } from "../adapters/github.mjs"
 
 const historicalWorkflow = await readFile(
   "scripts/release/test/fixtures/recovery-contract-workflow.yml",
@@ -199,4 +200,64 @@ test("default branch movement after upload blocks publication", async () => {
     fake.effects.some((e) => e.method === "PATCH"),
     false,
   )
+})
+
+test("publication service download decodes the production binary envelope without changing bytes", async () => {
+  assert.equal(typeof subject.downloadPublicationAsset, "function")
+  const bytes = Buffer.from([0, 255, 195, 40, 10])
+  const calls = []
+  const reader = createGitHubReader({
+    owner: "example",
+    repo: "release-lab",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init })
+      return new Response(bytes, { headers: { "content-type": "application/octet-stream" } })
+    },
+  })
+  assert.deepEqual(await subject.downloadPublicationAsset(reader, 200), bytes)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, "https://api.github.com/repos/example/release-lab/releases/assets/200")
+  assert.equal(calls[0].init.headers.Accept, "application/octet-stream")
+})
+
+test("publication service download refuses a failed production read", async () => {
+  assert.equal(typeof subject.downloadPublicationAsset, "function")
+  const reader = createGitHubReader({
+    owner: "example",
+    repo: "release-lab",
+    fetchImpl: async () => new Response("missing", { status: 404 }),
+  })
+  await assert.rejects(subject.downloadPublicationAsset(reader, 200), /production asset adapter/)
+})
+
+test("publication visibility may settle after authenticated immutable publication without another write", async () => {
+  const fake = service()
+  const original = fake.anonymousGet
+  let postPublishReads = 0
+  const sleeps = []
+  fake.sleep = async (ms) => sleeps.push(ms)
+  fake.anonymousGet = async () => {
+    const response = await original()
+    if (response.status === 200 && postPublishReads++ < 2) return { status: 404, body: null }
+    return response
+  }
+  assert.equal((await subject.runPublicationServiceProbe(fake)).status, "published-immutable")
+  assert.deepEqual(sleeps, [5000, 5000])
+  assert.equal(fake.effects.filter((e) => e.method === "PATCH").length, 1)
+})
+
+test("publication visibility settlement is bounded and does not retry non-404 failures", async () => {
+  for (const status of [404, 403]) {
+    const fake = service()
+    const original = fake.anonymousGet
+    const sleeps = []
+    fake.sleep = async (ms) => sleeps.push(ms)
+    fake.anonymousGet = async () => {
+      const response = await original()
+      return response.status === 200 ? { status, body: null } : response
+    }
+    await assert.rejects(subject.runPublicationServiceProbe(fake))
+    assert.equal(sleeps.length, status === 404 ? 11 : 0)
+    assert.equal(fake.effects.filter((e) => e.method === "PATCH").length, 1)
+  }
 })

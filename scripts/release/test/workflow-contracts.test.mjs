@@ -103,7 +103,7 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for Task 10a: strict GitHub inventories, bounded exact git reads, and dormant verifier closure.
 // Repinned for Task 12a: fresh complete-inventory npm signature batching.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "7787a80666020096bad3784a0b8d371187fb936b20becd5d95f8da46da03a789"
+  "c1ffb1c3f82a693e53cf4f3beeff06b4e44c1d7dc8f95b505237f54aea39cde3"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

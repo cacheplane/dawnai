@@ -200,7 +200,8 @@ export async function exerciseRecoveryFenceMatrix({
             await sleep(5000)
           } else {
             assert.equal(request.status, method === "dispatch" ? 200 : 201)
-            if (method !== "dispatch") assert.equal(request.response, null)
+            if (method !== "dispatch" && request.response !== null)
+              assert.deepEqual(request.response, {})
             const id =
               method === "dispatch" ? request.response?.workflow_run_id : target.run.response.id
             assert.ok(Number.isSafeInteger(id) && id > 0, "direct dispatch ID required")
