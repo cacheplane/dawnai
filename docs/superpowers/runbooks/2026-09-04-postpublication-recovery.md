@@ -562,6 +562,88 @@ verification selection. These uploads remain rejected by the writer until
 those admission checks exist. Recovery policy remains dormant, the adoption
 inventory is empty, and no live release record has been changed.
 
+## Complete evidence escrow (Task 7)
+
+A retained lane receipt needs durable proof of who checked its GitHub
+provenance. Task 7 adds a typed provenance receipt, independent writer
+admission, and observation of interrupted escrow. The descriptor binds
+the admitted escrow executor to the exact lane and installation bytes,
+as well as API-observed run, job, artifact, and validation identities.
+A fabricated descriptor cannot replace those checks.
+
+The durable descriptor is trusted through the admitted controller and exclusive
+recovery namespace ownership. It is not a cryptographic job-authorship
+signature. Once Actions bytes expire, REST cannot distinguish a deliberately
+forged compatible descriptor naming a real admitted producer. Manual writes
+outside the guarded owner invalidate this model. Direct writer admission
+must reject invented artifact IDs, while later observation rejects missing
+descriptors, invalid adoption chains, and invented producer runs/jobs.
+
+GitHub artifact metadata exposes a service digest and workflow-run
+identity, but does not directly identify its producing job or run attempt.
+Correlation therefore also requires the attempt-specific job inventory
+and the reviewed artifact naming and upload contract. See the
+[artifact API](https://docs.github.com/en/rest/actions/artifacts).
+
+A fresh read-only check found release `382873833` still a mutable draft
+with 45 assets and the same opaque tag; the production release workflow
+remains active. This metadata check is not a new artifact-byte or fence
+verification. Main advanced to `67d92077828780762ec4c31028f7aba8d7fc7167`
+through PR #570 (CORS), without release-path changes. Reconcile that base
+before final implementation validation.
+
+Root independently downloaded existing Actions artifact `9963893629` from
+run `33947431338`. Its ZIP was exactly 944 bytes and SHA-256
+`b0eefc7d22818728f96b5d5e251c51e2985d26f0581ee42acda99ac615ae2852`,
+matching the service size and digest. The API timestamps had second
+precision. This read-only check verifies the service metadata/download
+contract, not the new recovery workflow or a production fence
+(`/tmp/dawn-task7-live-artifact-contract.json`).
+
+A root-owned deterministic adapter-count probe completed escrow with 19
+effects, 2,322 Release-asset downloads, 861 npm tarball downloads, 41
+npm-audit setups, and 22 Actions artifact downloads
+(`/tmp/dawn-task7-observation-cost.json`). These are fixture call counts,
+not measured production latency. Task 12 must reduce repeated transfer
+and setup within an invocation while preserving independently fresh
+identity checks, exact bytes, strict cleanup, and audit independence.
+This performance acceptance work remains pending.
+
+Both independent Task 7 reviews passed, each running 111 evidence, observer,
+and writer tests. Root independently passed 515 affected recovery/workflow
+tests and the definitive full-controller run: 2,803 passed, zero failed,
+approximately 149 seconds (`/tmp/dawn-recovery-task7-controller-verified.log`).
+Scoped Biome passed for 14 source/test/data files; inventory, docs, and
+diff checks passed. Removing the independent provenance comparison in
+an isolated source copy made the fake-artifact regression fail with a
+missing expected rejection (`/tmp/dawn-recovery-task7-root-mutation.log`).
+Repository source was not weakened. Policy remains dormant; no live
+workflow or Release mutation occurred.
+
+## Final validation investigation
+
+A bounded investigation independently reproduced a PID-readiness defect in
+`test/k8s-compat/harness.test.ts`. The fixture accepts an empty PID marker,
+then converts it to zero and incorrectly reports a live descendant even
+when the actual owned process is gone. Delaying stdout after publishing a
+valid PID passed; all 20 sequential and 24 concurrent baseline reruns passed.
+The controlled failure had a different event count from the historical
+CI failure, so historical causality remains unconfirmed. Task 13 will fix
+the demonstrated fixture defect and preserve the cleanup assertions.
+Evidence and the exact reproduction are recorded in
+`/tmp/dawn-pid-diag-summary.md`, `/tmp/dawn-pid-diag-repetitions.jsonl`,
+`/tmp/dawn-pid-diag-concurrent.jsonl`, and
+`/tmp/dawn-pid-diag-reproduction.patch`. Temporary checkout files and owned
+descendants were cleaned; the investigation changed no tracked code.
+
+Upstream main CI [run 33947398526](https://github.com/cacheplane/dawnai/actions/runs/33947398526)
+at `67d92077828780762ec4c31028f7aba8d7fc7167` failed its native Vercel
+preview job before this recovery implementation was integrated. Its
+verified diagnostic artifact `9963890376` reports `native Vercel source
+deploy attempt failed`; the deeper deploy cause was not present in the
+downloaded diagnostic files. Track this external CI boundary during
+final validation; local checks cannot establish that it passes.
+
 ## Implementation validation
 
 - Node 24.20.0; Corepack pnpm 10.33.0; frozen install passed.

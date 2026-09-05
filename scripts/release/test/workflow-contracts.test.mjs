@@ -98,8 +98,9 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // observations, and finalization proof validation even before the readiness marker. Legacy
 // NPM_COMPLETE plus finalization is an invalid mixed state, never a resumable adoption.
 // Repinned for Task 6: shared v1/v2 smoke operations and bounded physical installation evidence.
+// Repinned for Task 7: independently observed Actions escrow and durable provenance selection.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "c67ea4e2e23aa963ab4de33d2c6f378a33fd193ae544e96691ca6477056cbef5"
+  "db0ca9d41ffe24d1c7fbdd7dacf411961f049291e58e9eca5048c671ed5a2965"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
 import * as manifest from "../../manifest.mjs"
 import * as metadata from "../../metadata.mjs"
+import { recoveryProvenanceName } from "../../recovery/evidence-proof.mjs"
 import { canonicalPolicyBytes, hashVerifierClosure } from "../../recovery/policy.mjs"
 import { canonicalRecoveryBytes, metadataCheckName } from "../../recovery/schema.mjs"
 import * as record from "../../release-record.mjs"
@@ -184,27 +185,53 @@ export async function recoveryRemote({
   }
   const selected = Object.entries(lanes).map(([lane, value]) => ({
     lane,
-    receipt: add(`recovery-v2-lane-${lane}-903-1.json`, value),
+    receipt: add(`recovery-v2-lane-${lane}-903-1-${value.executor.jobId}.json`, value),
     executor: value.executor,
     conclusion: "success",
   }))
+  const provenanceDescriptors = selected.map((selected, index) =>
+    wire("recovery-provenance", {
+      policySha256,
+      executor: e,
+      provenance: {
+        lane: selected.lane,
+        executor: selected.executor,
+        artifactId: String(200 + index),
+        serviceDigest: `sha256:${digest(selected.lane)}`,
+        receiptSha256: selected.receipt.sha256,
+        conclusion: selected.conclusion,
+        validatedAt: "2026-09-04T10:04:00.000Z",
+      },
+      receipt: selected.receipt,
+      installations: sort(
+        lanes[selected.lane].installations.map((d) =>
+          installationAssets.find((r) => r.assetName === d.assetName),
+        ),
+      ),
+      artifact: {
+        name: selected.receipt.assetName.slice(0, -5),
+        size: 1024,
+        workflowId: "801",
+        createdAt: "2026-09-04T10:02:00.000Z",
+        updatedAt: "2026-09-04T10:02:00.000Z",
+        jobStartedAt: "2026-09-04T10:00:00.000Z",
+        jobCompletedAt: "2026-09-04T10:03:00.000Z",
+      },
+    }),
+  )
+  const provenanceAssets = provenanceDescriptors.map((value) =>
+    add(recoveryProvenanceName(value), value),
+  )
   const retainedReceipts = sort([
     ...installationAssets,
+    ...provenanceAssets,
     ...(retainedRaw === null ? [] : [add("recovery-v2-retained-903-1.json", retainedRaw)]),
   ])
   const set = wire("recovery-verification-set", {
     policySha256,
     executor: e,
     lanes: selected,
-    provenance: selected.map((s, i) => ({
-      lane: s.lane,
-      executor: s.executor,
-      artifactId: String(200 + i),
-      serviceDigest: `sha256:${digest(s.lane)}`,
-      receiptSha256: s.receipt.sha256,
-      conclusion: "success",
-      validatedAt: "2026-09-04T10:02:00.000Z",
-    })),
+    provenance: provenanceDescriptors.map((p) => p.provenance),
     retainedReceipts,
     conclusion: "success",
   })
@@ -339,6 +366,15 @@ export async function recoveryRemote({
       return present([ci])
     },
     async getActionsRunAttempt({ runId }) {
+      if (String(runId) === e.runId)
+        return present({
+          ...ci,
+          id: Number(e.runId),
+          path: e.workflow,
+          workflow_id: 801,
+          event: "workflow_dispatch",
+          status: "in_progress",
+        })
       return present(
         String(runId) === "905"
           ? {
@@ -351,10 +387,24 @@ export async function recoveryRemote({
           : ci,
       )
     },
-    async getWorkflow() {
+    async getWorkflow({ workflow } = {}) {
+      if (workflow === e.workflow.split("/").at(-1))
+        return present({ id: 801, path: e.workflow, state: "active" })
       return present({ id: 800, path: policy.ci.workflow, state: "active" })
     },
     async listActionsRunJobs({ runId }) {
+      if (String(runId) === e.runId)
+        return present([
+          {
+            id: Number(e.jobId),
+            runAttempt: Number(e.runAttempt),
+            name: "recovery-evidence",
+            status: "in_progress",
+            conclusion: null,
+            startedAt: "2026-09-04T10:03:30.000Z",
+            completedAt: null,
+          },
+        ])
       return present(
         String(runId) === "905"
           ? [{ id: 906, runAttempt: 1, status: "completed", conclusion: "success" }]
@@ -442,6 +492,8 @@ export async function recoveryRemote({
     e,
     base,
     policy,
+    provenanceAssets,
+    provenanceDescriptors,
     intent,
     marker,
     release,

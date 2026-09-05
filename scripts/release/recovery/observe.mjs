@@ -6,6 +6,11 @@ import { canonicalManifestBytes, parseSealedReleaseManifest } from "../manifest.
 import { parseReleaseMarker, verifyReleaseAttestationAnchor } from "../metadata.mjs"
 import { NPM_AUDIT_VERIFIER } from "../npm-audit.mjs"
 import { canonicalReleaseRecordBytes, parseReleaseRecord } from "../release-record.mjs"
+import {
+  recoveryProvenanceName,
+  verifyRecoveryEscrowProducer,
+  verifyRecoveryProvenanceBindings,
+} from "./evidence-proof.mjs"
 import { parseRecoveryReleaseMarker, renderRecoveryFinalMetadata } from "./metadata.mjs"
 import {
   planRecovery,
@@ -105,6 +110,7 @@ function readerContext({ github, git }) {
   }
   const budget = createRecoveryWorkBudget({ phaseDeadline })
   return {
+    now,
     read: (name, args) => envelope(() => recoveryMethods(github, [name])[name](args)),
     download: (args) =>
       envelope(
@@ -672,7 +678,26 @@ async function recoveryChain(
     }
   }
   await validateRetained(adoption.retainedAttempts)
-  const verificationRef = finalization?.verificationSet ?? marker.verificationSet
+  const escrow = []
+  for (const ref of refs.filter((r) => r.assetName.startsWith("recovery-v2-provenance-"))) {
+    const descriptor = wire(ref, "recovery-provenance")
+    requireThat(ref.assetName === recoveryProvenanceName(descriptor), "provenance name differs")
+    await executorAdmission(context, c, descriptor.executor, policySha256, cache)
+    await verifyRecoveryEscrowProducer(descriptor, context.read, context.now())
+    const lane = wire(descriptor.receipt, "recovery-lane")
+    const installationBytes = Object.fromEntries(
+      lane.installations.map((d) => [d.assetName, bytes.get(d.assetName)?.toString("base64")]),
+    )
+    verifyRecoveryProvenanceBindings(descriptor, lane, refs, installationBytes, manifestPackages)
+    escrow.push({ ref, receipt: descriptor, lane })
+  }
+  facts.escrow = escrow
+  const partialSets = refs.filter((r) => r.assetName.startsWith("recovery-v2-verification-set-"))
+  requireThat(
+    marker?.verificationSet || finalization || partialSets.length <= 1,
+    "ambiguous partial verification selection",
+  )
+  const verificationRef = finalization?.verificationSet ?? marker?.verificationSet ?? partialSets[0]
   if (!verificationRef) return facts
   const set = wire(verificationRef, "recovery-verification-set")
   await executorAdmission(context, c, set.executor, policySha256, cache)
@@ -680,6 +705,20 @@ async function recoveryChain(
   const installations = {}
   for (const selected of set.lanes) {
     const lane = wire(selected.receipt, "recovery-lane")
+    const provenance = escrow.filter(
+      (entry) =>
+        entry.receipt.receipt.assetName === selected.receipt.assetName &&
+        set.retainedReceipts.some((r) => r.assetName === entry.ref.assetName),
+    )
+    requireThat(
+      provenance.length === 1,
+      "selected lane requires one accepted trusted escrow descriptor",
+    )
+    same(
+      provenance[0].receipt.provenance,
+      set.provenance.find((p) => p.lane === lane.lane),
+      "selected provenance differs from trusted escrow",
+    )
     const policy = admitted.policy
     const lanePolicy = policy.lanes.find((item) => item.name === lane.lane)
     const required = [
@@ -732,6 +771,27 @@ async function recoveryChain(
     lanes,
     installations,
     provenance: set.provenance,
+  }
+  if (!marker?.verificationSet && !finalization) {
+    const selectedNames = new Set(set.lanes.map((l) => l.receipt.assetName))
+    const baseNames = new Set(
+      [
+        ...adoption.baseAssets,
+        adoption.archive,
+        ...adoption.retainedAttempts,
+        adoptionRef,
+        verificationRef,
+      ].map((r) => r.assetName),
+    )
+    same(
+      set.retainedReceipts,
+      refs.filter((r) => !selectedNames.has(r.assetName) && !baseNames.has(r.assetName)),
+      "partial selection must retain every receipt",
+    )
+    verifyRecoveryObservedPhase({
+      ...facts,
+      marker: { ...marker, phase: "VERIFICATION_COMPLETE", verificationSet: verificationRef },
+    })
   }
   const auditRef = finalization?.audit ?? marker.audit
   if (!auditRef) return facts

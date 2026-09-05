@@ -4,6 +4,15 @@ import { types } from "node:util"
 import { requestGitHubJson } from "../adapters/github-write-transport.mjs"
 import { captureRecoveryAuthority, captureRecoveryEligibility } from "./authority.mjs"
 import {
+  buildRecoveryVerificationSet,
+  observeRecoveryLaneEvidence,
+  readRecoveryEvidencePolicy,
+  recoveryProvenanceName,
+  recoveryVerificationName,
+  verifyRecoveryEscrowProducer,
+  verifyRecoveryProvenanceBindings,
+} from "./evidence-proof.mjs"
+import {
   parseRecoveryReleaseMarker,
   renderRecoveryFinalMetadata,
   renderRecoveryReleaseBody,
@@ -413,10 +422,14 @@ export function createRecoveryWriter(config, dependencies) {
             canonicalRecoveryBytes(receipt).equals(bytes),
             "canonical receipt bytes required",
           )
-          // Later controllers must add their independently verified provenance gates
-          // before enabling lane, verification-set, audit, or run-result uploads.
           const allowed = {
             NPM_COMPLETE: ["recovery-adoption"],
+            RECOVERY_ADOPTED: [
+              "recovery-lane",
+              "recovery-installation",
+              "recovery-provenance",
+              "recovery-verification-set",
+            ],
             AUDIT_VERIFIED: ["recovery-finalization"],
           }
           requireThat(
@@ -427,6 +440,88 @@ export function createRecoveryWriter(config, dependencies) {
             /^recovery-v2-[A-Za-z0-9._@+-]+\.json$/u.test(args.name),
             "recovery asset namespace invalid",
           )
+          if (current.phase === "RECOVERY_ADOPTED") {
+            requireThat(
+              !current.facts.verification,
+              "accepted verification selection freezes new verification assets",
+            )
+            const eligibility = await capture(args, current, "verify")
+            if (receipt.kind === "recovery-verification-set") {
+              requireThat(
+                args.name === recoveryVerificationName(receipt.executor),
+                "attempt-qualified verification name required",
+              )
+              same(
+                receipt,
+                buildRecoveryVerificationSet(current, eligibility.executor),
+                "verification selection differs from independently persisted escrow",
+              )
+            } else {
+              const lane =
+                receipt.kind === "recovery-provenance" ? receipt.provenance.lane : receipt.lane
+              const verified = await observeRecoveryLaneEvidence(
+                {
+                  candidate: args.candidate,
+                  executor: eligibility.executor,
+                  policy: await readRecoveryEvidencePolicy(
+                    eligibility.executor,
+                    eligibility.policySha256,
+                    observation.git,
+                  ),
+                  policySha256: eligibility.policySha256,
+                  manifestPackages: current.facts.manifestPackages,
+                  lane,
+                },
+                observation.github,
+                { now, sleep: callbacks.sleep },
+              )
+              requireThat(!verified.missing, verified.missing ?? "lane proof unavailable")
+              if (receipt.kind === "recovery-provenance") {
+                requireThat(
+                  args.name === recoveryProvenanceName(receipt),
+                  "digest-qualified provenance name required",
+                )
+                same(receipt.executor, eligibility.executor, "escrow producer differs")
+                const { validatedAt: _time, ...expected } = verified.provenance
+                const { validatedAt: stamp, ...claimed } = receipt.provenance
+                same(claimed, expected, "provenance differs from independent API proof")
+                requireThat(Date.parse(stamp) <= now(), "provenance timestamp is in the future")
+                same(
+                  receipt.artifact,
+                  verified.artifact,
+                  "artifact descriptor differs from independent API proof",
+                )
+                verifyRecoveryProvenanceBindings(
+                  receipt,
+                  verified.lane,
+                  current.facts.assets,
+                  verified.installations,
+                  current.facts.manifestPackages,
+                )
+                await verifyRecoveryEscrowProducer(
+                  receipt,
+                  async (method, input) => {
+                    const envelope = await runRecoveryRead(
+                      { phaseDeadline: deadline },
+                      () => recoveryMethods(observation.github, [method])[method](input),
+                      { now, sleep: callbacks.sleep },
+                    )
+                    requireThat(envelope.status === "PRESENT", "producer API proof unavailable")
+                    return envelope.value
+                  },
+                  now(),
+                )
+              } else {
+                same(
+                  args.contentBase64,
+                  receipt.kind === "recovery-lane" && args.name === verified.name
+                    ? verified.contentBase64
+                    : verified.installations[args.name],
+                  "raw bytes differ from independently downloaded artifact membership",
+                )
+              }
+            }
+          }
           if (receipt.kind === "recovery-adoption") {
             same(receipt.baseAssets, current.facts.baseAssets, "adoption base inventory differs")
             same(receipt.npmEvidence, current.facts.npmEvidence, "adoption npm proof differs")
@@ -538,37 +633,63 @@ export function createRecoveryWriter(config, dependencies) {
           )
           await immutablePolicy(args)
         } else {
-          requireThat(
-            current.phase === "NPM_COMPLETE" && marker.phase === "RECOVERY_ADOPTED",
-            "unsupported transition; selection controller not implemented",
-          )
-          const selected = current.facts.partialAdoption.attempts.find(
-            (a) => a.ref.assetName === marker.adoption.assetName,
-          )
-          requireThat(selected, "adoption receipt is not independently persisted")
-          same(
-            marker,
-            {
-              schemaVersion: 2,
-              kind: "recovery-marker",
-              candidate: args.candidate,
-              policySha256: selected.receipt.policySha256,
-              revision: 1,
-              phase: "RECOVERY_ADOPTED",
-              adoption: selected.ref,
-              verificationSet: null,
-              audit: null,
-              finalization: null,
-            },
-            "adoption marker differs from verified receipt",
-          )
-          same(
-            selected.receipt.retainedAttempts,
-            current.facts.partialAdoption.attempts
-              .map((a) => a.ref)
-              .filter((r) => r.assetName !== selected.ref.assetName),
-            "adoption must retain every earlier valid attempt",
-          )
+          if (current.phase === "RECOVERY_ADOPTED" && marker.phase === "VERIFICATION_COMPLETE") {
+            requireThat(
+              current.facts.verification,
+              "independently persisted verification selection required",
+            )
+            same(
+              marker,
+              {
+                ...current.facts.marker,
+                revision: current.facts.marker.revision + 1,
+                phase: "VERIFICATION_COMPLETE",
+                verificationSet: current.facts.verification.ref,
+              },
+              "verification marker differs",
+            )
+            const eligibility = await capture(args, current, "verify")
+            const plan = planRecovery({ ...current.facts, ...eligibility, publication: null })
+            requireThat(
+              plan.outcome === "planned" &&
+                plan.effects.some(
+                  (e) => e.operation === "write-marker" && e.target === "VERIFICATION_COMPLETE",
+                ),
+              plan.errors.join("; ") || "verification advancement is not admissible",
+            )
+          } else {
+            requireThat(
+              current.phase === "NPM_COMPLETE" && marker.phase === "RECOVERY_ADOPTED",
+              "unsupported transition; selection controller not implemented",
+            )
+            const selected = current.facts.partialAdoption.attempts.find(
+              (a) => a.ref.assetName === marker.adoption.assetName,
+            )
+            requireThat(selected, "adoption receipt is not independently persisted")
+            same(
+              marker,
+              {
+                schemaVersion: 2,
+                kind: "recovery-marker",
+                candidate: args.candidate,
+                policySha256: selected.receipt.policySha256,
+                revision: 1,
+                phase: "RECOVERY_ADOPTED",
+                adoption: selected.ref,
+                verificationSet: null,
+                audit: null,
+                finalization: null,
+              },
+              "adoption marker differs from verified receipt",
+            )
+            same(
+              selected.receipt.retainedAttempts,
+              current.facts.partialAdoption.attempts
+                .map((a) => a.ref)
+                .filter((r) => r.assetName !== selected.ref.assetName),
+              "adoption must retain every earlier valid attempt",
+            )
+          }
         }
         await compare(args, current)
         const proof = await capture(args, current, "adopt")

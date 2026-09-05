@@ -137,7 +137,7 @@
       "scripts/release/smoke/storage.mjs",
       "scripts/release/topology.mjs"
     ],
-    "sha256": "a1e0e61e2031d230398c2f6c2877c84117ae7ce8f969ed01672b2b3fbc586be7"
+    "sha256": "22e174f1b1d4f644eb19f582d5d9633cb0eb5c820a56d3b587bc4cb897c73949"
   },
   "workflows": [
     ".github/workflows/release-postpublication-audit.yml",

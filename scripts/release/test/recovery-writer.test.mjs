@@ -139,7 +139,7 @@ test("write failure preserves HTTP status without exposing service credentials",
   })
 })
 
-test("future marker transitions remain denied until their selection controller is implemented", async () => {
+test("verification marker cannot select a set omitting retained receipts", async () => {
   const r = await recoveryWriteRemote()
   r.activate(r.allAssets.filter((a) => a.assetName !== "recovery-v2-finalization.json"))
   r.release.body = renderRecoveryReleaseBody({ marker: r.marker, body: "Notes" })
@@ -158,12 +158,12 @@ test("future marker transitions remain denied until their selection controller i
         body: "Notes",
       }),
     }),
-    /transition|implemented|unsupported/,
+    /partial selection must retain every receipt/,
   )
   assert.equal(r.effects.length, 0)
 })
 
-test("future lane uploads cannot bypass the unimplemented provenance admission controller", async () => {
+test("lane uploads cannot bypass independent artifact admission", async () => {
   const r = await recoveryWriteRemote()
   r.activate([...r.baseAssets, r.adoption.archive, r.adoptionRef])
   r.release.body = renderRecoveryReleaseBody({ marker: r.marker, body: "Notes" })
@@ -174,7 +174,7 @@ test("future lane uploads cannot bypass the unimplemented provenance admission c
       name: "recovery-v2-lane-metadata-unproven.json",
       contentBase64: canonicalRecoveryBytes(r.lanes.metadata).toString("base64"),
     }),
-    /forbidden|implemented/,
+    /method|dependency|function/,
   )
   assert.equal(r.effects.length, 0)
 })
@@ -475,3 +475,62 @@ for (const stalled of ["headers", "body"])
       globalThis.clearTimeout = originalClear
     }
   })
+
+test("direct provenance upload rejects invented artifact identity with a real admitted producer", async () => {
+  const { evidenceRemote } = await import("./support/recovery-evidence-fixture.mjs")
+  const { collectRecoveryEvidence } = await import("../recovery/evidence.mjs")
+  const { recoveryProvenanceName } = await import("../recovery/evidence-proof.mjs")
+  const r = await evidenceRemote()
+  const accepted = await collectRecoveryEvidence(r.request, r.config, r.dependencies)
+  const original = accepted.facts.escrow[0]
+  r.activate(
+    r
+      .assets()
+      .filter(
+        (ref) =>
+          ref.assetName !== accepted.facts.verification.ref.assetName &&
+          ref.assetName !== original.ref.assetName,
+      ),
+  )
+  r.release.body = renderRecoveryReleaseBody({ marker: r.marker, body: "Notes" })
+  const forged = structuredClone(original.receipt)
+  forged.provenance.artifactId = "999"
+  const effects = r.effects.length
+  await assert.rejects(
+    writer(r).uploadRecoveryAsset({
+      ...r.request,
+      expectedBodySha256: digest(r.release.body),
+      name: recoveryProvenanceName(forged),
+      contentBase64: canonicalRecoveryBytes(forged).toString("base64"),
+    }),
+    /independent API proof/,
+  )
+  assert.equal(r.effects.length, effects)
+})
+
+test("direct selection upload cannot invent independent provenance or omit retained installations", async () => {
+  const { evidenceRemote } = await import("./support/recovery-evidence-fixture.mjs")
+  const { collectRecoveryEvidence } = await import("../recovery/evidence.mjs")
+  const { recoveryVerificationName } = await import("../recovery/evidence-proof.mjs")
+  const r = await evidenceRemote()
+  const accepted = await collectRecoveryEvidence(r.request, r.config, r.dependencies)
+  r.activate(
+    r.assets().filter((ref) => ref.assetName !== accepted.facts.verification.ref.assetName),
+  )
+  r.release.body = renderRecoveryReleaseBody({ marker: r.marker, body: "Notes" })
+  const selection = structuredClone(accepted.facts.verification.set)
+  selection.retainedReceipts = selection.retainedReceipts.filter(
+    (ref) => !ref.assetName.startsWith("recovery-v2-installation-"),
+  )
+  const effects = r.effects.length
+  await assert.rejects(
+    writer(r).uploadRecoveryAsset({
+      ...r.request,
+      expectedBodySha256: digest(r.release.body),
+      name: recoveryVerificationName(selection.executor),
+      contentBase64: canonicalRecoveryBytes(selection).toString("base64"),
+    }),
+    /independently persisted escrow/,
+  )
+  assert.equal(r.effects.length, effects)
+})

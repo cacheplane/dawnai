@@ -261,6 +261,17 @@ descriptor and the release-hosted receipt bytes under the accepted adoption
 chain; expired Actions downloads are not required again. Missing or conflicting
 provenance that was never successfully escrowed blocks acceptance.
 
+Durable v2 provenance is evidence validated by the admitted controller under
+exclusive ownership of the recovery asset namespace. The writer checks
+actual Actions metadata and downloaded bytes before escrow; later readers
+verify the admitted producer run/job and exact retained bindings. This is
+not a cryptographic signature proving which job authored each Release
+asset. After artifact expiry, REST cannot distinguish an administrator
+deliberately forging a compatible descriptor naming a real admitted job.
+Such out-of-controller namespace writes violate the supported ownership
+model. This delivery adds no new attestation-writing authority; original
+package and manifest attestations remain independently verified.
+
 ## Independent audit and finalization
 
 Add a dedicated independent post-publication audit workflow invoked at the

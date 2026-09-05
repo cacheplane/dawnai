@@ -420,26 +420,38 @@ PID cleanup failure. No workflow dispatch or production mutation occurred.
 **Files:** Create `recovery/evidence.mjs`, `test/recovery-evidence.test.mjs`.
 Extend `recovery/writer.mjs` with the corresponding independently verified escrow
 admission gates and tests; Task 5 intentionally rejects these uploads until this
-controller exists.
+controller exists. Add a bounded `recovery-provenance` receipt to the dormant
+wire schema, and extend observation to verify partial escrow and a selection
+whose upload completed before its marker update. Provenance must bind the
+admitted escrow executor as well as the independently observed lane and artifact
+identities; receipt-supplied assertions alone confer no authority.
 
-- [ ] Test every missing/failed lane, duplicate/foreign artifact, incorrect
+- [x] Test every missing/failed lane, duplicate/foreign artifact, incorrect
   job/run/attempt/SHA, noncanonical receipt, forged self-claimed identity, and
   interrupted escrow. All five selected receipts must belong to one run/attempt.
-- [ ] Run `node --test scripts/release/test/recovery-evidence.test.mjs` for red.
-- [ ] Correlate API-observed workflow/run/jobs and exact artifact IDs/digests;
+- [x] Run `node --test scripts/release/test/recovery-evidence.test.mjs` for red.
+- [x] Correlate API-observed workflow/run/jobs and exact artifact IDs/digests;
   download bounded ZIPs and require their exact files/bytes. Then upload raw
   receipts plus independently observed provenance descriptors to the release.
   Include every digest-linked installation sidecar from Task 6, verifying exact
   checkpoint identity, canonical bytes, size, count, and artifact-file membership.
   Escrow sidecars in the retained inventory before selecting their lane receipts;
   do not omit them from ZIP validation, upload admission, or resume checks.
-- [ ] Persist a complete immutable selection including retained receipt inventory,
+- [x] Persist a complete immutable selection including retained receipt inventory,
   re-read it, then advance to `VERIFICATION_COMPLETE`. Missing/failed checks stay
   nonterminal with diagnostic receipts. A repeat with durable selection is a
   no-op, independent of Actions download retention.
-- [ ] Test expiry before escrow blocks missing proof, while expiry after valid
+- [x] Test expiry before escrow blocks missing proof, while expiry after valid
   escrow succeeds without downloading the expired artifact. Reject a fabricated
   descriptor with no accepted trusted escrow chain. Commit after tests pass.
+
+Task 7 is implemented and reviewed as dormant code. Both independent
+reviews passed (111 tests each); root passed 515 affected tests and all
+2,803 controller tests with zero failures (approximately 149 seconds).
+Scoped Biome checked 14 files; inventory, docs, and diff checks passed.
+An isolated mutation of the independent provenance comparison caused its
+forgery regression to fail as expected. The measured repeated-observation
+cost is tracked as required Task 12 work. No live recovery effects occurred.
 
 ## Task 8: Independent audit dispatch and correlation
 
@@ -586,6 +598,16 @@ Update `test:release-fault-harness` to include the new local rehearsal explicitl
   recreation, and a late observation resolving after the phase deadline; neither
   may permit a late or overlapping mutation. Task 5 quality review verified
   these cases with independent probes.
+- [ ] Measure the production-adapter work per complete recovery phase. The
+Task 7 deterministic fixture exposed 2,322 Release-asset downloads, 861
+npm tarball downloads, and 41 npm-audit setups for 19 writes. Reduce
+repeated payload transfer/setup within one invocation before calling the
+pipeline ready. Reuse bounded payload bytes only against independently
+fresh exact identities; caches never authorize a transition. Preserve
+fresh mutation guards, verifier cleanup/settlement, and the independent
+audit workspace. Test changed IDs/digests, cache corruption, expiry,
+deadlines, and interrupted resume, and report measured before/after
+counts without presenting fixture timings as production performance.
 - [ ] Prepare a GitHub contract harness with an explicit disposable repository
   allowlist, fixture-owned ID ledger, and cleanup limited to those resources.
   Require `DAWN_TEST_RECOVERY_GITHUB=1` and a separately supplied authorized test
@@ -620,6 +642,13 @@ Update `test:release-fault-harness` to include the new local rehearsal explicitl
 tested admission/fencing/retry operations and references to actual rehearsal
 evidence. Do not add a production adoption record in this commit.
 
+- [ ] Correct the independently reproduced PID-readiness fixture defect before
+final gates: wait for a validated descendant PID, retain it for guarded
+cleanup observation, and add a barrier-based empty-marker regression. Keep
+all descendant-termination and token/cluster cleanup-order assertions. Add
+failure diagnostics that distinguish invalid PID publication from actual
+unconfirmed containment. The earlier full-CI failure is not yet attributed
+to this defect; do not call it resolved solely from the controlled repro.
 - [ ] Run `pnpm ci:validate` at the final implementation head. It includes lint,
   build-cache, build, typecheck, source tests, inventory, controller tests, docs,
   packing, TypeScript tooling, and harness lanes. Run

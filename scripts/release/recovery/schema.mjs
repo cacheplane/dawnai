@@ -51,6 +51,7 @@ const FIELDS = {
     "policySha256 lane executor environment startedAt finishedAt checks resolutions installations conclusion",
   "recovery-installation": "policySha256 lane executor check resolutions",
   "recovery-verification-set": "policySha256 executor lanes provenance retainedReceipts conclusion",
+  "recovery-provenance": "policySha256 executor provenance receipt installations artifact",
   "recovery-audit-intent":
     "policySha256 requestId expectedAuditorSha verificationSetSha256 inventory executor",
   "recovery-audit-dispatch": "requestId intentSha256 runId expectedAuditorSha executor",
@@ -115,6 +116,17 @@ function timestamp(value) {
     Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value,
     "valid UTC timestamp",
   )
+}
+// GitHub timestamps preserve their reported precision. A second covers only that second.
+export function recoveryApiTimestampRange(value) {
+  text(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u, "API timestamp")
+  const low = Date.parse(value)
+  requireThat(
+    Number.isFinite(low) &&
+      new Date(low).toISOString() === value.replace(/(?<!\.[0-9]{3})Z$/u, ".000Z"),
+    "valid API timestamp",
+  )
+  return [low, low + (value.includes(".") ? 0 : 999)]
 }
 function version(value) {
   requireThat(
@@ -512,6 +524,45 @@ function validate(value) {
         "subject resolution required",
       )
       break
+    case "recovery-provenance": {
+      const p = value.provenance
+      exact(p, "lane executor artifactId serviceDigest receiptSha256 conclusion validatedAt")
+      enumeration(p.lane, RECOVERY_LANES)
+      executor(p.executor)
+      sameRun(p.executor, value.executor)
+      text(p.artifactId, decimal, "artifact ID")
+      text(p.serviceDigest, /^sha256:[a-f0-9]{64}$/u, "service digest")
+      text(p.receiptSha256, hash, "receipt digest")
+      enumeration(p.conclusion, ["success", "failure"])
+      timestamp(p.validatedAt)
+      ref(value.receipt, true)
+      same(value.receipt.sha256, p.receiptSha256, "provenance receipt digest")
+      inventory(value.installations, "recovery")
+      requireThat(value.installations.length <= RECOVERY_LIMITS.installations, "installation count")
+      const a = value.artifact
+      exact(a, "name size workflowId createdAt updatedAt jobStartedAt jobCompletedAt")
+      text(a.name, assetName, "artifact name")
+      integer(a.size, 1, RECOVERY_LIMITS.retainedBytes)
+      text(a.workflowId, decimal, "workflow ID")
+      for (const key of ["createdAt", "updatedAt", "jobStartedAt", "jobCompletedAt"])
+        recoveryApiTimestampRange(a[key])
+      const before = (left, right) =>
+        recoveryApiTimestampRange(left)[0] <= recoveryApiTimestampRange(right)[1]
+      requireThat(
+        before(a.jobStartedAt, a.createdAt) &&
+          before(a.createdAt, a.updatedAt) &&
+          before(a.updatedAt, a.jobCompletedAt) &&
+          before(a.jobCompletedAt, p.validatedAt),
+        "artifact job timing correlation",
+      )
+      same(
+        a.name,
+        `recovery-v2-lane-${p.lane}-${p.executor.runId}-${p.executor.runAttempt}-${p.executor.jobId}`,
+        "artifact attempt identity",
+      )
+      same(value.receipt.assetName, `${a.name}.json`, "artifact receipt name")
+      break
+    }
     case "recovery-verification-set": {
       list(
         value.lanes,

@@ -503,5 +503,50 @@ test("valid older installation receipts remain retained diagnostic evidence", as
   const result = await observe(remote.args)
   assert.equal(result.outcome, "complete", result.errors.join("; "))
   assert.equal(Object.keys(result.facts.verification.installations).length, 7)
-  assert.equal(result.facts.verification.set.retainedReceipts.length, 8)
+  assert.equal(result.facts.verification.set.retainedReceipts.length, 13)
 })
+
+test("selection without a retained trusted provenance descriptor cannot replay", async () => {
+  const remote = await recoveryRemote({
+    published: true,
+    mutateSet: (set) => {
+      set.retainedReceipts = set.retainedReceipts.filter(
+        (ref) => !ref.assetName.startsWith("recovery-v2-provenance-"),
+      )
+    },
+  })
+  const result = await observe(remote.args)
+  assert.equal(result.outcome, "blocked")
+  assert.match(result.errors.join("; "), /trusted escrow descriptor/)
+})
+
+for (const field of ["jobId", "runId"])
+  test(`partial escrow cannot invent its producer ${field}`, async () => {
+    const { recoveryProvenanceName } = await import("../recovery/evidence-proof.mjs")
+    const remote = await recoveryRemote()
+    const original = remote.provenanceDescriptors[0]
+    const descriptor = structuredClone(original)
+    descriptor.executor[field] = "999"
+    if (field === "runId") {
+      // A canonical same-run descriptor may still claim a nonexistent real invocation.
+      descriptor.provenance.executor.runId = "999"
+      descriptor.artifact.name = descriptor.artifact.name.replace("-903-", "-999-")
+      descriptor.receipt.assetName = `${descriptor.artifact.name}.json`
+    }
+    const forged = remote.add(recoveryProvenanceName(descriptor), descriptor)
+    remote.setAssets([
+      ...remote.baseAssets,
+      remote.adoption.archive,
+      remote.adoptionRef,
+      ...remote.installationAssets,
+      ...remote.set.lanes.map((l) => l.receipt),
+      forged,
+    ])
+    remote.release.body = metadata.renderRecoveryReleaseBody({
+      marker: remote.marker,
+      body: "Notes",
+    })
+    const result = await observe(remote.args)
+    assert.equal(result.outcome, "blocked")
+    assert.match(result.errors.join("; "), /producer (job|run) identity/)
+  })

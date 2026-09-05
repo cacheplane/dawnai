@@ -36,6 +36,9 @@ export async function recoveryWriteRemote() {
             id: Number(execution.jobId),
             runAttempt: Number(execution.runAttempt),
             status: "in_progress",
+            name: "recovery-evidence",
+            startedAt: "2026-09-04T10:03:30.000Z",
+            completedAt: null,
           },
         ])
       : originalJobs(args)
