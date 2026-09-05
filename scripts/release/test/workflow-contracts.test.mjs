@@ -95,7 +95,7 @@ const SCRIPT_PIN_PATH = path.join(ROOT, SCRIPT_PIN_FIXTURE)
 // Repinned for GitHub transport-error precedence: body timeouts and deterministic read
 // failures retain their cause before HTTP status can classify them as retryable responses.
 const STARTING_SCRIPT_PIN_SHA256 =
-  "5f47c315f6055934d59d09ed18e077fb4c4b61606cd566c254c6949f82afe7b1"
+  "033a170ad5abb70d7150df94e6424265870b946c27ae9b45f6b7b0e6e56f625c"
 const SHA256_HEX = /^[0-9a-f]{64}$/u
 const workflowExpression = (value) => `\${{ ${value} }}`
 const SCRIPT_REFERENCE = /(?:^|[\s;&|"'(])(scripts\/[\w.-]+(?:\/[\w.-]+)*)/gu
@@ -119,7 +119,10 @@ const REVIEWED_DYNAMIC_IMPORT_SEAMS = Object.freeze([
 // so an entry whose reader disappears fails as a stale pin rather than lingering unreviewed.
 // scripts/release/controller-schema.json selects the npm trusted-publisher environment and the
 // abandonment environment; candidate.mjs, cli.mjs, and independent-audit.mjs all read it.
-const RELEASE_DATA_FILES = Object.freeze(["scripts/release/controller-schema.json"])
+const RELEASE_DATA_FILES = Object.freeze([
+  "scripts/release/controller-schema.json",
+  "scripts/release/recovery/policy.json",
+])
 const RELEASE_PIN_REACH = Object.freeze({
   workflowEntrypoint:
     "A final release owner runs it directly or through package.json, so its bytes must be pinned with the command line.",
@@ -2673,7 +2676,10 @@ test("final release reachability pins the transitive import closure of every ent
   })
 
   await t.test("the declared release data files are read by pinned release modules", () => {
-    assert.deepEqual(RELEASE_DATA_FILES, ["scripts/release/controller-schema.json"])
+    assert.deepEqual(RELEASE_DATA_FILES, [
+      "scripts/release/controller-schema.json",
+      "scripts/release/recovery/policy.json",
+    ])
   })
 
   await t.test("a pinned module that disappeared fails closed", async () => {

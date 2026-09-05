@@ -237,7 +237,11 @@ test("scheduled discovery enumerates managed Releases and standalone tags before
       .sort((left, right) => left - right),
     [221, 233, 241, 242],
   )
-  assert.ok(github.calls.every(([operation, id]) => operation !== "listReleaseAssets" || id !== 99))
+  // Display labels cannot hide durable recovery ownership on otherwise unmanaged Releases.
+  assert.equal(
+    github.calls.filter(([operation, id]) => operation === "listReleaseAssets" && id === 99).length,
+    1,
+  )
 })
 
 test("a standalone active candidate tag is recovered as CANDIDATE_TAGGED", async () => {
@@ -433,7 +437,7 @@ test("scheduled discovery admits an exact AUDIT_VERIFIED draft for production ob
   )
 })
 
-test("scheduled discovery ignores malformed temporary drafts beside a marker-backed candidate", async () => {
+test("scheduled discovery blocks an unclassifiable controller envelope on an opaque draft", async () => {
   const repository = repositoryFixture([
     commit(BASE_SHA, "0.8.20"),
     commit(SHA_21, "0.8.21", { parent: BASE_SHA, marker: true }),
@@ -455,18 +459,19 @@ test("scheduled discovery ignores malformed temporary drafts beside a marker-bac
     ],
   })
 
-  const result = await discoverScheduledCandidate({
-    terminalRecordRef: RECORD_REF,
-    inventory: repository.inventory,
-    git: repository.git,
-    github,
-    marker: ACTIVE_MARKER,
-  })
-
-  assert.deepEqual(result, selectedCandidate("0.8.21", SHA_21, "CANDIDATE_TAGGED"))
+  await assert.rejects(
+    discoverScheduledCandidate({
+      terminalRecordRef: RECORD_REF,
+      inventory: repository.inventory,
+      git: repository.git,
+      github,
+      marker: ACTIVE_MARKER,
+    }),
+    /Unsupported recovery\/legacy marker blocks routing/,
+  )
   assert.deepEqual(
     github.calls.filter(([operation]) => operation === "listReleaseAssets"),
-    [["listReleaseAssets", release.id]],
+    [["listReleaseAssets", 99]],
   )
 })
 

@@ -249,7 +249,11 @@ function candidateSelection(value) {
 }
 
 function terminalHistoricalState(state) {
-  return state === ReleaseState.AUDIT_COMPLETE || state === ReleaseState.ABANDONED_PREPUBLICATION
+  return (
+    state === ReleaseState.RECOVERY_COMPLETE ||
+    state === ReleaseState.AUDIT_COMPLETE ||
+    state === ReleaseState.ABANDONED_PREPUBLICATION
+  )
 }
 
 function isReleaseVersion(value) {

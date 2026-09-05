@@ -1,0 +1,356 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+import { markerAt, wireFixtures } from "./support/recovery-fixture.mjs"
+
+const metadata = await import("../recovery/metadata.mjs").catch(() => ({}))
+const observer = await import("../recovery/observe.mjs").catch(() => ({}))
+
+test("v2 metadata round trips canonical bounded wire without a legacy interpretation", () => {
+  assert.equal(typeof metadata.renderRecoveryReleaseBody, "function")
+  const marker = markerAt("PUBLICATION_READY")
+  const body = metadata.renderRecoveryReleaseBody({ marker, body: "Original notes" })
+  assert.deepEqual(metadata.parseRecoveryReleaseMarker(body), marker)
+  for (const corrupt of [
+    body.replace('"schemaVersion":2', '"schemaVersion":3'),
+    `${body}\n${body}`,
+    body.replace('"revision":5', '"revision":5,"revision":5'),
+  ])
+    assert.throws(() => metadata.parseRecoveryReleaseMarker(corrupt))
+  assert.throws(() =>
+    metadata.renderRecoveryReleaseBody({ marker, body: "<!-- DAWN_RELEASE_CONTROLLER_MARKER\n" }),
+  )
+})
+
+test("fixed finalization reconstructs readiness metadata without recursive digests", () => {
+  assert.equal(typeof metadata.renderRecoveryFinalMetadata, "function")
+  const f = wireFixtures()
+  const rendered = metadata.renderRecoveryFinalMetadata(f.finalization, f.finalRef)
+  assert.equal(rendered.title, f.finalization.metadata.title)
+  assert.deepEqual(
+    metadata.parseRecoveryReleaseMarker(rendered.body),
+    markerAt("PUBLICATION_READY", f),
+  )
+  assert.ok(!JSON.stringify(f.finalization).includes(f.finalRef.sha256))
+})
+
+test("independent recovery observer is exported separately from the v1 observation schema", () => {
+  assert.equal(typeof observer.observeRecoveryCandidate, "function")
+})
+
+import { recoveryRemote } from "./support/recovery-observe-fixture.mjs"
+
+const observe = async (args) => {
+  assert.equal(typeof observer.observeRecoveryCandidate, "function")
+  return observer.observeRecoveryCandidate(args)
+}
+
+test("reserved legacy NPM_COMPLETE independently checks unchanged original assets and all npm versions", async () => {
+  const remote = await recoveryRemote()
+  const result = await observe(remote.args)
+  assert.equal(result.outcome, "recovery-required")
+  assert.equal(result.phase, "NPM_COMPLETE")
+  assert.equal(result.terminal, false)
+  assert.equal(result.facts.manifestPackages.length, remote.base.manifest.packages.length)
+  assert.equal(result.facts.npmEvidence.conclusion, "success")
+  assert.ok(remote.calls.includes("dispose"))
+})
+
+test("adopted draft uses separate recovery facts without a fake v1 smoke or publication proof", async () => {
+  const remote = await recoveryRemote()
+  remote.release.body = metadata.renderRecoveryReleaseBody({ marker: remote.marker, body: "Notes" })
+  remote.setAssets([...remote.baseAssets, remote.adoption.archive, remote.adoptionRef])
+  const result = await observe(remote.args)
+  assert.equal(result.phase, "RECOVERY_ADOPTED")
+  assert.equal(result.outcome, "recovery-required")
+  assert.equal(result.terminal, false)
+  assert.equal(result.observation, undefined)
+})
+
+for (const body of ["corrupt <!-- DAWN_RELEASE_CONTROLLER_MARKER\n{", "", "Human edited notes"]) {
+  test(`published immutable finalization remains terminal despite display body ${JSON.stringify(body)}`, async () => {
+    const remote = await recoveryRemote({ published: true })
+    remote.release.body = body
+    remote.release.name = "Human edited title"
+    const result = await observe(remote.args)
+    assert.equal(result.outcome, "complete", JSON.stringify(result.errors))
+    assert.equal(result.phase, "COMPLETE")
+    assert.equal(result.terminal, true)
+    assert.equal(result.displayDrift, true)
+  })
+}
+
+for (const [name, mutate] of [
+  [
+    "absent npm package",
+    (r) => {
+      r.args.npm.observePackageVersion = async () => ({ status: "ABSENT", httpStatus: 404 })
+    },
+  ],
+  [
+    "conflicting npm tarball",
+    (r) => {
+      r.args.npm.downloadRegistryTarball = async () => ({
+        status: "PRESENT",
+        tarball: { contentBase64: "Y29uZmxpY3Q=" },
+      })
+    },
+  ],
+  [
+    "wrong canonical release ID",
+    (r) => {
+      r.release.id = 999
+    },
+  ],
+  [
+    "wrong annotated tag",
+    (r) => {
+      r.args.github.getGitTag = async () => ({
+        status: "PRESENT",
+        value: {
+          tag: r.c.tag,
+          sha: r.c.tagObjectSha,
+          object: { type: "commit", sha: "e".repeat(40) },
+        },
+      })
+    },
+  ],
+  [
+    "original asset byte replacement",
+    (r) => {
+      r.raws.set("manifest.json", Buffer.from("tampered"))
+    },
+  ],
+  [
+    "unknown marker schema",
+    (r) => {
+      r.release.body = metadata
+        .renderRecoveryReleaseBody({ marker: r.marker, body: "Notes" })
+        .replace('"schemaVersion":2', '"schemaVersion":3')
+    },
+  ],
+  [
+    "invalid original attestation",
+    (r) => {
+      r.args.attestations = { verify: async () => ({ status: "INVALID" }) }
+    },
+  ],
+  [
+    "npm source mismatch",
+    (r) => {
+      r.args.npmAuditFactory = {
+        create: async () => ({
+          verifyPackage: async () => ({ status: "verified", signature: { status: "valid" } }),
+          dispose: async () => {},
+        }),
+      }
+    },
+  ],
+])
+  test(`${name} blocks recovery without opening legacy ownership`, async () => {
+    const r = await recoveryRemote()
+    mutate(r)
+    const result = await observe(r.args)
+    assert.equal(result.outcome, "blocked")
+    assert.equal(result.terminal, false)
+    assert.ok(result.errors.length > 0)
+  })
+
+test("terminal chain cannot fabricate reviewed-main-ci from a policy and source digest", async () => {
+  const r = await recoveryRemote({ published: true })
+  r.args.github.getCommitCheckRuns = async () => ({ status: "PRESENT", value: [] })
+  const result = await observe(r.args)
+  assert.equal(result.outcome, "blocked")
+  assert.equal(result.terminal, false)
+})
+
+import { runRecoveryRead } from "../recovery/policy.mjs"
+
+test("large release payload uses an explicit bounded transport budget, preserving the receipt JSON cap", async () => {
+  const base64 = Buffer.alloc(12_107_594, 1).toString("base64")
+  const result = await runRecoveryRead(
+    { phaseDeadline: Date.now() + 10000, responseBytes: base64.length + 256 },
+    async () => ({ status: "PRESENT", contentBase64: base64 }),
+  )
+  assert.equal(result.contentBase64, base64)
+  await assert.rejects(
+    runRecoveryRead({ phaseDeadline: Date.now() + 10000 }, async () => ({
+      status: "PRESENT",
+      contentBase64: base64,
+    })),
+    /byte limit/,
+  )
+})
+for (const options of [
+  { operations: ["adopt"] },
+  { ownerWorkflow: ".github/workflows/unapproved.yml" },
+  { ownerWorkflow: ".github/workflows/release-postpublication-audit.yml" },
+  { platform: "darwin" },
+])
+  test(`coherent terminal chain rejects ineligible historical authority ${JSON.stringify(options)}`, async () => {
+    const r = await recoveryRemote({ published: true, ...options })
+    const result = await observe(r.args)
+    assert.equal(result.outcome, "blocked")
+    assert.equal(result.terminal, false)
+  })
+test("unknown retained receipt cannot become valid by appearing in the final inventory", async () => {
+  const r = await recoveryRemote({ published: true, retainedRaw: '{"schemaVersion":99}\n' })
+  const result = await observe(r.args)
+  assert.equal(result.outcome, "blocked")
+  assert.equal(result.terminal, false)
+})
+for (const [phase, ref] of [
+  ["VERIFICATION_COMPLETE", "setRef"],
+  ["AUDIT_PENDING", "dispatchRef"],
+  ["AUDIT_VERIFIED", "auditRef"],
+])
+  test(`${phase} collects and verifies its selected intermediate recovery evidence`, async () => {
+    const r = await recoveryRemote()
+    const marker = {
+      ...r.marker,
+      phase,
+      revision: phase === "VERIFICATION_COMPLETE" ? 2 : phase === "AUDIT_PENDING" ? 3 : 4,
+      verificationSet: r.setRef,
+      audit: phase === "VERIFICATION_COMPLETE" ? null : r[ref],
+    }
+    r.release.body = metadata.renderRecoveryReleaseBody({ marker, body: "notes" })
+    r.setAssets(r.allAssets.filter((a) => a.assetName !== "recovery-v2-finalization.json"))
+    const result = await observe(r.args)
+    assert.equal(result.outcome, "recovery-required", JSON.stringify(result.errors))
+    assert.ok(result.facts.verification)
+    if (phase !== "VERIFICATION_COMPLETE") assert.ok(result.facts.audit)
+  })
+test("observer rejects dependency accessors before executing them", async () => {
+  const r = await recoveryRemote()
+  let calls = 0
+  Object.defineProperty(r.args, "github", {
+    get() {
+      calls++
+      return {}
+    },
+  })
+  await assert.rejects(observe(r.args), /descriptor|safe|accessor/)
+  assert.equal(calls, 0)
+})
+test("missing current recovery policy blocks durable ownership rather than dropping to legacy", async () => {
+  const r = await recoveryRemote({ published: true })
+  r.args.controllerRef = "f".repeat(40)
+  const original = r.args.git.showFile
+  r.args.git.showFile = async (args) => {
+    if (args.ref === r.args.controllerRef && args.path === "scripts/release/recovery/policy.json")
+      throw new Error("policy missing")
+    return original(args)
+  }
+  const result = await observe(r.args)
+  assert.equal(result.outcome, "blocked")
+  assert.equal(result.terminal, false)
+})
+test("timed out verifier cleanup waits for settlement and runs exactly once without accepting late proof", async () => {
+  assert.equal(typeof observer.createRecoveryWorkBudget, "function")
+  let timeout,
+    resolveWork,
+    cleanups = 0
+  const budget = observer.createRecoveryWorkBudget(
+    { phaseDeadline: 100 },
+    {
+      now: () => 0,
+      setTimer: (fn) => {
+        timeout = fn
+        return 1
+      },
+      clearTimer: () => {},
+    },
+  )
+  const delayed = new Promise((resolve) => {
+    resolveWork = resolve
+  })
+  const result = budget.work(
+    () => delayed,
+    async () => {
+      cleanups++
+    },
+  )
+  await Promise.resolve()
+  timeout()
+  await assert.rejects(result, /deadline/)
+  assert.equal(cleanups, 0)
+  resolveWork({ status: "verified" })
+  await delayed
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(cleanups, 1)
+  assert.equal(budget.settled(), false)
+  await assert.rejects(
+    budget.work(async () => "late authority"),
+    /not settled/,
+  )
+})
+test("asset budgets admit separate original and retained limits and reject a namespace overflow", () => {
+  assert.equal(typeof observer.normalizeRecoveryAssetInventory, "function")
+  const assets = Array.from({ length: 40 }, (_, i) => ({
+    id: i + 1,
+    name: `package-${i}.tgz`,
+    size: 1024 * 1024,
+    digest: `sha256:${"a".repeat(64)}`,
+  })).concat(
+    Array.from({ length: 40 }, (_, i) => ({
+      id: i + 41,
+      name: `recovery-v2-retained-${i}.json`,
+      size: 1024 * 1024,
+      digest: `sha256:${"b".repeat(64)}`,
+    })),
+  )
+  assert.equal(observer.normalizeRecoveryAssetInventory(assets).length, 80)
+  assets.push(
+    ...Array.from({ length: 25 }, (_, i) => ({
+      id: i + 81,
+      name: `recovery-v2-retained-extra-${i}.json`,
+      size: 1024 * 1024,
+      digest: `sha256:${"b".repeat(64)}`,
+    })),
+  )
+  assert.throws(() => observer.normalizeRecoveryAssetInventory(assets), /budget/)
+})
+
+test("idle npm verifier is disposed when an ordinary read exhausts the observation deadline", async () => {
+  const r = await recoveryRemote()
+  const originalNow = Date.now
+  let tick = originalNow()
+  let cleanupCalls = 0
+  const create = r.args.npmAuditFactory.create
+  r.args.npmAuditFactory.create = async () => {
+    const verifier = await create()
+    return {
+      ...verifier,
+      async dispose() {
+        cleanupCalls++
+        return verifier.dispose()
+      },
+    }
+  }
+  const read = r.args.npm.observePackageVersion
+  r.args.npm.observePackageVersion = async (args) => {
+    tick += 1_200_001
+    return read(args)
+  }
+  Date.now = () => tick
+  try {
+    const result = await observe(r.args)
+    assert.equal(result.outcome, "blocked")
+    assert.equal(result.terminal, false)
+    assert.equal(cleanupCalls, 1)
+  } finally {
+    Date.now = originalNow
+  }
+})
+
+test("canonical published recovery metadata is terminal without display drift", async () => {
+  const r = await recoveryRemote({ published: true })
+  const rendered = metadata.renderRecoveryFinalMetadata(r.finalization, r.finalRef)
+  r.release.name = rendered.title
+  r.release.body = rendered.body
+  const result = await observe(r.args)
+  assert.equal(result.outcome, "complete", JSON.stringify(result.errors))
+  assert.equal(result.terminal, true)
+  assert.equal(result.facts.publication.metadata, "matching")
+  assert.equal(result.displayDrift, false)
+})

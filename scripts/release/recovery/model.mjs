@@ -530,3 +530,16 @@ export function planRecovery(input) {
     )
   }
 }
+
+// Read-only observer validation shares proof rules without granting writer eligibility.
+export function verifyRecoveryObservedPhase(input) {
+  const facts = snapshotRecoveryData(input, 16 * 1024 * 1024)
+  adoptionProof(facts)
+  const marker = markerProof(facts)
+  const index = RECOVERY_PHASES.indexOf(marker.phase)
+  if (index >= 1) verificationProof(facts)
+  if (index >= 2) dispatchProof(facts)
+  if (index >= 3) auditProof(facts)
+  if (index >= 4) finalProof(facts, facts.finalization)
+  return marker.phase
+}

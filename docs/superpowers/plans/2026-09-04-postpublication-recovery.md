@@ -74,13 +74,14 @@ Avoid adding the new protocol to the large version 1 `metadata.mjs`.
 | `policy.mjs`, `policy.json` | Required checks, approved verifier closure, environments, bounded retry policy |
 | `authority.mjs` | Invocation CI/SHA checks, git adoption records, ownership and replay-fence admission |
 | `observe.mjs` | Independently verified candidate/registry/asset facts, version 2 discovery |
+| `metadata.mjs` | Version 2 marker envelope and pure canonical display reconstruction |
 | `model.mjs` | Pure transition planning, terminal completion and display-drift classification |
 | `writer.mjs` | Version 2-only bounded GitHub upload/body/publication effects |
 | `adopt.mjs` | Legacy archive, retained migration receipts, ownership transition |
 | `smoke.mjs` | Version 2 lane execution and receipt provenance; existing probe operations reused |
 | `evidence.mjs` | Actions receipt correlation, release escrow, complete verification-set selection |
 | `audit.mjs` | Exact independent dispatch/correlation and fresh external audit |
-| `finalize.mjs` | Finalization asset, canonical metadata rendering, publication/re-observation |
+| `finalize.mjs` | Finalization asset, shared metadata renderer, publication/re-observation |
 | `runtime.mjs`, `cli.mjs` | Dependency composition, strict CLI/environment projection, reports |
 | `scripts/release/recovery-adoptions/.gitkeep` | Empty initial adoption inventory |
 | `.github/workflows/release-postpublication.yml` | Manual recovery owner |
@@ -269,40 +270,52 @@ removal failed as expected and passed after restoration. The shared reader now
 preserves transport failure provenance; both source and aggregate integrity pins
 were updated. See the [runbook](../runbooks/2026-09-04-postpublication-recovery.md)
 for validation history and the unresolved earlier source-suite failure. Production
-fencing, ownership routing, writers, and workflow integration remain pending.
+fencing, writers, and workflow integration remain pending; Task 4 below adds
+ownership routing.
 
 ## Task 4: Observe artifacts and route versioned ownership
 
-**Files:** Create `recovery/observe.mjs`, `test/recovery-observe.test.mjs`,
-`test/recovery-routing.test.mjs`. Modify `candidate.mjs`, `observe.mjs`,
-`cli.mjs`, `observation-schema.mjs`, `state.mjs`, `planner.mjs`, `evidence.mjs`,
-`conflicts.mjs`, `independent-audit-coordinator.mjs`, `post-publication-audit.mjs`.
+**Files:** Create `recovery/observe.mjs`, `recovery/metadata.mjs`,
+`test/recovery-observe.test.mjs`, `test/recovery-routing.test.mjs`, and
+`test/support/recovery-observe-fixture.mjs`. Modify `candidate.mjs`, `observe.mjs`,
+`cli.mjs`, `state.mjs`, `planner.mjs`, `independent-audit-coordinator.mjs`,
+`recovery/model.mjs`, `recovery/policy.mjs`, their affected tests, and the release
+closure pin fixture/contract. Version 2 uses a separate observation result, so
+`observation-schema.mjs`, `evidence.mjs`, and `conflicts.mjs` retain their version 1
+contracts. The coordinator rejects recovery before reaching the legacy auditor.
 
-- [ ] Test an exact reserved legacy draft, adopted draft, complete version 2
+- [x] Test an exact reserved legacy draft, adopted draft, complete version 2
   release with corrupt/absent body marker, unknown version, removed intent,
   duplicate drafts, absent registry package, conflicting tarball, and a newer
   candidate. Preserve version 1 incident fixtures unchanged.
-- [ ] Run `node --test scripts/release/test/recovery-observe.test.mjs scripts/release/test/recovery-routing.test.mjs`
+- [x] Run `node --test scripts/release/test/recovery-observe.test.mjs scripts/release/test/recovery-routing.test.mjs`
   to establish red.
-- [ ] Independently verify base manifest/record, exact tarballs, original
+- [x] Independently verify base manifest/record, exact tarballs, original
   attestation bundle, npm package source/bytes, canonical Release ID, and exact
   annotated tag. Reuse low-level verification functions; do not construct a fake
   version 1 observation to get version 2 through old assertions.
-- [ ] Consult ownership before legacy marker classification. Add a distinct
+- [x] Consult ownership before legacy marker classification. Add a distinct
   recovery-owned selection/disposition that legacy CLI maps to no continuation,
   and a verified recovery-terminal selection for candidate arbitration. Do not
   reuse `SMOKES_COMPLETE` or forge `evidence.assets.publishedExact`.
-- [ ] Wire all invocation types through the same ownership router. A reserved
+- [x] Wire all invocation types through the same ownership router. A reserved
   candidate without an active recovery run reports recovery-required, not a
   successful no-op. Every incomplete recovery-owned candidate blocks newer
   publication; terminal proof lets newer candidates proceed.
-- [ ] Published discovery uses tag + canonical Release ID and the fixed final
-  asset name even after title/body edits. Read-only scheduled legacy audit routes
+- [x] Published discovery uses tag + canonical Release ID and the fixed final
+  asset name even after title/body edits. A valid but edited body marker cannot
+  override verified immutable finalization. Read-only scheduled legacy audit routes
   version 2 into its compatible observer or reports explicit unsupported mode;
   it never sends new evidence to the candidate's frozen audit executor.
-- [ ] Run focused tests plus candidate/state/planner/observation/coordinator
+- [x] Run focused tests plus candidate/state/planner/observation/coordinator
   suites with `node --test` on their exact files. Mutate the router to fall back
   on parse failure and require the ownership regression to fail. Commit.
+
+Task 4 is implemented. Both review stages passed, with 68 focused recovery tests
+and all 2,670 controller tests passing on the approved files. Ownership survives
+missing tags/intents and edited display metadata; transient reads retry, and the
+built-in resolver avoids duplicate verification. Recovery remains dormant with
+no adoption record or production fence. See the runbook for validation details.
 
 ## Task 5: Implement the bounded version 2 writer and adoption
 
@@ -424,6 +437,9 @@ do not loosen the legacy exact-tag dispatch API.
 - [ ] Interrupt immediately after finalization upload, before the marker update.
   Attempt every receipt-producing entrypoint and require zero new uploads;
   retry must reconstruct readiness from existing finalization bytes alone.
+  Extend read-only observation to expose the independently verified existing
+  finalization proof when a draft marker is missing or corrupt, so repair can
+  consume those facts without fabricating a persisted marker.
 - [ ] After fresh registry/tag/asset/fence checks, publish the existing draft;
   re-observe immutable assets/tag and derive completion. Never write a complete
   stamp afterward. Future mutable display edits report drift without reopening

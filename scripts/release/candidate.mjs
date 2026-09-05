@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto"
-
 import {
   abandonmentRecordTag,
   canonicalAbandonmentBytes,
@@ -9,6 +8,11 @@ import {
 import { assertPayloadByteLength, RELEASE_PAYLOAD_LIMITS } from "./limits.mjs"
 import { canonicalReleaseBody, isManagedReleaseForTag, parseReleaseMarker } from "./metadata.mjs"
 import { planCandidateArbitration } from "./planner.mjs"
+import {
+  discoverRecoveryReleaseCandidates,
+  readRecoveryReservations,
+  routeRecoveryCandidate,
+} from "./recovery/observe.mjs"
 import { releaseRecordSha256 } from "./release-record.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 import { ReleaseState } from "./state.mjs"
@@ -121,6 +125,9 @@ export async function discoverScheduledCandidate({
   marker,
   terminalRecordRef,
   verifyTerminalAbandonment,
+  npm,
+  npmAuditFactory,
+  attestations,
 }) {
   normalizeActiveMarker(marker)
   if (typeof terminalRecordRef !== "string" || terminalRecordRef.length === 0) {
@@ -187,6 +194,11 @@ export async function discoverScheduledCandidate({
     github,
     marker,
     verifyTerminalAbandonment,
+    terminalRecordRef,
+    npm,
+    npmAuditFactory,
+    attestations,
+    recoveryGit: terminalRecordReader,
   })
   const releasesByTag = new Map(releases.map((release) => [release.tag, release]))
   const standalone = []
@@ -249,6 +261,7 @@ export async function discoverScheduledCandidate({
   const tagged = [...releases, ...standalone].sort(compareSelections)
   const incomplete = tagged.filter(
     (release) =>
+      release.state !== ReleaseState.RECOVERY_COMPLETE &&
       release.state !== ReleaseState.AUDIT_COMPLETE &&
       release.state !== ReleaseState.ABANDONED_PREPUBLICATION,
   )
@@ -444,7 +457,88 @@ async function inspectManagedReleases({
   github,
   marker,
   verifyTerminalAbandonment,
+  terminalRecordRef,
+  npm,
+  npmAuditFactory,
+  attestations,
+  recoveryGit,
 }) {
+  const assetReads = new Map()
+  const originalGithub = github
+  github = {
+    ...github,
+    listReleaseAssets(args) {
+      const key = String(args.releaseId)
+      if (!assetReads.has(key)) {
+        const pending = Promise.resolve()
+          .then(() => originalGithub.listReleaseAssets(args))
+          .then(
+            (result) => {
+              if (result?.status !== "PRESENT") assetReads.delete(key)
+              return result
+            },
+            (error) => {
+              assetReads.delete(key)
+              throw error
+            },
+          )
+        assetReads.set(key, pending)
+      }
+      return assetReads.get(key)
+    },
+  }
+  const routingRecords = records.filter((release) => {
+    let tag = release.tag_name
+    try {
+      tag = parseReleaseMarker(release.body).tag
+    } catch {
+      /* Existing tombstone validation below fails closed. */
+    }
+    return !recorded.has(tag)
+  })
+  const recovered = []
+  const recoveryTags = new Set()
+  const recoverySubjects = new Map(
+    [...tagsByName.values()].map((tag) => [
+      tag.tag,
+      { version: tag.version, commitSha: tag.commitSha, tag: tag.tag },
+    ]),
+  )
+  for (const { intent } of await readRecoveryReservations({
+    git: recoveryGit,
+    terminalRecordRef,
+  })) {
+    const c = intent.candidate
+    const existing = recoverySubjects.get(c.tag)
+    if (existing && existing.commitSha !== c.candidateSha)
+      throw new Error("Recovery reservation conflicts with annotated tag")
+    recoverySubjects.set(c.tag, { version: c.version, commitSha: c.candidateSha, tag: c.tag })
+  }
+  for (const c of (
+    await discoverRecoveryReleaseCandidates({ github, releaseRecords: routingRecords })
+  ).values()) {
+    const existing = recoverySubjects.get(c.tag)
+    if (existing && existing.commitSha !== c.candidateSha)
+      throw new Error("Durable recovery identity conflicts with candidate tag")
+    recoverySubjects.set(c.tag, { version: c.version, commitSha: c.candidateSha, tag: c.tag })
+  }
+  for (const tag of recoverySubjects.values()) {
+    if (recorded.has(tag.tag)) continue
+    const routed = await routeRecoveryCandidate({
+      candidate: candidateIdentity(tag.version, tag.commitSha),
+      git: recoveryGit,
+      github,
+      terminalRecordRef,
+      npm,
+      npmAuditFactory,
+      attestations,
+      releaseRecords: routingRecords,
+    })
+    if (routed !== null) {
+      recovered.push(routed)
+      recoveryTags.add(tag.tag)
+    }
+  }
   const managed = []
   for (const release of records) {
     const exactTag = managedVersionFromTag(release?.tag_name) === null ? null : release.tag_name
@@ -453,12 +547,16 @@ async function inspectManagedReleases({
         ? [...tagsByName.keys()].find((tag) => isManagedReleaseForTag(release, tag))
         : null
     const tag = exactTag ?? markerTag
-    if (managedVersionFromTag(tag) !== null && isManagedReleaseForTag(release, tag)) {
+    if (
+      !recoveryTags.has(tag) &&
+      managedVersionFromTag(tag) !== null &&
+      isManagedReleaseForTag(release, tag)
+    ) {
       managed.push({ release, tag })
     }
   }
   const seenTags = new Set()
-  const releases = []
+  const releases = [...recovered]
   for (const managedRelease of managed) {
     const { release, tag } = managedRelease
     if (seenTags.has(tag)) throw new Error(`Managed GitHub Release ${tag} is duplicated`)

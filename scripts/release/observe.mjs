@@ -25,6 +25,7 @@ import {
 } from "./metadata.mjs"
 import { NPM_AUDIT_VERIFIER } from "./npm-audit.mjs"
 import { canonicalNpmEvidenceBytes } from "./npm-evidence.mjs"
+import { routeRecoveryCandidate } from "./recovery/observe.mjs"
 import {
   canonicalReleaseRecordBytes,
   parseReleaseRecord,
@@ -72,7 +73,14 @@ const DEFAULT_CANDIDATE_POLICY = Object.freeze({
 const REQUIRED_SMOKE_LANES = REQUIRED_RELEASE_SMOKE_LANES
 const ACTIVE_PACKAGE_NAMES = Object.freeze([...CANONICAL_RELEASE_PACKAGE_ORDER].sort(compareText))
 const PRODUCTION_SELECTION_STATES = new Set(Object.values(ReleaseState))
-const PRODUCTION_SELECTION_DISPOSITIONS = new Set(["selected", "blocked", "audit-only", "noop"])
+const PRODUCTION_SELECTION_DISPOSITIONS = new Set([
+  "selected",
+  "blocked",
+  "audit-only",
+  "noop",
+  "recovery-owned",
+  "recovery-terminal",
+])
 const MAX_ACTIONS_ARTIFACT_CANDIDATES = 16
 const MAX_ACTIONS_OBSERVATION_BYTES = RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes * 2
 
@@ -178,17 +186,23 @@ export async function resolveProductionCandidate({
           }
         }
       : undefined
+  const scheduledDiscovery = discovery.discoverScheduledCandidate
   const discoverScheduled = () =>
-    discovery.discoverScheduledCandidate({
+    scheduledDiscovery({
       inventory,
       git,
       github,
       marker,
       terminalRecordRef,
+      npm,
+      npmAuditFactory,
+      attestations,
       ...(verifyTerminalAbandonment === undefined ? {} : { verifyTerminalAbandonment }),
     })
   let normalized
+  let globallySelected = false
   if (invocation.kind === "scheduled") {
+    globallySelected = true
     normalized = normalizeProductionCandidateSelection(await discoverScheduled())
   } else {
     const exact = normalizeProductionCandidateSelection(
@@ -211,7 +225,8 @@ export async function resolveProductionCandidate({
     ) {
       throw new Error("Production exact dispatch conflicts with global candidate arbitration")
     }
-    normalized = global.candidate === null ? exact : global
+    globallySelected = global.candidate !== null
+    normalized = globallySelected ? global : exact
   }
   const verifiedCurrentVersionNoop =
     invocation.expectedVersion !== null && normalized.candidate === null
@@ -227,6 +242,24 @@ export async function resolveProductionCandidate({
       normalized.candidate?.commitSha !== invocation.ref)
   ) {
     throw new Error("Production dispatch inputs do not match the discovered candidate")
+  }
+  // Only the built-in global discovery has already independently routed this
+  // selected recovery candidate. Exact fallbacks and injected discovery still route.
+  const recoveryAlreadyObserved =
+    globallySelected &&
+    scheduledDiscovery === discoverScheduledCandidate &&
+    ["RECOVERY_REQUIRED", "RECOVERY_COMPLETE"].includes(normalized.state)
+  if (normalized.candidate !== null && !recoveryAlreadyObserved) {
+    const recovery = await routeRecoveryCandidate({
+      candidate: normalized.candidate,
+      git,
+      github,
+      terminalRecordRef,
+      npm,
+      npmAuditFactory,
+      attestations,
+    })
+    if (recovery !== null) normalized = normalizeProductionCandidateSelection(recovery)
   }
   return deepFreeze(normalized)
 }

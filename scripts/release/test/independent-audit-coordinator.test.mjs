@@ -170,6 +170,9 @@ function githubBoundary({ releases, calls, refType = "tag", tagTargetSha }) {
   let selectedTag = releases.at(-1)?.tag_name
   return {
     reader: {
+      async listReleaseAssets() {
+        return present("release-assets", [])
+      },
       async listReleases() {
         return present("releases", releases)
       },
@@ -221,3 +224,24 @@ function present(operation, value) {
 function absent(operation) {
   return { status: "ABSENT", operation, httpStatus: 404, code: "NOT_FOUND", value: null }
 }
+
+test("scheduled legacy audit ignores older recovery history when the newest release is legacy", async () => {
+  const older = managedRelease({ id: 10, version: "0.8.21", commitSha: "1".repeat(40) })
+  older.body = "edited recovery display"
+  const latest = managedRelease({ id: 11, version: VERSION, commitSha: COMMIT_SHA })
+  const calls = []
+  const github = githubBoundary({ releases: [latest, older], calls })
+  github.reader.listReleaseAssets = async ({ releaseId }) =>
+    present("release-assets", releaseId === 10 ? [{ name: "recovery-v2-finalization.json" }] : [])
+  const result = await coordinateIndependentAudit({
+    eventName: "schedule",
+    ref: "refs/heads/main",
+    sha: MAIN_SHA,
+    defaultBranch: "main",
+    inputs: { version: "", commitSha: "", manifestSha256: "" },
+    github,
+  })
+  assert.equal(result.mode, "relayed")
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].ref, `v${VERSION}`)
+})

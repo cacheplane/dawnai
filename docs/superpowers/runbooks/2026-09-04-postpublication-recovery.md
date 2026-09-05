@@ -340,6 +340,96 @@ Task 3 verification records the following:
   controller suite. Earlier package build/typecheck/source/pack/harness results
   and the unresolved source-suite failure remain recorded below.
 
+## Observation and ownership routing
+
+Task 4 separates recovery facts from the version 1 observation schema. Its
+ownership decision must precede legacy marker parsing for scheduled, push, and
+exact manual candidate selection. An incomplete reservation or adoption blocks
+newer publication; independently verified terminal evidence can release that
+block. Exact manual selection must not select a completed candidate again when
+global arbitration has no incomplete candidate. Durable recovery identities must
+also seed discovery independently of current tags and intent files, so a missing
+tag blocks an adopted release instead of making it disappear from arbitration.
+
+The observer uses canonical Release ID, annotated tag identity, and the fixed
+`recovery-v2-finalization.json` asset to discover published recovery. Editable
+title/body metadata cannot restore legacy ownership. Removing the current git
+adoption record also cannot undo adoption: historical authority is checked at
+the immutable reviewed source revision recorded by its receipt.
+
+The new `recovery/metadata.mjs` helper owns the version 2 display envelope and
+canonical reconstruction. It uses the existing marker comment delimiters with
+version 2 canonical JSON. Notes cannot contain competing marker delimiters.
+The later finalizer must reuse this helper so observation and publication agree
+on the expected title/body without independently maintained renderers.
+
+Legacy audit coordination must report recovery as explicitly unsupported until
+the dedicated version 2 auditor is integrated. Scheduled, default-branch manual,
+and exact-tag audit invocations must not relay recovery to the frozen candidate
+executor. This routing rule does not revoke mutation authority from existing or
+directly invoked legacy writers; the separately verified fence remains required.
+
+Read-only asset metadata for release `382873833` showed that the inspector
+tarball is 12,107,594 bytes. Its base64 transport representation exceeds the
+ordinary one-megabyte JSON result limit. Binary reads therefore need a separate,
+explicitly bounded transport allowance while receipt limits remain unchanged;
+a real-size synthetic regression covers this boundary without downloading or
+executing that production package.
+
+Historical executor admission must independently establish approved policy,
+source closure, main ancestry, successful exact-commit CI, and the correct owner
+or auditor workflow role. A valid digest alone does not establish these facts.
+The audit result currently needs surviving GitHub run/job metadata for independent
+correlation; it does not require the expired Actions artifact download. Missing
+metadata blocks verification instead of trusting the receipt's self-description.
+
+A root-run isolated mutation replaced the unsupported-marker rejection with a
+legacy fallback. The unknown-schema ownership regression failed on the returned
+`null`, confirming that it detects this unsafe behavior; repository source was
+not modified. The registry rehearsal passed independently with pnpm 10.33 on
+`PATH` after an earlier full-suite startup failure without that child-process
+version pin. That isolated pass does not establish the earlier failure's cause.
+
+Verifier work shares a phase deadline. When work outlives that deadline, the
+invocation cannot accept its late result or begin another verification. Temporary
+resource cleanup is deferred until the pending operation settles. An idle verifier
+still requires disposal when an ordinary read exhausts the observation deadline;
+starting cleanup must not depend on remaining verification time. This does not
+claim cancellation of an underlying verifier subprocess.
+
+Task 4 specification and code-quality reviews passed. Review corrections cover
+idle-verifier cleanup after deadline expiry, discovery without current tag or
+intent, unknown schemas, valid-but-edited published markers, canonical metadata
+without drift, and titles that resemble a newer release. The specification
+reviewer independently verified 118 affected tests and all 66 source/data pins;
+the final quality reviewer independently verified 478 tests and the original
+failure reproductions. Frozen version 1 incident fixtures remain unchanged.
+
+Asset discovery evicts failed or rejected reads so transport retries actually
+reach the adapter. Successful reads remain memoized for the invocation. The real
+discovery regression starts with HTTP 503, reaches the adapter again, and succeeds.
+The built-in global discovery's selected recovery proof is reused within the
+same invocation: the regression now performs one verifier session and 21 package
+verifications, down from two sessions and 42 verifications. Exact-candidate
+fallback and injected discovery results still receive independent observation;
+this is not a persistent proof cache or a grant of write authority.
+
+Root verified all 68 focused recovery tests on the approved files. Intermediate
+full-controller runs passed 2,654, 2,659, and 2,668 tests; each preceded additional
+review corrections. The definitive full-controller run on the approved files
+passed all 2,670 tests with zero failures in approximately 256 seconds
+(`/tmp/dawn-recovery-task4-controller-verified.log`). Scoped Biome passed for all
+19 changed source/test/data files; release inventory, docs, and diff checks passed.
+The earlier package
+build, typecheck, source, pack, and harness results remain recorded below; those
+lanes were not repeated for this repository-script change, and the existing
+source-suite failure still prevents a full-CI-green claim.
+
+Draft-marker repair after a finalization upload is tracked explicitly in Task 9:
+that integration must expose independently verified finalization facts to the
+finalizer even when the unpublished draft marker is missing or corrupt. Task 4
+preserves ownership and blocks that case; no repair writer is implemented here.
+
 ## Implementation validation
 
 - Node 24.20.0; Corepack pnpm 10.33.0; frozen install passed.

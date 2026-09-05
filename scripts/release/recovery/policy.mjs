@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto"
 import { types } from "node:util"
 import { classifyRegistryResponse } from "../adapters/npm.mjs"
+import { RELEASE_PAYLOAD_LIMITS } from "../limits.mjs"
 import { RECOVERY_LANES, snapshotRecoveryData } from "./schema.mjs"
 
 export const RECOVERY_POLICY_PATH = "scripts/release/recovery/policy.json"
@@ -344,12 +345,16 @@ export async function runRecoveryRead(
   options = snapshotRecoveryData(options, 4096)
   requireThat(
     Object.keys(options).every((key) =>
-      ["phaseDeadline", "registryMetadataPresent"].includes(key),
+      ["phaseDeadline", "registryMetadataPresent", "responseBytes"].includes(key),
     ) &&
       Number.isSafeInteger(options.phaseDeadline) &&
       options.phaseDeadline >= 0 &&
       (!Object.hasOwn(options, "registryMetadataPresent") ||
-        typeof options.registryMetadataPresent === "boolean"),
+        typeof options.registryMetadataPresent === "boolean") &&
+      (!Object.hasOwn(options, "responseBytes") ||
+        (Number.isSafeInteger(options.responseBytes) &&
+          options.responseBytes > 0 &&
+          options.responseBytes <= Math.ceil(RELEASE_PAYLOAD_LIMITS.escrowBytes / 3) * 4 + 4096)),
     "read options required",
   )
   requireThat(
@@ -388,7 +393,7 @@ export async function runRecoveryRead(
       timers.clearTimer(timer)
     }
     if (unsettledTimeout) return result
-    result = snapshotRecoveryData(result)
+    result = snapshotRecoveryData(result, options.responseBytes)
     if (now() >= deadline) return exhausted()
     if (
       !retryable(result, options.registryMetadataPresent === true) ||
