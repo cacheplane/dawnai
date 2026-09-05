@@ -1,8 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { resolveProxyTarget } from "../../../lib/proxy-allowlist"
 
-// Same-origin proxy to the Dawn server. The dev server sets no CORS headers,
-// so the browser cannot read it directly. Every routing decision is in
+// Same-origin proxy to the Dawn server. A Dawn server sends no CORS headers
+// unless `server.cors` is configured, and this app deliberately does not
+// depend on that — the browser never learns Dawn's address. Every routing decision is in
 // `lib/proxy-allowlist.ts`, which is where the tests are; this file is the
 // adapter and deliberately holds no policy of its own.
 export const runtime = "nodejs"

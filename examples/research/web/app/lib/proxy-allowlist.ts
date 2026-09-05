@@ -1,8 +1,11 @@
 /**
  * Which Dawn server paths the browser may reach, and nothing else.
  *
- * The dev server sets no CORS headers, so direct reads from the page are
- * impossible and a same-origin proxy is required. An OPEN proxy in a template
+ * A Dawn server sends no CORS headers unless its `dawn.config.ts` sets
+ * `server.cors`, and this app deliberately does not rely on that being set —
+ * so direct reads from the page are impossible and a same-origin proxy is
+ * required. That is a posture, not a limitation: the browser never learns
+ * Dawn's address, and the server needs no cross-origin configuration. An OPEN proxy in a template
  * every Dawn developer copies is a liability — this app would happily forward
  * `POST /threads/:id/resume` or the whole agent surface — so the allowlist is
  * the point of the route, not an optimization over it.

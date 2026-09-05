@@ -96,6 +96,27 @@ export interface DawnConfig {
     readonly targets?: readonly string[]
   }
   readonly sandbox?: SandboxConfig
+  /**
+   * How the Dawn HTTP runtime itself behaves — as opposed to what the agent
+   * does. Everything here is off unless configured.
+   */
+  readonly server?: {
+    /**
+     * Cross-origin access to the Dawn endpoints (`/agui/*`, `/threads/*`,
+     * `/memory/*`). Omit and the runtime sends no `Access-Control-*` header at
+     * all, which means a browser on another origin cannot call it — the
+     * default, because opening a server to other origins is a deployment
+     * decision.
+     *
+     * Set it when a browser client talks to Dawn directly rather than through
+     * a same-origin proxy:
+     *
+     * ```ts
+     * server: { cors: { origins: ["http://localhost:3010"] } }
+     * ```
+     */
+    readonly cors?: CorsConfig
+  }
   readonly memory?: {
     readonly enabled?: boolean
     /** Custom memory store. Defaults to an SQLite-backed store at <appRoot>/.dawn/memory.sqlite. */
@@ -192,6 +213,37 @@ export interface DawnConfig {
       readonly appRoot: string
     }) => Record<string, string>
   }
+}
+
+/**
+ * Cross-origin policy for the Dawn runtime (`server.cors`).
+ *
+ * Presence of this object is what turns CORS on; there is no `enabled` flag.
+ */
+export interface CorsConfig {
+  /**
+   * Origins allowed to read responses — an explicit list (compared exactly,
+   * after normalizing case and a trailing slash) or `"*"` for any origin.
+   *
+   * `"*"` with `credentials: true` is rejected at boot: browsers refuse a
+   * wildcard allow-origin on a credentialed request, so accepting it would
+   * produce a server that looks configured and fails only in the console.
+   */
+  readonly origins: readonly string[] | "*"
+  /** Allow cookies and `Authorization` cross-origin. Default false. */
+  readonly credentials?: boolean
+  /** Methods advertised in a preflight. Default: GET, POST, DELETE, OPTIONS. */
+  readonly methods?: readonly string[]
+  /**
+   * Request headers advertised in a preflight. Default: echo whatever the
+   * browser asked for, so an app can add an auth header without touching
+   * server config.
+   */
+  readonly headers?: readonly string[]
+  /** Response headers a browser script may read. Default none. */
+  readonly exposeHeaders?: readonly string[]
+  /** How long a browser may cache a preflight, in seconds. Default 600. */
+  readonly maxAgeSeconds?: number
 }
 
 export type RouteSegment =
