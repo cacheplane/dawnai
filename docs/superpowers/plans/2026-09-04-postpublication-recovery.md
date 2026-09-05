@@ -193,16 +193,16 @@ directory above; create `test/recovery-schema.test.mjs`,
 `test/recovery-model.test.mjs`, and `test/support/recovery-fixture.mjs` under
 `scripts/release/`.
 
-- [ ] Write table-driven tests for every wire kind and phase prerequisite. Use
+- [x] Write table-driven tests for every wire kind and phase prerequisite. Use
   positive fixtures that describe real identifiers and receipt relationships;
   reject wrong source/executor identity, duplicate lanes/assets, bad JSON bytes,
   missing evidence, over-limit values, and unknown schema versions.
-- [ ] Run `node --test scripts/release/test/recovery-schema.test.mjs scripts/release/test/recovery-model.test.mjs`;
+- [x] Run `node --test scripts/release/test/recovery-schema.test.mjs scripts/release/test/recovery-model.test.mjs`;
   verify failure is the missing behavior/export, then implement the parsers.
-- [ ] Implement the pure planner with the spec's six phase transitions. It accepts
+- [x] Implement the pure planner with the spec's six phase transitions. It accepts
   verified facts, never an effects adapter. A classified state without a matching
   executor capability returns blocked before an effect can be selected.
-- [ ] Add this regression using the complete fixture helper from this task:
+- [x] Add this regression using the complete fixture helper from this task:
 
 ```js
 test("an adjudication cannot replace a failed lane", () => {
@@ -216,11 +216,17 @@ test("an adjudication cannot replace a failed lane", () => {
 })
 ```
 
-- [ ] Derive terminal publication from finalization asset plus external immutable
+- [x] Derive terminal publication from finalization asset plus external immutable
   release/tag proof; represent later title/body edits as `displayDrift` separate
   from completed ownership. Missing immutable proof is an integrity block.
-- [ ] Re-run focused tests, mutate away one phase prerequisite and require failure,
+- [x] Re-run focused tests, mutate away one phase prerequisite and require failure,
   restore it, and commit. Do not export a setter that writes arbitrary phases.
+
+Task 2 is implemented as dormant code. Both review stages passed; the focused
+suite contains 118 passing tests. An isolated prerequisite-removal experiment
+failed as expected and passed after restoration. Validation details and existing
+test failures are recorded in the [runbook](../runbooks/2026-09-04-postpublication-recovery.md).
+No production workflow, writer, CLI, or adoption record is enabled by this task.
 
 ## Task 3: Add policy, invocation authority, and empty admission
 

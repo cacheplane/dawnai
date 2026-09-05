@@ -1,7 +1,8 @@
 # Post-publication recovery: feasibility and admission findings
 
-Status on 2026-09-04: local legacy-writer regression implemented; disposable
-GitHub experiment prepared but **not run**. Production admission remains
+Status on 2026-09-04: local legacy-writer regression and dormant version 2
+schemas/planner implemented; disposable GitHub experiment prepared but **not run**.
+Production admission remains
 `legacy-fence-required`. This report does not authorize or perform recovery.
 
 Design: [post-publication recovery](../specs/2026-09-04-postpublication-recovery-design.md).
@@ -155,6 +156,90 @@ production admission certificate: production permissions, every historical write
 and active-job drainage must separately be verified. The final controller remains
 dormant until that evidence exists. If disabling does not prevent unsafe replay,
 revise the ownership design before activating recovery.
+
+## Dormant version 2 protocol
+
+Task 2 adds wire schemas and a pure planner under `scripts/release/recovery/`.
+These modules are not connected to the release workflow, CLI, or GitHub writer.
+The planner consumes independently verified facts and returns declarative effects;
+it does not establish invocation authority, verify signatures, or perform effects.
+Those responsibilities remain in later implementation tasks.
+
+Candidate identity and executing controller identity are separate. Selected lane
+receipts must describe all five lanes from one run and attempt, while the audit
+must come from its independently correlated run at the original dispatch's
+expected controller revision. A compatible newer controller can resume that
+evidence without rewriting its historical executor identity.
+
+The writable marker ends at `PUBLICATION_READY`. `COMPLETE` is derived from the
+persisted finalization asset and external immutable publication proof. Valid
+completion survives a removed or corrupted editable marker; title/body changes
+are reported separately as display drift. The presence of a finalization asset
+freezes further evidence uploads and audit dispatch, including when a marker
+update was interrupted. Invalid finalization blocks recovery rather than
+reopening an earlier write path.
+
+Missing first-run work must have an explicit next operation without claiming
+that evidence already exists. Missing or failed evidence within a submitted
+selection cannot advance the phase. Historical smoke adjudication cannot replace
+a failed required lane.
+
+Wire formats preserve the original `manifest.json`, `release-record.json`,
+tarballs, and `.intoto.jsonl` bundle identities. New ordinary JSON receipts are
+bounded at 256 KiB, selections/finalization at 1 MiB, and retained recovery assets
+at 2,048 assets and 64 MiB. Dependency-resolution details have a separate bounded
+budget. These proposed budgets still require calibration against actual release
+inventories and installed dependency trees before activation; exceeding a budget
+must fail rather than truncate successful evidence.
+
+The schema exports `parseRecovery`, `canonicalRecoveryBytes`, `recoveryDigest`,
+the phase/lane/limit constants, and the bounded `snapshotRecoveryData` helper.
+`planRecovery` returns a frozen plan. Its `planned.after` is prospective when
+persisted prerequisites support a marker change; it does not mean that a write
+succeeded. The eventual run-result must report re-observed durable phases and
+completed effects. Reports can represent an unknown starting marker and a
+proof-backed readiness repair, but cannot reopen `COMPLETE`.
+
+The facts graph permits 16 MiB because it repeats individually bounded receipts
+and inventories; depth remains capped at 24 and nodes at 100,000. A synthetic
+1,400-retained-receipt graph larger than 1 MiB exercises this distinction.
+Dependency resolutions currently permit 512 entries and 64 KiB. These are
+implementation bounds, not measurements of a real published smoke installation.
+
+Proposed finalization contains canonical payload data without a remote asset ID.
+Only persisted finalization proof requires the observed asset ID, digest, size,
+and inventory. Current write eligibility and monotonic marker revision checks
+still apply when reusing an unpublished finalization asset. An immutable completed
+release retains its historical evidence independently of current write eligibility.
+
+Task 2 verification records the following:
+
+- Specification and code-quality reviews passed after correcting first-upload
+  finalization planning, historical adoption takeover, distinct lane job identity,
+  marker revision monotonicity, current verifier eligibility, and report consistency.
+- The final focused schema/model suite has 118 passing tests. Parser regressions
+  cover proxy inputs without executing their traps, ordinary accessors, malformed
+  Unicode and canonical encodings, nested fields, identities, and byte budgets.
+- An independent generated audit rejected all 870 nested unknown-field and
+  missing-field mutations across the ten wire kinds and all five lane fixtures.
+- In an isolated copy, removing the fresh annotated-tag prerequisite made the
+  corresponding `AUDIT_VERIFIED` regression fail (`planned` instead of `blocked`).
+  Restoring the source made it pass; repository source was never weakened.
+- A full controller run before the final review changes passed 2,560 tests.
+  A subsequent run passed 2,562 and failed one existing descendant-tree test in
+  `scripts/published-artifacts.test.mjs`, with `processExists(NaN)` masking the
+  earlier failure. That test passed alone. Read-only inspection confirmed that
+  open [PR #568](https://github.com/cacheplane/dawnai/pull/568), head
+  `96c50ba9633a50a0903f87946712fe201e3eff71`, describes this exact failure and
+  changes only that existing test file. No fix from that PR was applied here.
+  This is distinct from the earlier `test/k8s-compat/harness.test.ts` source-suite
+  failure described below.
+- The final reviewed files passed the full controller suite: 2,567 tests,
+  zero failures, in approximately 159 seconds. This passing rerun does not erase
+  the intermittent failure above. Scoped Biome, release inventory, docs checks,
+  and `git diff --check` passed. Package build/typecheck/source/pack/harness gates
+  were not repeated for these dormant repository-script changes; their earlier
+  results and the unresolved source-suite failure remain recorded below.
 
 ## Implementation validation
 
