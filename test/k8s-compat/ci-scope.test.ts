@@ -238,8 +238,24 @@ describe("CI workflow metadata scope", () => {
         .sort(),
     ).toEqual([...scopedJobs].sort())
 
-    for (const id of ["validate", "sandbox-docker", "chart-validate", "vercel-native"]) {
+    for (const id of [
+      "source-validate",
+      "release-controller",
+      "sandbox-docker",
+      "chart-validate",
+      "vercel-native",
+    ]) {
       expect(jobs[id]?.needs).toBeUndefined()
     }
+    for (const id of ["source-validate", "release-controller"]) {
+      expect(jobs[id]?.if).toBeUndefined()
+    }
+    expect(jobs.validate?.needs).toEqual([
+      "source-validate",
+      "release-controller",
+      "pack-smoke",
+      "harness-verify",
+    ])
+    expect(jobs.validate?.if).toBe("always()")
   })
 })
