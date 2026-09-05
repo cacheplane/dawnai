@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -133,6 +133,9 @@ test("real annotated-tag publication, draft visibility and immutable asset readb
       repository,
       sourceSha: env.DAWN_RECOVERY_TEST_SOURCE_SHA,
       nonce: randomUUID(),
+      topologySha256: hash(
+        await readFile(new URL("./fixtures/recovery-topology-workflow.yml", import.meta.url)),
+      ),
       api: async (method, path, body) => {
         const response = await request(method, path, body)
         const selected =

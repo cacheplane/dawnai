@@ -1,6 +1,16 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { readFile } from "node:fs/promises"
 import test from "node:test"
+
+const historicalWorkflow = await readFile(
+  "scripts/release/test/fixtures/recovery-contract-workflow.yml",
+  "utf8",
+)
+const currentWorkflow = await readFile(
+  "scripts/release/test/fixtures/recovery-contract-workflow-current.yml",
+  "utf8",
+)
 
 const subject = await import("./support/recovery-publication-service.mjs").catch(() => ({}))
 const sha = (x) => createHash("sha256").update(x).digest("hex")
@@ -18,6 +28,14 @@ function service({ uncertain = null, production = false, immutable = true } = {}
     async api(method, path, body) {
       calls.push({ method, path })
       if (method === "GET") {
+        if (path.includes("/actions/workflows?"))
+          return {
+            status: 200,
+            body: {
+              total_count: 1,
+              workflows: [{ id: 12, path: ".github/workflows/recovery-fence-probe.yml" }],
+            },
+          }
         if (path === base)
           return {
             status: 200,
@@ -38,7 +56,7 @@ function service({ uncertain = null, production = false, immutable = true } = {}
             body: {
               encoding: "base64",
               content: Buffer.from(
-                path.endsWith("a".repeat(40)) ? "historical workflow" : "current workflow",
+                path.endsWith("a".repeat(40)) ? historicalWorkflow : currentWorkflow,
               ).toString("base64"),
             },
           }
@@ -145,3 +163,40 @@ for (const damage of ["draft-visible", "payload", "asset-digest", "asset-size", 
     )
   })
 }
+
+test("publication refuses unrelated workflow identities before tag or release creation", async () => {
+  const fake = service()
+  const api = fake.api
+  fake.api = async (...args) => {
+    if (args[1].includes("/actions/workflows?"))
+      return {
+        status: 200,
+        body: {
+          total_count: 1,
+          workflows: [{ id: 999, path: ".github/workflows/unrelated-release-writer.yml" }],
+        },
+      }
+    return api(...args)
+  }
+  await assert.rejects(subject.runPublicationServiceProbe(fake), /workflow/)
+  assert.equal(fake.effects.length, 0)
+})
+
+test("default branch movement after upload blocks publication", async () => {
+  const fake = service()
+  const api = fake.api
+  fake.api = async (...args) => {
+    const r = await api(...args)
+    if (
+      args[1].includes("/git/ref/heads/") &&
+      fake.effects.some((e) => e.path.includes("/assets?"))
+    )
+      r.body = { object: { type: "commit", sha: "d".repeat(40) } }
+    return r
+  }
+  await assert.rejects(subject.runPublicationServiceProbe(fake), /default branch/)
+  assert.equal(
+    fake.effects.some((e) => e.method === "PATCH"),
+    false,
+  )
+})

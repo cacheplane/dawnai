@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { FENCE_FIXTURES } from "../../recovery/fence-evidence.mjs"
 
 const digest = (value) => createHash("sha256").update(value).digest("hex")
 // Test-only service driver. Callers must separately authorize a disposable repo.
@@ -8,6 +9,7 @@ export async function runPublicationServiceProbe({
   repository,
   sourceSha,
   nonce,
+  topologySha256 = null,
   api,
   anonymousGet,
   download,
@@ -59,6 +61,40 @@ export async function runPublicationServiceProbe({
   assert.match(currentSha, /^[a-f0-9]{40}$/u)
   assert.notEqual(currentSha, sourceSha, "publication must exercise a non-default source")
   const workflow = ".github/workflows/recovery-fence-probe.yml"
+  const topologyPath = ".github/workflows/recovery-topology-probe.yml"
+  const inventory = await get(`${base}/actions/workflows?per_page=100&page=1`)
+  assert.ok(
+    Array.isArray(inventory.workflows) &&
+      inventory.workflows.length >= 1 &&
+      inventory.workflows.length <= 2 &&
+      inventory.total_count === inventory.workflows.length,
+    "complete disposable workflow inventory required",
+  )
+  const paths = new Set()
+  const ids = new Set()
+  for (const item of inventory.workflows) {
+    assert.ok(
+      Number.isSafeInteger(item.id) && item.id > 0 && !ids.has(item.id),
+      "unique workflow identity required",
+    )
+    assert.ok(
+      [workflow, topologyPath].includes(item.path) && !paths.has(item.path),
+      "unrelated workflow forbidden",
+    )
+    paths.add(item.path)
+    ids.add(item.id)
+  }
+  assert.ok(paths.has(workflow), "historical workflow fixture required")
+  if (paths.has(topologyPath)) {
+    assert.match(topologySha256 ?? "", /^[a-f0-9]{64}$/u)
+    const topology = await get(`${base}/contents/${topologyPath}?ref=${currentSha}`)
+    assert.equal(topology.encoding, "base64")
+    assert.equal(
+      digest(Buffer.from(topology.content, "base64")),
+      topologySha256,
+      "reviewed topology workflow required",
+    )
+  }
   const files = []
   for (const sha of [sourceSha, currentSha]) {
     const file = await get(`${base}/contents/${workflow}?ref=${sha}`)
@@ -69,9 +105,32 @@ export async function runPublicationServiceProbe({
     files.push(digest(bytes))
   }
   assert.notEqual(files[0], files[1], "distinct workflow file revisions required")
+  assert.deepEqual(
+    files,
+    [FENCE_FIXTURES.historical.sha256, FENCE_FIXTURES.current.sha256],
+    "exact harmless workflow fixtures required",
+  )
   const payload = Buffer.from(`Recovery service contract ${nonce}\nsource ${sourceSha}\n`)
   const payloadSha256 = digest(payload)
+  const assertCurrentWorkflowScope = async () => {
+    assert.equal(
+      (await get(branchPath)).object.sha,
+      currentSha,
+      "default branch moved before mutation",
+    )
+    const fresh = await get(`${base}/actions/workflows?per_page=100&page=1`)
+    const identity = (value) => ({
+      total: value.total_count,
+      workflows: value.workflows.map(({ id, path }) => ({ id, path })).sort((a, b) => a.id - b.id),
+    })
+    assert.deepEqual(
+      identity(fresh),
+      identity(inventory),
+      "workflow inventory changed before mutation",
+    )
+  }
   await persist(owned)
+  await assertCurrentWorkflowScope()
   const object = await api("POST", `${base}/git/tags`, {
     tag,
     message: `Recovery contract ${nonce}`,
@@ -150,6 +209,7 @@ export async function runPublicationServiceProbe({
   owned.assetId = asset.id
   assert.equal(digest(await download(asset.id)), payloadSha256)
   await persist(owned)
+  await assertCurrentWorkflowScope()
   try {
     assert.equal(
       (

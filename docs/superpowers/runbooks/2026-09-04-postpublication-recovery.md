@@ -1072,8 +1072,12 @@ an explicit `DAWN_RECOVERY_PUBLICATION_TOKEN`, separate
 `DAWN_RECOVERY_TEST_POLICY_TOKEN`, `DAWN_RECOVERY_TEST_SOURCE_SHA`, and credential
 kind `DAWN_RECOVERY_TEST_CREDENTIAL_KIND=operator|workflow`. It refuses production
 name/ID aliases, private test repositories, disabled immutable-release policy,
-and a source equal to the current default branch. The two revisions must have
-different copies of the harmless fence workflow. It never enables policy itself.
+and a source equal to the current default branch. The two revisions must contain the exact reviewed historical/current fence
+fixtures. The complete workflow inventory may contain only that fixture and
+`.github/workflows/recovery-topology-probe.yml`; when present, the latter must
+match the checked-out topology fixture bytes. Default-branch and workflow
+identity are rechecked before tag creation and publication. The probe never
+enables policy itself.
 
 The probe creates a UUID-named annotated tag and prerelease, checks anonymous
 draft invisibility and authenticated visibility, uploads one exact small asset,

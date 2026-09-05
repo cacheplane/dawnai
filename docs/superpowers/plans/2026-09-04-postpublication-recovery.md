@@ -903,7 +903,9 @@ of the green CI run.
 
 The publication service probe and the 13-job topology fixture are now prepared
 locally with explicit additional opt-in and disposable credential requirements.
-Eleven publication-driver regressions and one topology contract test pass. Actual
+Thirteen publication-driver regressions and one topology contract test pass,
+including rejection of unrelated workflow identities and branch movement before
+publication. Actual
 service execution remains unrun: no authorized repository has been supplied, the
 publication credential experiment must use the intended workflow token, and the
 platform-owned workflow fence representation still needs resolution. Completion
