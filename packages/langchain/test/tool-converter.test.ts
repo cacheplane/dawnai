@@ -414,6 +414,34 @@ describe("convertToolToLangChain — config.configurable forwarding", () => {
 })
 
 describe("jsonSchemaToZod nesting", () => {
+  it("accepts null without widening nullable fields or making them optional", () => {
+    const schema = jsonSchemaToZod({
+      type: "object",
+      properties: {
+        value: { anyOf: [{ type: "string" }, { type: "null" }] },
+        optional: { anyOf: [{ type: "number" }, { type: "null" }] },
+        missing: { type: "null" },
+      },
+      required: ["value", "missing"],
+      additionalProperties: false,
+    })
+
+    expect(schema.parse({ value: null, missing: null })).toEqual({ value: null, missing: null })
+    expect(schema.parse({ value: "known", optional: 1, missing: null })).toEqual({
+      value: "known",
+      optional: 1,
+      missing: null,
+    })
+    expect(schema.safeParse({ value: null, optional: null, missing: null }).success).toBe(true)
+    for (const value of [42, false, {}, [], undefined]) {
+      expect(schema.safeParse({ value, missing: null }).success).toBe(false)
+    }
+    expect(schema.safeParse({ missing: null }).success).toBe(false)
+    expect(schema.safeParse({ value: null }).success).toBe(false)
+    expect(schema.safeParse({ value: null, optional: "wrong", missing: null }).success).toBe(false)
+    expect(schema.safeParse({ value: null, missing: "wrong" }).success).toBe(false)
+  })
+
   it("builds a nested object schema that validates", () => {
     const zodSchema = jsonSchemaToZod({
       type: "object",

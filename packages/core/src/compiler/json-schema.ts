@@ -23,6 +23,8 @@ function typeInfoToJsonSchema(type: TypeInfo, depth: number): JsonSchemaProperty
       return { type: "number" }
     case "boolean":
       return { type: "boolean" }
+    case "null":
+      return { type: "null" }
     case "literal":
       if (typeof type.value === "string") {
         return { type: "string", enum: [type.value] }
@@ -45,7 +47,11 @@ function typeInfoToJsonSchema(type: TypeInfo, depth: number): JsonSchemaProperty
         additionalProperties: typeInfoToJsonSchema(type.value, depth + 1),
       }
     case "union":
-      if (type.members.length > 1 && type.members.every(isStructuredUnionMember)) {
+      if (
+        type.members.length > 1 &&
+        (type.members.some((member) => member.kind === "null") ||
+          type.members.every(isStructuredUnionMember))
+      ) {
         return {
           anyOf: type.members.map((member) => typeInfoToJsonSchema(member, depth + 1)),
         }

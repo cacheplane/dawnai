@@ -34,6 +34,65 @@ async function extractSchemasFromSource(source: string) {
 // as timeouts rather than as anything real. The explicit suite timeout leaves
 // room for that without hiding a genuine hang.
 describe("extractToolSchemasForRoute", { timeout: 30_000 }, () => {
+  test.each([
+    ["string", { type: "string" }],
+    ["number", { type: "number" }],
+    ["boolean", { type: "boolean" }],
+    ['"known"', { type: "string", enum: ["known"] }],
+    ["string[]", { type: "array", items: { type: "string" } }],
+    [
+      "{ value: string }",
+      {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        additionalProperties: false,
+      },
+    ],
+  ])("preserves null alongside %s in generated tool schemas", async (type, schema) => {
+    const result = await extractSchemasFromSource(`
+export default async function tool(input: {
+  value: ${type} | null
+  optional?: ${type} | null
+}) { return input }
+`)
+
+    const parameters = result[0]?.parameters
+    expect(parameters?.required).toEqual(["value"])
+    for (const property of ["value", "optional"]) {
+      const alternatives = parameters?.properties[property]?.anyOf
+      const expected = [schema, { type: "null" }]
+      expect(alternatives).toEqual(expect.arrayContaining(expected))
+      for (const alternative of alternatives ?? []) {
+        expect(expected).toContainEqual(alternative)
+      }
+    }
+  })
+
+  test("preserves nested nullable profile fields and standalone null", async () => {
+    const result = await extractSchemasFromSource(`
+export default async function submitCandidate(input: {
+  profile: {
+    /** Company name when known. */
+    name: string | null
+    description: string | null
+    industry: string | null
+  }
+  missing: null
+}) { return input }
+`)
+
+    const profile = result[0]?.parameters.properties.profile
+    expect(profile?.required).toEqual(["name", "description", "industry"])
+    expect(profile?.properties?.name?.description).toBe("Company name when known.")
+    for (const field of ["name", "description", "industry"]) {
+      expect(profile?.properties?.[field]?.anyOf).toEqual(
+        expect.arrayContaining([{ type: "string" }, { type: "null" }]),
+      )
+    }
+    expect(result[0]?.parameters.properties.missing).toEqual({ type: "null" })
+  })
+
   test("extracts full JSON Schema with JSDoc descriptions", async () => {
     const routeDir = join(tempDir, "route")
     writeToolFile(
