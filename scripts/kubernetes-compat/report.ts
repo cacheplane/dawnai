@@ -101,6 +101,7 @@ export interface VitestProviderAccountingRecord {
 export interface VitestProviderAccountingSession {
   record(options: VitestProviderAccountingRecord): Promise<void>
   finish(): void
+  dispose(): Promise<void>
 }
 
 export interface ReportPersistenceDependencies {
@@ -552,13 +553,26 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
   readonly #pendingCanonicalPaths = new Set<string>()
   readonly #usedIdentities = new Set<string>()
   readonly #pendingIdentities = new Set<string>()
+  readonly #retainedHandles: Awaited<ReturnType<typeof open>>[] = []
+  readonly #records = new Set<Promise<void>>()
+  #disposal: Promise<void> | undefined
   #finished = false
 
   constructor(expected: Readonly<Record<ProviderPhase, readonly string[]>>) {
     this.#expected = expected
   }
 
-  async record(options: VitestProviderAccountingRecord): Promise<void> {
+  record(options: VitestProviderAccountingRecord): Promise<void> {
+    const recording = this.#record(options)
+    this.#records.add(recording)
+    void recording.then(
+      () => this.#records.delete(recording),
+      () => this.#records.delete(recording),
+    )
+    return recording
+  }
+
+  async #record(options: VitestProviderAccountingRecord): Promise<void> {
     if (this.#finished) {
       throw new Error("Vitest provider accounting session is finished")
     }
@@ -628,7 +642,14 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
         throw new Error("Vitest report identity changed before secure deletion")
       }
       await unlink(reportPath)
+      if (this.#finished) {
+        throw new Error("Vitest provider accounting session finished before record completed")
+      }
 
+      // Keep the unlinked inode alive so the filesystem cannot recycle its
+      // identity for the next phase. At most one handle is retained per phase.
+      this.#retainedHandles.push(handle)
+      handle = undefined
       this.#recordedPhases.add(phase)
       this.#usedPaths.add(reportPath)
       this.#usedCanonicalPaths.add(canonicalPath)
@@ -639,6 +660,25 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
       this.#pendingPaths.delete(reportPath)
       if (canonicalPath !== undefined) this.#pendingCanonicalPaths.delete(canonicalPath)
       if (identity !== undefined) this.#pendingIdentities.delete(identity)
+    }
+  }
+
+  dispose(): Promise<void> {
+    this.#finished = true
+    this.#disposal ??= this.#dispose()
+    return this.#disposal
+  }
+
+  async #dispose(): Promise<void> {
+    await Promise.allSettled([...this.#records])
+    const results = await Promise.allSettled(
+      this.#retainedHandles.splice(0).map((handle) => handle.close()),
+    )
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    )
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Vitest provider report disposal failed")
     }
   }
 

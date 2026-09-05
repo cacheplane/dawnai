@@ -1579,6 +1579,7 @@ export async function runKubernetesCompatibility(
     }
   }
 
+  let providerAccounting: VitestProviderAccountingSession | undefined
   let primaryFailure: unknown
   let collectedDiagnostics: unknown
   try {
@@ -1614,9 +1615,10 @@ export async function runKubernetesCompatibility(
       managementNamespace: derivedNames.managementNamespace,
       sandboxNamespace: derivedNames.sandboxNamespace,
     })
-    const providerAccounting = await resolved.createProviderAccountingSession({
+    providerAccounting = await resolved.createProviderAccountingSession({
       manifestPath: resolved.expectedTestsPath,
     })
+    const accounting = providerAccounting
     ensureSignalRegistration()
     await createManagementNamespace()
 
@@ -1693,7 +1695,7 @@ export async function runKubernetesCompatibility(
             },
           },
         )
-        await providerAccounting.record({ reportPath, phase })
+        await accounting.record({ reportPath, phase })
         if (providerResult.exitCode !== 0) {
           throw new Error(`${phase} provider command exited with code ${providerResult.exitCode}`)
         }
@@ -1800,6 +1802,15 @@ export async function runKubernetesCompatibility(
     resolved.assertStepAccounting(KUBERNETES_COMPAT_PROBE_IDS, observedProbes)
   } catch (error) {
     primaryFailure = error
+  } finally {
+    try {
+      await providerAccounting?.dispose()
+    } catch (error) {
+      primaryFailure = aggregateErrors(
+        [...(primaryFailure !== undefined ? [primaryFailure] : []), error],
+        "Kubernetes compatibility run and report disposal failed",
+      )
+    }
   }
 
   if (reportRecorder === undefined) {
