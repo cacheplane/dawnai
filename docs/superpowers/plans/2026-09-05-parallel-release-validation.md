@@ -12,5 +12,6 @@
 - [x] Update `.github/workflows/ci.yml` with source-validate, release-controller and aggregate validate jobs. Retain complete commands; no test exclusions or optional aggregate dependencies.
 - [x] Update exact workflow-entrypoints.json and workflow-safe-executables.json fixtures, preserving unrelated descriptors/classifications.
 - [x] Update AGENTS.md and CONTRIBUTORS.md with the new CI graph and unchanged local sequential validation.
+- [x] Update `test/k8s-compat/ci-scope.test.ts` for the unconditional source/controller lanes and exact aggregate, preserving the four metadata-scoped job assertions. Run its 20 tests red then green.
 - [ ] Run focused preflight/workflow tests, lint/inventory/docs, independent review, commit and create stacked PR. CI must prove the complete controller suite works from an unbuilt checkout and all aggregate dependencies succeed.
 - [ ] Integrate after prerequisite PR #575 and required CI succeed, comparing final tested tree and recording timing evidence.
