@@ -252,6 +252,9 @@ export async function readAuditArtifact(candidate, intent, dispatch, read) {
   const encoded = await read("downloadActionsArtifact", {
     artifactId: String(artifact.id),
     maximumBytes: artifact.size_in_bytes,
+    sha256: artifact.digest.slice(7),
+    expired: artifact.expired,
+    expiresAt: artifact.expires_at ?? null,
   })
   const bytes = Buffer.from(encoded, "base64")
   auditRequire(

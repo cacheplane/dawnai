@@ -22,6 +22,7 @@ import {
   normalizeRecoveryAssetInventory,
   observeRecoveryCandidate,
 } from "./observe.mjs"
+import { withRecoveryPayloadReuse } from "./payload-reuse.mjs"
 import { RECOVERY_RETRY, recoveryMethods, runRecoveryRead } from "./policy.mjs"
 import {
   canonicalRecoveryBytes,
@@ -57,14 +58,11 @@ async function controller(request, config, dependencies) {
     intentPath: request.intentPath,
   }
   const observe = async () => {
-    const r = await budget.work(() =>
-      observeRecoveryCandidate({
-        ...dependencies.observation,
-        candidate: request.candidate,
-        controllerRef: request.expectedControllerSha,
-        intentPath: request.intentPath,
-      }),
-    )
+    const r = await writer.observeRecoveryCandidate({
+      candidate: request.candidate,
+      expectedControllerSha: request.expectedControllerSha,
+      intentPath: request.intentPath,
+    })
     auditRequire(r.outcome !== "blocked", r.errors.join("; "))
     return r
   }
@@ -123,6 +121,11 @@ async function controller(request, config, dependencies) {
   }
 }
 export async function dispatchRecoveryAudit(request, config, dependencies) {
+  return withRecoveryPayloadReuse(dependencies, (scoped) =>
+    dispatchRecoveryAuditInInvocation(request, config, scoped),
+  )
+}
+async function dispatchRecoveryAuditInInvocation(request, config, dependencies) {
   const c = await controller(request, config, dependencies)
   let { current } = c
   const retry = current.phase === "AUDIT_PENDING" && auditHasFailed(current.facts)
@@ -211,9 +214,19 @@ export async function dispatchRecoveryAudit(request, config, dependencies) {
 }
 
 export async function reconcileRecoveryAudit(request, config, dependencies) {
+  return withRecoveryPayloadReuse(dependencies, (scoped) =>
+    reconcileRecoveryAuditInInvocation(request, config, scoped),
+  )
+}
+async function reconcileRecoveryAuditInInvocation(request, config, dependencies) {
   return reconcileAuditController(await controller(request, config, dependencies), false)
 }
 export async function waitForRecoveryAudit(request, config, dependencies) {
+  return withRecoveryPayloadReuse(dependencies, (scoped) =>
+    waitForRecoveryAuditInInvocation(request, config, scoped),
+  )
+}
+async function waitForRecoveryAuditInInvocation(request, config, dependencies) {
   return reconcileAuditController(await controller(request, config, dependencies), true)
 }
 async function reconcileAuditController(c, wait) {

@@ -470,6 +470,13 @@ export function createRecoveryWriter(config, dependencies) {
   return Object.freeze({
     // Read-only orchestration entrypoint, bounded by this writer's original deadline.
     // It returns observations, never mutation authority or a persisted marker.
+    observeRecoveryCandidate(input) {
+      return transaction(async () => {
+        const request = exact(input, "candidate expectedControllerSha intentPath")
+        const args = validate({ ...request, expectedBodySha256: "0".repeat(64) }, "")
+        return observe(args)
+      })
+    },
     inspectRecoveryCandidate(input) {
       return transaction(async () => {
         const request = exact(input, "candidate expectedControllerSha intentPath")

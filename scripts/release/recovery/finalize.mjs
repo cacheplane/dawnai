@@ -1,6 +1,7 @@
 // Dormant orchestration. All reads and effects share one guarded writer invocation.
 import { createHash } from "node:crypto"
 import { renderRecoveryFinalMetadata, renderRecoveryReleaseBody } from "./metadata.mjs"
+import { withRecoveryPayloadReuse } from "./payload-reuse.mjs"
 import { canonicalRecoveryBytes, parseRecovery, snapshotRecoveryData } from "./schema.mjs"
 import { createRecoveryWriter } from "./writer.mjs"
 
@@ -17,6 +18,11 @@ function common(request, current) {
 }
 
 export async function finalizeRecoveryCandidate(request, config, dependencies) {
+  return withRecoveryPayloadReuse(dependencies, (scoped) =>
+    finalizeRecoveryCandidateInInvocation(request, config, scoped),
+  )
+}
+async function finalizeRecoveryCandidateInInvocation(request, config, dependencies) {
   request = requestData(request)
   const writer = createRecoveryWriter(config, dependencies)
   let current = await writer.inspectRecoveryCandidate(request)
@@ -62,6 +68,11 @@ export async function finalizeRecoveryCandidate(request, config, dependencies) {
 }
 
 export async function publishRecoveryCandidate(request, config, dependencies) {
+  return withRecoveryPayloadReuse(dependencies, (scoped) =>
+    publishRecoveryCandidateInInvocation(request, config, scoped),
+  )
+}
+async function publishRecoveryCandidateInInvocation(request, config, dependencies) {
   request = requestData(request)
   const writer = createRecoveryWriter(config, dependencies)
   const current = await writer.inspectRecoveryCandidate(request)

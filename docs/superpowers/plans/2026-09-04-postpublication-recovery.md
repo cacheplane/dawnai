@@ -723,8 +723,16 @@ preserves the read-only boundary, rather than adding another lifecycle manager.
   one official npm 11.17.0 audit command. Evidence:
   `/tmp/dawn-recovery-task12a-controller-verified.log`,
   `/tmp/dawn-task12a-observation-cost.json`, `/tmp/dawn-task12a-real-npm.json`.
-- [ ] Slice 12b: bounded invocation-only payload reuse and initial managed
-  observation settlement, with independent reviews and measured phase counts.
+- [x] Slice 12b: bounded invocation-only payload reuse and initial managed
+  observation settlement. Root reviewed the implementer's frozen source and
+  independently measured each phase; all 3,096 controller tests passed in
+  146.74 seconds. The platform rejected both new and resumed review agents at
+  its thread limit, so specification and quality review were performed directly
+  by root, not represented as additional agent approvals. Isolated mutations
+  restored the old unmanaged adoption read and left a cache generation open;
+  both failed the intended regression, with all 24 regressions passing before
+  and after restoration. Evidence: `/tmp/dawn-task12b-root-review.json` and
+  `/tmp/dawn-recovery-task12b-controller-verified.log`.
 - [ ] Slice 12c: production-adapter fault rehearsal, explicit service-probe
   entrypoint, and eligible Linux runner CI evidence.
 

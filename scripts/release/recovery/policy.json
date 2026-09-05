@@ -146,6 +146,7 @@
       "scripts/release/recovery/metadata.mjs",
       "scripts/release/recovery/model.mjs",
       "scripts/release/recovery/observe.mjs",
+      "scripts/release/recovery/payload-reuse.mjs",
       "scripts/release/recovery/policy.mjs",
       "scripts/release/recovery/requests.mjs",
       "scripts/release/recovery/runtime.mjs",
@@ -169,7 +170,7 @@
       "scripts/release/terminal-records.mjs",
       "scripts/release/topology.mjs"
     ],
-    "sha256": "e85d5e3a7b27dff14fc2dfda7f69934fc8c3c64f5789189a4f9ad9f996be7e78"
+    "sha256": "a14ce13b1575d17bbf540e6cd33e1eeba19dbb27f697106024bee7800e848bf4"
   },
   "workflows": [
     ".github/workflows/release-postpublication-audit.yml",

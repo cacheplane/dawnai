@@ -250,7 +250,13 @@ export async function observeRecoveryLaneEvidence(input, githubInput, clock) {
   )
   const encoded = await read(
     "downloadActionsArtifact",
-    { artifactId: String(artifact.id), maximumBytes: artifact.size_in_bytes },
+    {
+      artifactId: String(artifact.id),
+      maximumBytes: artifact.size_in_bytes,
+      sha256: artifact.digest.slice(7),
+      expired: artifact.expired,
+      expiresAt: artifact.expires_at ?? null,
+    },
     artifact.size_in_bytes,
   )
   requireThat(typeof encoded === "string", "artifact bytes unavailable")

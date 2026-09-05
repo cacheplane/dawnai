@@ -924,3 +924,48 @@ Biome checked 14 files; docs, inventory, and whitespace checks passed. The
 complete controller log is `/tmp/dawn-recovery-task12a-controller-verified.log`.
 Owned temporary production-inspection source and npm tooling were removed;
 inspection and batch-verification evidence remain available at the paths above.
+
+
+## Payload reuse and initial observation settlement (Task 12b)
+
+Payload reuse is private to one controller call and retains only exact bytes
+verified against freshly observed identities, sizes, digests, and Actions
+expiry. It holds at most 128 entries and 64 MiB of base64 strings, conservatively
+counted at two bytes per character. Payloads over 16 MiB use the original fresh
+read path. Closed or expired generations cannot serve or accept late results.
+Metadata, cryptographic verification, and mutation authority remain fresh;
+the independent auditor has no shared cache.
+
+Initial adoption, evidence, and audit reads now use the same writer's guarded
+read-only method. Managed verifier creation, verification, and disposal retain
+ownership through settlement, even after timeout. Harmless pending reads cannot
+start late managed work. The original writer transport identity is preserved
+across recreated controllers.
+
+Root's independently measured adapter-call counts are:
+
+| Phase | Writes | Release downloads before → after | npm tarballs before → after | Fresh batch audits |
+|---|---:|---:|---:|---:|
+| Evidence collection | 19 | 2,322 → 65 | 861 → 21 | 41 |
+| Audit escrow | 3 | 546 → 69 | 168 → 21 | 8 |
+| Finalization | 2 | 418 → 70 | 126 → 21 | 6 |
+| Publication | 1 | 210 → 70 | 63 → 21 | 3 |
+| Published no-op | 0 | 70 → 70 | 21 → 21 | 1 |
+
+Evidence collection's Actions archive downloads fell from 22 to five. Fresh
+npm metadata calls remained 861, 168, 126, 63, and 21 respectively. These are
+deterministic fixture adapter calls, not service throughput or full production
+rehearsal. The npm reader makes two HTTP requests per metadata observation.
+Reports: `/tmp/dawn-task12b-observation-cost.json` and
+`/tmp/dawn-task12b-late-phase-cost.json`. A separate owned-loopback experiment
+using the unchanged production readers confirmed one tarball transfer across
+two payload reads while both metadata HTTP requests repeated. It is recorded
+at `/tmp/dawn-task12b-real-adapter-reuse.json`.
+
+All 3,096 controller tests passed in 146.74 seconds. Root reviewed specification
+compliance and code quality independently of the implementer after the app
+rejected new and resumed review agents at its thread limit. Root's isolated
+unmanaged-read and open-generation mutations failed their intended regressions;
+all 24 targeted tests passed before and after restoration. Logs:
+`/tmp/dawn-recovery-task12b-controller-verified.log` and
+`/tmp/dawn-task12b-root-review.json`. No live effects or activation occurred.

@@ -2,17 +2,22 @@ import { createHash } from "node:crypto"
 import { types } from "node:util"
 import { captureRecoveryAuthority, captureRecoveryEligibility } from "./authority.mjs"
 import { renderRecoveryReleaseBody } from "./metadata.mjs"
-import { createRecoveryWorkBudget, observeRecoveryCandidate } from "./observe.mjs"
+import { createRecoveryWorkBudget } from "./observe.mjs"
+import { withRecoveryPayloadReuse } from "./payload-reuse.mjs"
 import { RECOVERY_RETRY, recoveryMethods } from "./policy.mjs"
 import { canonicalRecoveryBytes, parseRecovery, snapshotRecoveryData } from "./schema.mjs"
 import { createRecoveryWriter, recoveryAdoptionAssetName } from "./writer.mjs"
 
 export async function adoptRecoveryCandidate(request, config, dependencies) {
+  return withRecoveryPayloadReuse(dependencies, (scoped) =>
+    adoptRecoveryCandidateInInvocation(request, config, scoped),
+  )
+}
+async function adoptRecoveryCandidateInInvocation(request, config, dependencies) {
   request = snapshotRecoveryData(request, 16384)
   if (Object.keys(request).sort().join(" ") !== "candidate expectedControllerSha intentPath")
     throw new TypeError("Exact adoption request required")
   const writer = createRecoveryWriter(config, dependencies)
-  const observation = safeObservation(dependencies)
   const authorityDependencies = data(dependencies, "authority")
   const { now } = recoveryMethods(authorityDependencies, ["now"])
   const budget = createRecoveryWorkBudget(
@@ -23,14 +28,7 @@ export async function adoptRecoveryCandidate(request, config, dependencies) {
       clearTimer: (timer) => clearTimeout(timer),
     },
   )
-  const observed = await budget.work(() =>
-    observeRecoveryCandidate({
-      ...observation,
-      candidate: request.candidate,
-      controllerRef: request.expectedControllerSha,
-      intentPath: request.intentPath,
-    }),
-  )
+  const observed = await writer.observeRecoveryCandidate(request)
   if (observed.outcome === "blocked") throw new Error(observed.errors.join("; "))
   if (observed.phase !== "NPM_COMPLETE") {
     if (!observed.terminal)
@@ -109,13 +107,4 @@ function data(value, name) {
   if (!descriptor || !Object.hasOwn(descriptor, "value"))
     throw new TypeError("Safe dependency data required")
   return descriptor.value
-}
-function safeObservation(dependencies) {
-  const value = data(dependencies, "observation")
-  return Object.fromEntries(
-    ["github", "git", "npm", "npmAuditFactory", "attestations"].map((name) => [
-      name,
-      data(value, name),
-    ]),
-  )
 }

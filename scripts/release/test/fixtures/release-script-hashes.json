@@ -128,13 +128,13 @@
       "sha256": "455f8b647b6458eb3830c30b4ac05dab4cb24a2d713098614cacbee0cfc7516c"
     },
     "scripts/release/recovery/adopt.mjs": {
-      "sha256": "270f2efaeb15aba3431f91ba406aec3a6348c1992204ec4b233f94d7d97d1064"
+      "sha256": "efe0b8da53dc035932d2ce266bb88456a5547332313bca9bfa2bf50ee4e0ac8a"
     },
     "scripts/release/recovery/audit-proof.mjs": {
-      "sha256": "0d2258c9a0bee1006c3e3c47a55a033b6e8caf432bce3bb55b55b33c0ec71f30"
+      "sha256": "60a0c2f18761029d54ffad891f03a892bf5c68b9101d725fdeee4b5d9a6fe175"
     },
     "scripts/release/recovery/audit.mjs": {
-      "sha256": "93036d9c8ce207f4024e3800e710ad70c8518325a630ee01897409cfe1ef8190"
+      "sha256": "2e840c220245494bcd093ba121d7d390d532f022cb0958724acb022fe85f50c7"
     },
     "scripts/release/recovery/authority.mjs": {
       "sha256": "938eff7e7f7a8a085dd34493461ddf4da0bc619e6a8309df99f773717b4df172"
@@ -146,10 +146,10 @@
       "sha256": "b4eadc68a8b530275625942a9adf08e3962965fb03547f62662cd86b11b6cecf"
     },
     "scripts/release/recovery/evidence-proof.mjs": {
-      "sha256": "daf0ba672d63efbe843703683cb5efb6f1c7b518c0260bb0cb2a275f9bd847c4"
+      "sha256": "412380b760a75f97bcc3ddb83a347df7d1f33780283aeeb9680e2c6a521294b3"
     },
     "scripts/release/recovery/evidence.mjs": {
-      "sha256": "4e8a84512d928773bb01421ea836915248f904e22b3299a7cbeab640a1e61911"
+      "sha256": "66c5a43436a08c88c1507cbcfcf3acd11b19557af17ea39cbfbcc0a0895a19d4"
     },
     "scripts/release/recovery/fence-evidence.mjs": {
       "sha256": "ec887de50b70263edef728079f4707fd0c0d7b9b2c4566cb6c0c0e4740cfa48c"
@@ -158,7 +158,7 @@
       "sha256": "9d488b39708b1651b72b55338bed63837a47cbbd60dc6e77069e4427f7b48298"
     },
     "scripts/release/recovery/finalize.mjs": {
-      "sha256": "28cd73764a04518bfdd8d4a42c96f6dda707ee4ff34948ffa6673e73b9a1c2d7"
+      "sha256": "87ef742e4300aaabe76d52aa48dacc2a2463dc94cf9760d9274eaf9ddf9547e5"
     },
     "scripts/release/recovery/invocation.mjs": {
       "sha256": "4ed2bb7dd388275fd20b1cc23d2095100d94b0dcfd5782fff26de490d83cf98e"
@@ -170,10 +170,13 @@
       "sha256": "0da8451d732545c08386ee90015c7fabf9d1e5a1855a5546fcdad4c0a54538d2"
     },
     "scripts/release/recovery/observe.mjs": {
-      "sha256": "9297f553973faa7f00bd162598a30c15d1c250fc3e233516f048f3a932e757df"
+      "sha256": "818caff803f53d3926f7328356ff7c19b99b30df919ff90e0d565362e3acb1d0"
+    },
+    "scripts/release/recovery/payload-reuse.mjs": {
+      "sha256": "bfe8d23eb87cb31afc474f77fa4742784508e20d985b44717479f22ad918c517"
     },
     "scripts/release/recovery/policy.json": {
-      "sha256": "b52e05c47a46223d8c909faefdccf13c037a875ac8db40daacb6e6f3c8177bc7"
+      "sha256": "fa2edf39ca80f331d4208d81d85ba000772298d7c3fcb8063c378aafe5b12d4e"
     },
     "scripts/release/recovery/policy.mjs": {
       "sha256": "77e3651e87b6964b84333a6c324087e855035a77987054e4fc73a412ff148ad2"
@@ -200,7 +203,7 @@
       "sha256": "07500c88ba45814f9a2d31dab4e2b152671522f9c2a3f4466ccf1ae8eb4be7c6"
     },
     "scripts/release/recovery/writer.mjs": {
-      "sha256": "52187b83e4688d172ac43dc9d5b0de135457cfd3c166036b8b14d398721822f0"
+      "sha256": "d8d4690b92e5e9225204fefd950cf18ad4b3009d450494c658ec05c62c937cc6"
     },
     "scripts/release/release-record.mjs": {
       "sha256": "f841a2b615cef19cf913a4f89665c10c428446f97314de6c27c1785e47a51170"

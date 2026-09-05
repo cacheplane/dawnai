@@ -10,7 +10,8 @@ import {
   recoveryVerificationName,
 } from "./evidence-proof.mjs"
 import { renderRecoveryReleaseBody } from "./metadata.mjs"
-import { createRecoveryWorkBudget, observeRecoveryCandidate } from "./observe.mjs"
+import { createRecoveryWorkBudget } from "./observe.mjs"
+import { withRecoveryPayloadReuse } from "./payload-reuse.mjs"
 import { RECOVERY_RETRY, recoveryMethods } from "./policy.mjs"
 import {
   canonicalRecoveryBytes,
@@ -21,6 +22,11 @@ import {
 import { createRecoveryWriter } from "./writer.mjs"
 
 export async function collectRecoveryEvidence(request, config, dependencies) {
+  return withRecoveryPayloadReuse(dependencies, (scoped) =>
+    collectRecoveryEvidenceInInvocation(request, config, scoped),
+  )
+}
+async function collectRecoveryEvidenceInInvocation(request, config, dependencies) {
   request = snapshotRecoveryData(request, 16384)
   if (Object.keys(request).sort().join(" ") !== "candidate expectedControllerSha intentPath")
     throw new TypeError("Exact recovery evidence request required")
@@ -44,14 +50,7 @@ export async function collectRecoveryEvidence(request, config, dependencies) {
     },
   )
   const observe = async () => {
-    const result = await budget.work(() =>
-      observeRecoveryCandidate({
-        ...observation,
-        candidate: request.candidate,
-        controllerRef: request.expectedControllerSha,
-        intentPath: request.intentPath,
-      }),
-    )
+    const result = await writer.observeRecoveryCandidate(request)
     if (result.outcome === "blocked") throw new Error(result.errors.join("; "))
     return result
   }

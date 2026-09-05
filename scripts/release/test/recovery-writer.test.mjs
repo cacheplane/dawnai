@@ -23,6 +23,7 @@ test("recovery writer exposes bounded effects plus read-only guarded inspection"
   assert.deepEqual(Object.keys(writer(r)).sort(), [
     "dispatchRecoveryAudit",
     "inspectRecoveryCandidate",
+    "observeRecoveryCandidate",
     "publishRecoveryDraft",
     "updateRecoveryDraft",
     "uploadRecoveryAsset",

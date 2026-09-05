@@ -280,6 +280,7 @@ async function loadAsset(context, ref) {
   const base64 = await context.download({
     assetId: ref.id,
     maximumBytes: ref.size,
+    sha256: ref.sha256,
   })
   requireThat(typeof base64 === "string", "asset bytes unavailable")
   const bytes = Buffer.from(base64, "base64")
@@ -426,7 +427,15 @@ async function npmProof(context, c, manifest, npm, npmAuditFactory) {
         "registry package identity differs",
       )
       const payload = await context.npm(
-        () => npm.downloadRegistryTarball({ tarballUrl: url }),
+        () =>
+          npm.downloadRegistryTarball({
+            tarballUrl: url,
+            maximumBytes: entry.size,
+            sha256: entry.sha256,
+            sha512: entry.sha512,
+            shasum: pkg.shasum,
+            integrity: pkg.integrity,
+          }),
         "tarball",
       )
       const bytes =
