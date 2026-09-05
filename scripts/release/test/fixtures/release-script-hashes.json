@@ -56,7 +56,7 @@
       "sha256": "3e171b1bc9aa79080d58087327ea2014b856ba5e6329f33de1a0a5f1b18c05d1"
     },
     "scripts/release/artifact-store.mjs": {
-      "sha256": "8b285501239e71b93ee5ec4280efb6c82a112ede09dc8699663eadd66deeb6ab"
+      "sha256": "a9920592396029bfdacf4daaab9d453216f02c3114c50c35cd563058c8cac9dd"
     },
     "scripts/release/audit.mjs": {
       "sha256": "8d18331b857ba0743a9a2109b51f07639639cecb7a572375973452356b81a60f"
@@ -179,7 +179,7 @@
       "sha256": "bfe8d23eb87cb31afc474f77fa4742784508e20d985b44717479f22ad918c517"
     },
     "scripts/release/recovery/policy.json": {
-      "sha256": "183a6cd72cef89291ab9e5c64b7e56453615051e8aba403d9e620d01499665ae"
+      "sha256": "fc93749a21102234793f65183e40a14495844f82672bedf08dcfd770bb455073"
     },
     "scripts/release/recovery/policy.mjs": {
       "sha256": "77e3651e87b6964b84333a6c324087e855035a77987054e4fc73a412ff148ad2"

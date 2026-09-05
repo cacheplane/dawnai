@@ -171,7 +171,7 @@
       "scripts/release/terminal-records.mjs",
       "scripts/release/topology.mjs"
     ],
-    "sha256": "8c29751b7600f19bd24cadd8c99ef54a6613cddeba11feff48a01a9a54f4e195"
+    "sha256": "8bc01a29abfa5c2684994dd4628626b99f04ceeee98c17d3d5eb68fe6af08031"
   },
   "workflows": [
     ".github/workflows/release-postpublication-audit.yml",

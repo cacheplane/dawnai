@@ -301,6 +301,7 @@ test("the documented four-argument resolver defaults to its built-in ZIP extract
 test("the sparse executable dependency allowlist covers its exact local import closure", () => {
   assert.deepEqual(ARTIFACT_STORE_SPARSE_FILES, [
     "scripts/release/adapter-normalize.mjs",
+    "scripts/release/adapters/conditional-json.mjs",
     "scripts/release/adapters/github.mjs",
     "scripts/release/adapters/http.mjs",
     "scripts/release/artifact-store.mjs",

@@ -5086,7 +5086,7 @@
                 "with": {
                   "persist-credentials": false,
                   "ref": "${{ needs.detect.outputs.candidate_sha }}",
-                  "sparse-checkout": "scripts/release/adapter-normalize.mjs\nscripts/release/adapters/github.mjs\nscripts/release/adapters/http.mjs\nscripts/release/adapters/npm.mjs\nscripts/release/artifact-store.mjs\nscripts/release/limits.mjs\nscripts/release/manifest.mjs\nscripts/release/metadata.mjs\nscripts/release/npm-audit.mjs\nscripts/release/npm-evidence.mjs\nscripts/release/process-runner.mjs\nscripts/release/publisher.mjs\nscripts/release/release-record.mjs\nscripts/release/semver.mjs\nscripts/release/smoke-result.mjs\nscripts/release/terminal-records.mjs\nscripts/release/topology.mjs\n",
+                  "sparse-checkout": "scripts/release/adapter-normalize.mjs\nscripts/release/adapters/conditional-json.mjs\nscripts/release/adapters/github.mjs\nscripts/release/adapters/http.mjs\nscripts/release/adapters/npm.mjs\nscripts/release/artifact-store.mjs\nscripts/release/limits.mjs\nscripts/release/manifest.mjs\nscripts/release/metadata.mjs\nscripts/release/npm-audit.mjs\nscripts/release/npm-evidence.mjs\nscripts/release/process-runner.mjs\nscripts/release/publisher.mjs\nscripts/release/release-record.mjs\nscripts/release/semver.mjs\nscripts/release/smoke-result.mjs\nscripts/release/terminal-records.mjs\nscripts/release/topology.mjs\n",
                   "sparse-checkout-cone-mode": false
                 }
               }

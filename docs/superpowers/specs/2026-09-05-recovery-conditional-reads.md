@@ -85,4 +85,8 @@ read credential; the eventual workflow-token rehearsal is still required.
 The separate Administration(read) immutable-policy reader remains unconditional.
 It does not account for the repeated reads addressed here and has a distinct
 credential. Raw adapter and GitHub reader tests cover both enabled behavior and
-the legacy default. Full validation and interruption-matrix reruns are pending.
+the legacy default. The separate fault harness passed all 116 tests at d609c4bd, including the full
+64-case interruption matrix. Full validation found a missing transitive module
+in the legacy publisher sparse checkout. Its allowlist, checkout and explicit
+contract were corrected; all 60 artifact-store/publisher tests now pass,
+including the real sparse production sequence. Final validation remains pending.

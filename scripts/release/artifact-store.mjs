@@ -62,6 +62,7 @@ const VERIFIED_MATERIALIZATIONS = new WeakMap()
 
 export const ARTIFACT_STORE_SPARSE_FILES = Object.freeze([
   "scripts/release/adapter-normalize.mjs",
+  "scripts/release/adapters/conditional-json.mjs",
   "scripts/release/adapters/github.mjs",
   "scripts/release/adapters/http.mjs",
   "scripts/release/artifact-store.mjs",

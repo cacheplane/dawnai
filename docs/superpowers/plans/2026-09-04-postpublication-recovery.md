@@ -916,16 +916,23 @@ of the implementation checkpoint does not complete the live-recovery objective.
 Contract: `../specs/2026-09-05-recovery-conditional-reads.md`. This addresses the
 measured quota defect before claiming implementation readiness.
 
-- [ ] Add failing bounded-HTTP and conditional-reader regressions for genuine
+- [x] Add failing bounded-HTTP and conditional-reader regressions for genuine
   200/304 revalidation, validator mismatch, error invalidation, caller mutation,
   credential/version isolation, size/retention/lifetime limits, closure and late
   responses. Prove arrays/multi-page collections remain unconditional.
-- [ ] Implement opt-in conditional JSON transport and a small isolated cache
+- [x] Implement opt-in conditional JSON transport and a small isolated cache
   module. Keep actual 304 provenance. Wire only recovery runtime readers and
   dispose in every CLI outcome; keep legacy readers and writer fetch identity.
-- [ ] Extend the owned HTTP rehearsal with ETags and measured primary/304 counts,
+- [x] Extend the owned HTTP rehearsal with ETags and measured primary/304 counts,
   using realistic 100-item pages and isolated phase/auditor state. Verify the
   full arc and fault cases preserve all safety assertions.
 - [ ] Refresh executable closure pins, run focused regressions and full local/CI
   gates, and update the draft PR with measured results and outstanding service
   evidence. Do not claim the live quota is proven by a fixture projection.
+
+The first complete validation at d609c4bd passed all 5,664 source tests and
+3,212 of 3,214 controller tests. Both failures identified the same missing
+conditional JSON module in the legacy publisher sparse checkout. The corrected
+checkout and executable allowlist pass all 60 artifact-store/publisher tests.
+The separate correctly pinned fault harness passed all 116 tests. Final gates
+are rerun after refreshing the closure pins.
