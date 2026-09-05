@@ -143,6 +143,7 @@ export async function runRecoveryCli(
   { root = process.cwd(), environment = process.env, createRuntime = createRecoveryRuntime } = {},
 ) {
   let args,
+    runtime,
     request = null,
     result = null,
     needs = null,
@@ -173,7 +174,7 @@ export async function runRecoveryCli(
       }
     }
     boundary = "runtime"
-    const runtime = await createRuntime({ root, environment, command: args.command, request })
+    runtime = await createRuntime({ root, environment, command: args.command, request })
     boundary = args.command
     result = await executeRecoveryCommand(args.command, request, runtime, {
       output: args.output,
@@ -205,6 +206,8 @@ export async function runRecoveryCli(
         /* An ambiguous or invalid destination cannot receive diagnostics. */
       }
     }
+  } finally {
+    runtime?.dispose?.()
   }
   if (args?.output) {
     try {

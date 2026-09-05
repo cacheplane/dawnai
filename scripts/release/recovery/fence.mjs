@@ -38,6 +38,7 @@ const REQUIRED_WRITERS = [
 // Task12 must update this reviewed list atomically if its source graph grows.
 export const RECOVERY_FENCE_PROBE_INPUTS = Object.freeze([
   "scripts/release/adapter-normalize.mjs",
+  "scripts/release/adapters/conditional-json.mjs",
   "scripts/release/adapters/github.mjs",
   "scripts/release/adapters/http.mjs",
   "scripts/release/adapters/npm.mjs",

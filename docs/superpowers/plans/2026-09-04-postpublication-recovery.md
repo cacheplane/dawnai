@@ -910,3 +910,22 @@ service execution remains unrun: no authorized repository has been supplied, the
 publication credential experiment must use the intended workflow token, and the
 platform-owned workflow fence representation still needs resolution. Completion
 of the implementation checkpoint does not complete the live-recovery objective.
+
+### Task 12d: Preserve fresh checks within the GitHub quota
+
+Contract: `../specs/2026-09-05-recovery-conditional-reads.md`. This addresses the
+measured quota defect before claiming implementation readiness.
+
+- [ ] Add failing bounded-HTTP and conditional-reader regressions for genuine
+  200/304 revalidation, validator mismatch, error invalidation, caller mutation,
+  credential/version isolation, size/retention/lifetime limits, closure and late
+  responses. Prove arrays/multi-page collections remain unconditional.
+- [ ] Implement opt-in conditional JSON transport and a small isolated cache
+  module. Keep actual 304 provenance. Wire only recovery runtime readers and
+  dispose in every CLI outcome; keep legacy readers and writer fetch identity.
+- [ ] Extend the owned HTTP rehearsal with ETags and measured primary/304 counts,
+  using realistic 100-item pages and isolated phase/auditor state. Verify the
+  full arc and fault cases preserve all safety assertions.
+- [ ] Refresh executable closure pins, run focused regressions and full local/CI
+  gates, and update the draft PR with measured results and outstanding service
+  evidence. Do not claim the live quota is proven by a fixture projection.

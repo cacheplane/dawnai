@@ -1,3 +1,4 @@
+import { createConditionalJsonReader } from "./conditional-json.mjs"
 import { createHttpGet, DEFAULT_HTTP_MAX_RESPONSE_BYTES, DEFAULT_HTTP_TIMEOUT_MS } from "./http.mjs"
 
 const API_ORIGIN = "https://api.github.com"
@@ -48,6 +49,7 @@ export function createGitHubReader({
   maxPages = DEFAULT_GITHUB_MAX_PAGES,
   maxRecords = DEFAULT_GITHUB_MAX_RECORDS,
   now = Date.now,
+  conditionalReads = false,
 }) {
   assertIdentity(owner, OWNER_PATTERN, "GitHub owner", MAX_GITHUB_OWNER_BYTES)
   assertIdentity(repo, REPOSITORY_PATTERN, "GitHub repository", MAX_GITHUB_REPOSITORY_BYTES)
@@ -72,7 +74,9 @@ export function createGitHubReader({
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
   })
+  const conditional = conditionalReads ? createConditionalJsonReader({ http, now }) : null
   const context = {
+    conditional,
     base,
     apiOrigin: normalizedApiOrigin,
     repositoryId: normalizedRepositoryId,
@@ -87,6 +91,7 @@ export function createGitHubReader({
   }
 
   return {
+    ...(conditional ? { dispose: () => conditional.dispose() } : {}),
     getRepository(args = {}, options = {}) {
       exactArguments(args, [])
       return readObject(recoveryContext(context, options), { url: base, operation: "repository" })
@@ -419,6 +424,12 @@ async function readPaginated(
       url,
       operation,
       requestBudget,
+      conditionalBody: (body) =>
+        isObject(body) &&
+        Number.isSafeInteger(body.total_count) &&
+        body.total_count >= 0 &&
+        Array.isArray(extract(body)) &&
+        extract(body).length === body.total_count,
     })
     if (result.code === "RESPONSE_TOO_LARGE") {
       return failure("ERROR", operation, result.httpStatus, "OPERATION_TOO_LARGE")
@@ -516,17 +527,23 @@ async function readPaginated(
   return failure("ERROR", operation, null, "PAGE_LIMIT_EXCEEDED")
 }
 
-async function readJson(context, { url, operation, requestBudget = {} }) {
-  const response = await context.http.getJson({
-    url,
-    headers: {
-      ...requestHeaders(context.token, JSON_ACCEPT),
-      ...(context.apiVersion ? { "X-GitHub-Api-Version": context.apiVersion } : {}),
+async function readJson(
+  context,
+  { url, operation, requestBudget = {}, conditionalBody = isObject },
+) {
+  const response = await (context.conditional ?? context.http).getJson(
+    {
+      url,
+      headers: {
+        ...requestHeaders(context.token, JSON_ACCEPT),
+        ...(context.apiVersion ? { "X-GitHub-Api-Version": context.apiVersion } : {}),
+      },
+      ...(context.signal ? { signal: context.signal } : {}),
+      timeoutMs: context.timeoutMs,
+      ...requestBudget,
     },
-    ...(context.signal ? { signal: context.signal } : {}),
-    timeoutMs: context.timeoutMs,
-    ...requestBudget,
-  })
+    { canRetain: conditionalBody },
+  )
   const classification = classifyGitHubResponse(response, operation)
   if (classification.status !== "PRESENT") {
     return classification
@@ -659,6 +676,13 @@ export function classifyGitHubResponse(result, operation) {
   if (httpStatus >= 500) {
     return failure("AMBIGUOUS", operation, httpStatus, "SERVER_ERROR")
   }
+  if (
+    httpStatus === 304 &&
+    result.status === "NOT_MODIFIED" &&
+    result.code === "NOT_MODIFIED" &&
+    Object.hasOwn(result, "body")
+  )
+    return failure("PRESENT", operation, httpStatus, "NOT_MODIFIED")
   if (httpStatus !== null && (httpStatus < 200 || httpStatus >= 300)) {
     return result.code === "REDIRECT"
       ? failure("ERROR", operation, httpStatus, "REDIRECT")

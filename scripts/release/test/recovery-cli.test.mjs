@@ -659,3 +659,67 @@ test("diagnostic next actions follow every durable phase and fixed-finalization 
     facts.finalization.ref.sha256,
   )
 })
+
+test("recovery runtime opts in to fresh conditional reads and exposes disposal", async () => {
+  const r = await recoveryRemote()
+  let options,
+    disposed = 0
+  const value = runtime.createRecoveryRuntime(
+    {
+      root: process.cwd(),
+      environment: { GITHUB_TOKEN: "fixture" },
+      command: "inspect",
+      request: { candidate: r.c },
+    },
+    {
+      createGitReader: () => r.args.git,
+      createGitHubReader: (input) => {
+        options = input
+        return { ...r.args.github, dispose: () => disposed++ }
+      },
+      createNpmReader: () => r.args.npm,
+      createAttestationVerifier: () => r.args.attestations,
+    },
+  )
+  assert.equal(options.conditionalReads, true)
+  value.dispose()
+  assert.equal(disposed, 1)
+})
+test("CLI disposes read state after success and command failure", async () => {
+  for (const fail of [false, true]) {
+    const r = await recoveryRemote(),
+      directory = await mkdtemp(path.join(os.tmpdir(), "recovery-dispose-"))
+    let disposed = 0
+    try {
+      const request = path.join(directory, "request.json"),
+        output = path.join(directory, "result.json")
+      await writeFile(
+        request,
+        runtime.canonicalRequestBytes({ candidate: r.c, expectedControllerSha: r.e.controllerSha }),
+      )
+      await cli.runRecoveryCli(["inspect", "--request", request, "--output", output], {
+        environment: {},
+        createRuntime: async () => ({ observation: fail ? {} : r.args, dispose: () => disposed++ }),
+      })
+      assert.equal(disposed, 1)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  }
+})
+
+test("workflow request preparation disposes a runtime after an invalid audit request", async () => {
+  const { prepareRecoveryWorkflowRequest } = await import("../recovery/workflow-request.mjs")
+  const sha = "a".repeat(40)
+  let disposed = 0
+  await assert.rejects(
+    prepareRecoveryWorkflowRequest(
+      "audit",
+      "/tmp/unused-audit-request",
+      { GITHUB_REF: "refs/heads/main", GITHUB_SHA: sha, INPUT_EXPECTED_CONTROLLER_SHA: sha },
+      process.cwd(),
+      { createRuntime: () => ({ dispose: () => disposed++ }) },
+    ),
+  )
+  assert.equal(disposed, 1)
+})

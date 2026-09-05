@@ -1105,3 +1105,23 @@ SHA selects probe source, `RECOVERY_AUTHORIZED_REPOSITORY` selects the repositor
 and `RECOVERY_POLICY_READ_TOKEN` supplies the separate policy-read credential.
 All other jobs have no permissions. This fixture is not installed in production
 or a substitute for real five-lane recovery evidence.
+
+### GitHub quota readiness
+
+Recovery now revalidates eligible JSON representations with an authenticated
+conditional GET on every read. A matching fresh 304 preserves its real status;
+it does not reuse an old authorization decision. Array-only inventories and
+multi-page collections remain unconditional. Runtime state is bounded and
+cleared at completion; the independent auditor starts separately. The separate
+Administration(read) policy reader remains unconditional.
+
+The local complete arc records 2,193 HTTP 304 responses and 866 other GitHub API
+responses; evidence collection accounts for 150 of the latter. Those counts
+exclude the supplied fence/admission callbacks, workflow bootstrap, and upload
+host. Before activation, retain actual workflow quota observations including
+historical fence pagination and all five smoke jobs. The repository's 1,000-call
+hourly GITHUB_TOKEN primary quota is shared across its jobs; job boundaries do
+not reset it. Green synthetic checks cannot certify that complete live budget.
+See `../specs/2026-09-05-recovery-conditional-reads.md` for the contract and
+read-only service evidence. No production reservation or dispatch follows from
+these measurements.

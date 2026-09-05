@@ -85,6 +85,8 @@ export function createRecoveryRuntime(
     repositoryId,
     token,
     fetchImpl,
+    conditionalReads: true,
+    now: overrides.now ?? Date.now,
     maxResponseBytes: RELEASE_PAYLOAD_LIMITS.actionsArchiveBytes,
   })
   const npm = (overrides.createNpmReader ?? createNpmReader)({
@@ -110,8 +112,9 @@ export function createRecoveryRuntime(
     },
   })
   const observation = { github, git, npm, npmAuditFactory, attestations }
+  const dispose = () => github.dispose?.()
   const phaseDeadline = (overrides.now ?? Date.now)() + RECOVERY_RETRY.phaseDeadlineMs
-  if (command === "inspect") return Object.freeze({ observation, phaseDeadline })
+  if (command === "inspect") return Object.freeze({ observation, phaseDeadline, dispose })
   const name = expectedJobName ?? (command === "smoke" ? `recovery-${request.lane}` : jobs[command])
   const now = overrides.now ?? Date.now,
     sleep = overrides.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
@@ -140,6 +143,7 @@ export function createRecoveryRuntime(
     observeImmutableReleasePolicy = policyReader.observeImmutableReleasePolicy
   }
   return Object.freeze({
+    dispose,
     observation,
     phaseDeadline,
     authority,

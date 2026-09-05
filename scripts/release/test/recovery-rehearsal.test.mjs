@@ -20,6 +20,15 @@ test("production HTTP recovery arc preserves payload through adoption, audit, pu
     assert.equal(result.duplicateAuditRequests, 0)
     assert.ok(result.httpRequests > 100)
     assert.equal(result.effects.length, 32)
+    assert.ok(result.githubNotModified > 1000, "real HTTP 304 confirmations required")
+    assert.ok(
+      result.githubPrimaryByStage["five-lanes"] < 250,
+      "evidence fixture must fit primary quota with headroom",
+    )
+    assert.ok(
+      result.githubPrimaryRequests < 1000,
+      "entire fixture arc must fit repository hourly quota",
+    )
     assert.ok(result.testSeams.includes("synthetic npm and attestation trust"))
   } finally {
     await rehearsal.close()

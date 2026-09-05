@@ -29,7 +29,7 @@ const TEST_SEAMS = Object.freeze([
   "canonical-host mapping to owned loopback HTTP",
 ])
 
-export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
+export async function createRecoveryHttpRehearsal({ fault = null, conditionalReads = true } = {}) {
   assert.ok(
     fault === null ||
       (Number.isInteger(fault.at) &&
@@ -65,17 +65,33 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, "http://owned.invalid")
     const pathname = decodeURIComponent(url.pathname)
-    requests.push({
+    const entry = {
       stage,
       method: request.method,
       origin: request.headers["x-rehearsal-origin"],
       path: url.pathname,
       search: url.search,
+    }
+    requests.push(entry)
+    response.on("finish", () => {
+      entry.httpStatus = response.statusCode
     })
     const json = (value, status = 200) => {
+      const text = JSON.stringify(value)
+      if (entry.origin === "https://api.github.com" && entry.method === "GET" && status === 200) {
+        const tag = `"${hash(text)}"`
+        response.setHeader("ETag", `W/${tag}`)
+        if (request.headers["if-none-match"]?.replace(/^W\//u, "") === tag) {
+          response.statusCode = 304
+          response.setHeader("ETag", tag)
+          response.removeHeader("Link")
+          response.end()
+          return
+        }
+      }
       response.statusCode = status
       response.setHeader("Content-Type", "application/json")
-      response.end(JSON.stringify(value))
+      response.end(text)
     }
     const binary = (bytes) => {
       response.setHeader("Content-Type", "application/octet-stream")
@@ -84,8 +100,8 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
     const page = (values, key = null) => {
       const number = Number(url.searchParams.get("page") ?? 1)
       assert.ok(Number.isInteger(number) && number >= 1 && number <= 100)
-      const items = values.slice((number - 1) * 25, number * 25)
-      if (number * 25 < values.length) {
+      const items = values.slice((number - 1) * 100, number * 100)
+      if (number * 100 < values.length) {
         const next = new URL(`https://api.github.com${url.pathname}${url.search}`)
         next.searchParams.set("page", String(number + 1))
         response.setHeader("Link", `<${next.href}>; rel="next"`)
@@ -304,25 +320,40 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
     headers.set("X-Rehearsal-Origin", url.origin)
     return fetch(`http://127.0.0.1:${port}${url.pathname}${url.search}`, { ...options, headers })
   }
-  const readers = () => ({
-    github: createGitHubReader({
-      owner: "cacheplane",
-      repo: "dawnai",
-      repositoryId: r.c.repositoryId,
-      token: "fixture-token",
-      fetchImpl: mappedFetch,
-    }),
-    npm: createNpmReader({ fetchImpl: mappedFetch }),
-    git: r.args.git,
-    npmAuditFactory: r.args.npmAuditFactory,
-    attestations: r.args.attestations,
-  })
+  const githubReaders = new Set()
+  const readers = () => {
+    const result = {
+      github: createGitHubReader({
+        owner: "cacheplane",
+        repo: "dawnai",
+        repositoryId: r.c.repositoryId,
+        token: "fixture-token",
+        fetchImpl: mappedFetch,
+        conditionalReads,
+      }),
+      npm: createNpmReader({ fetchImpl: mappedFetch }),
+      git: r.args.git,
+      npmAuditFactory: r.args.npmAuditFactory,
+      attestations: r.args.attestations,
+    }
+    githubReaders.add(result.github)
+    return result
+  }
   const observation = readers()
   const dependencies = {
     ...r.dependencies,
     observation,
     authority: { ...r.dependencies.authority, github: observation.github },
     fetchImpl: mappedFetch,
+  }
+  const resetReads = () => {
+    observation.github.dispose?.()
+    Object.assign(observation, readers())
+    dependencies.authority.github = observation.github
+  }
+  const startPhase = (name) => {
+    stage = name
+    resetReads()
   }
   const request = r.request
   const legacy = {
@@ -339,20 +370,21 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
       if (!retryAvailable || !/uncertain|stopped/.test(error.message)) throw error
       retryAvailable = false
       resumes.push({ stage, reason: error.message })
+      resetReads()
       return operation()
     }
   }
   async function drive() {
     try {
-      stage = "adopt"
+      startPhase("adopt")
       assert.equal(
         (await resume(() => adoptRecoveryCandidate(request, r.config, dependencies))).phase,
         "RECOVERY_ADOPTED",
       )
-      stage = "five-lanes"
+      startPhase("five-lanes")
       const verified = await resume(() => collectRecoveryEvidence(request, r.config, dependencies))
       assert.equal(verified.phase, "VERIFICATION_COMPLETE")
-      stage = "audit-dispatch"
+      startPhase("audit-dispatch")
       let auditRequest
       for (let attempt = 1; attempt <= 2; attempt++) {
         auditRequest = { ...request, requestId: `http-audit-${attempt}` }
@@ -371,7 +403,7 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
         )
         assert.equal(attempt, 1, "bounded independent replacement intent")
       }
-      stage = "independent-audit"
+      startPhase("independent-audit")
       const auditObservation = readers()
       const auditor = {
         observation: auditObservation,
@@ -387,7 +419,12 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
           }),
         },
       }
-      const result = await runRecoveryAudit(auditRequest, auditor)
+      let result
+      try {
+        result = await runRecoveryAudit(auditRequest, auditor)
+      } finally {
+        auditObservation.github.dispose?.()
+      }
       assert.equal(result.conclusion, "success")
       currentAudit.status = "completed"
       currentAudit.conclusion = "success"
@@ -409,18 +446,18 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
           head_branch: "main",
         },
       }
-      stage = "audit-escrow"
+      startPhase("audit-escrow")
       r.execution.jobId = "907"
       assert.equal(
         (await resume(() => reconcileRecoveryAudit(auditRequest, r.config, dependencies))).phase,
         "AUDIT_VERIFIED",
       )
-      stage = "finalize"
+      startPhase("finalize")
       assert.equal(
         (await resume(() => finalizeRecoveryCandidate(request, r.config, dependencies))).phase,
         "PUBLICATION_READY",
       )
-      stage = "publish"
+      startPhase("publish")
       const complete = await resume(() => publishRecoveryCandidate(request, r.config, dependencies))
       assert.equal(complete.phase, "COMPLETE")
       for (const [name, bytes] of originalBytes) assert.deepEqual(r.raws.get(name), bytes)
@@ -437,12 +474,12 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
         assert.equal(r.raws.get(ref.assetName).length, ref.size)
       }
       const before = r.effects.length
-      stage = "published-noop"
+      startPhase("published-noop")
       assert.equal(
         (await resume(() => publishRecoveryCandidate(request, r.config, dependencies))).phase,
         "COMPLETE",
       )
-      stage = "next-version"
+      startPhase("next-version")
       const terminal = await routeRecoveryCandidate({
         ...readers(),
         candidate: legacy,
@@ -481,6 +518,21 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
           (q) => q.path === `${base}/releases` && q.method === "POST",
         ).length,
         httpRequests: requests.length,
+        githubNotModified: requests.filter(
+          (q) => q.origin === "https://api.github.com" && q.httpStatus === 304,
+        ).length,
+        githubPrimaryRequests: requests.filter(
+          (q) => q.origin === "https://api.github.com" && q.httpStatus !== 304,
+        ).length,
+        githubPrimaryByStage: Object.fromEntries(
+          [...new Set(requests.map((q) => q.stage))].map((name) => [
+            name,
+            requests.filter(
+              (q) =>
+                q.stage === name && q.origin === "https://api.github.com" && q.httpStatus !== 304,
+            ).length,
+          ]),
+        ),
         httpRequestsByStage: Object.fromEntries(
           [...new Set(requests.map((q) => q.stage))].map((name) => [
             name,
@@ -502,6 +554,7 @@ export async function createRecoveryHttpRehearsal({ fault = null } = {}) {
     requests,
     async close() {
       closed = true
+      for (const github of githubReaders) github.dispose?.()
       server.closeAllConnections()
       await new Promise((resolve) => server.close(resolve))
     },

@@ -27,6 +27,7 @@ export async function prepareRecoveryWorkflowRequest(
   output,
   environment = process.env,
   root = process.cwd(),
+  { createRuntime = createRecoveryRuntime } = {},
 ) {
   boundedRecoveryPath(output)
   if (![...RECOVERY_COMMANDS, "admit"].includes(command))
@@ -39,84 +40,91 @@ export async function prepareRecoveryWorkflowRequest(
   )
     throw new TypeError("Recovery requires exact current main controller SHA")
   let request, runtime
-  if (command === "audit") {
-    runtime = createRecoveryRuntime({ root, environment, command })
-    request = await resolveRecoveryAuditRequest(
-      {
-        request_id: environment.INPUT_REQUEST_ID,
-        intent_sha256: environment.INPUT_INTENT_SHA256,
-        expected_controller_sha: expectedControllerSha,
-        release_id: environment.INPUT_RELEASE_ID,
-      },
-      runtime,
-      environment.GITHUB_SHA,
-    )
-  } else {
-    const intentPath = environment.INPUT_INTENT_PATH
-    if (
-      !/^scripts\/release\/recovery-adoptions\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.json$/u.test(intentPath)
-    )
-      throw new TypeError("Exact committed intent path required")
-    const git = createGitReader({ root }),
-      raw = Buffer.from(await git.showFile({ ref: expectedControllerSha, path: intentPath }))
-    const intent = parseRecovery(raw, { kind: "recovery-adoption-intent" })
-    if (!canonicalRecoveryBytes(intent).equals(raw))
-      throw new TypeError("Canonical committed intent required")
-    request = {
-      candidate: intent.candidate,
-      expectedControllerSha,
-      intentPath,
-      ...(["dispatch-audit", "reconcile-audit"].includes(command)
-        ? { requestId: `owner-${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}` }
-        : {}),
-      ...(command === "smoke" ? { lane: environment.RECOVERY_LANE } : {}),
+  try {
+    if (command === "audit") {
+      runtime = createRuntime({ root, environment, command })
+      request = await resolveRecoveryAuditRequest(
+        {
+          request_id: environment.INPUT_REQUEST_ID,
+          intent_sha256: environment.INPUT_INTENT_SHA256,
+          expected_controller_sha: expectedControllerSha,
+          release_id: environment.INPUT_RELEASE_ID,
+        },
+        runtime,
+        environment.GITHUB_SHA,
+      )
+    } else {
+      const intentPath = environment.INPUT_INTENT_PATH
+      if (
+        !/^scripts\/release\/recovery-adoptions\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.json$/u.test(
+          intentPath,
+        )
+      )
+        throw new TypeError("Exact committed intent path required")
+      const git = createGitReader({ root }),
+        raw = Buffer.from(await git.showFile({ ref: expectedControllerSha, path: intentPath }))
+      const intent = parseRecovery(raw, { kind: "recovery-adoption-intent" })
+      if (!canonicalRecoveryBytes(intent).equals(raw))
+        throw new TypeError("Canonical committed intent required")
+      request = {
+        candidate: intent.candidate,
+        expectedControllerSha,
+        intentPath,
+        ...(["dispatch-audit", "reconcile-audit"].includes(command)
+          ? { requestId: `owner-${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}` }
+          : {}),
+        ...(command === "smoke" ? { lane: environment.RECOVERY_LANE } : {}),
+      }
+      runtime = createRuntime({ root, environment, command, request })
     }
-    runtime = createRecoveryRuntime({ root, environment, command, request })
+    parseRecoveryRequest(command === "admit" ? "adopt" : command, canonicalRequestBytes(request))
+    await writeCanonicalFileNoClobber(output, canonicalRequestBytes(request))
+    if (command === "report") {
+      const needs = JSON.parse(environment.RECOVERY_NEEDS)
+      if (
+        Object.keys(needs).sort().join(" ") !==
+        Object.keys(RECOVERY_WORKFLOW_NEEDS).sort().join(" ")
+      )
+        throw new TypeError("Exact owner workflow results required")
+      const results = Object.fromEntries(
+        Object.entries(needs).map(([job, value]) => [job, { result: value.result }]),
+      )
+      await writeCanonicalFileNoClobber(
+        path.join(path.dirname(output), "needs.json"),
+        canonicalRequestBytes(results),
+      )
+    }
+    if (command !== "admit") return request
+    const proof = await captureRecoveryEligibility(
+      { candidate: request.candidate, expectedControllerSha },
+      runtime.authority,
+    )
+    const observed = await observeRecoveryRequest(request, runtime),
+      plan = planRecoveryWorkflow(observed)
+    if (plan.smoke) {
+      const ref = observed.facts.baseAssets.find((r) => r.assetName === "manifest.json")
+      const encoded = await readRecoveryApi(runtime, "downloadReleaseAsset", {
+        assetId: ref.id,
+        maximumBytes: ref.size,
+      })
+      // The receiving parent independently re-hashes and parses these transferred bytes.
+      await writeCanonicalFileNoClobber(
+        path.join(path.dirname(output), "bootstrap", "manifest.json"),
+        Buffer.from(encoded, "base64"),
+        {},
+        1024 * 1024,
+      )
+    }
+    await appendFile(
+      boundedRecoveryPath(environment.GITHUB_OUTPUT),
+      `${Object.entries(plan)
+        .map(([key, value]) => `${key}=${value}\n`)
+        .join("")}job_id=${proof.executor.jobId}\n`,
+    )
+    return request
+  } finally {
+    runtime?.dispose?.()
   }
-  parseRecoveryRequest(command === "admit" ? "adopt" : command, canonicalRequestBytes(request))
-  await writeCanonicalFileNoClobber(output, canonicalRequestBytes(request))
-  if (command === "report") {
-    const needs = JSON.parse(environment.RECOVERY_NEEDS)
-    if (
-      Object.keys(needs).sort().join(" ") !== Object.keys(RECOVERY_WORKFLOW_NEEDS).sort().join(" ")
-    )
-      throw new TypeError("Exact owner workflow results required")
-    const results = Object.fromEntries(
-      Object.entries(needs).map(([job, value]) => [job, { result: value.result }]),
-    )
-    await writeCanonicalFileNoClobber(
-      path.join(path.dirname(output), "needs.json"),
-      canonicalRequestBytes(results),
-    )
-  }
-  if (command !== "admit") return request
-  const proof = await captureRecoveryEligibility(
-    { candidate: request.candidate, expectedControllerSha },
-    runtime.authority,
-  )
-  const observed = await observeRecoveryRequest(request, runtime),
-    plan = planRecoveryWorkflow(observed)
-  if (plan.smoke) {
-    const ref = observed.facts.baseAssets.find((r) => r.assetName === "manifest.json")
-    const encoded = await readRecoveryApi(runtime, "downloadReleaseAsset", {
-      assetId: ref.id,
-      maximumBytes: ref.size,
-    })
-    // The receiving parent independently re-hashes and parses these transferred bytes.
-    await writeCanonicalFileNoClobber(
-      path.join(path.dirname(output), "bootstrap", "manifest.json"),
-      Buffer.from(encoded, "base64"),
-      {},
-      1024 * 1024,
-    )
-  }
-  await appendFile(
-    boundedRecoveryPath(environment.GITHUB_OUTPUT),
-    `${Object.entries(plan)
-      .map(([key, value]) => `${key}=${value}\n`)
-      .join("")}job_id=${proof.executor.jobId}\n`,
-  )
-  return request
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let command,

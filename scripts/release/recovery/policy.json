@@ -119,6 +119,7 @@
       "scripts/published-artifact-smoke.mjs",
       "scripts/published-artifact-verify.mjs",
       "scripts/release/adapter-normalize.mjs",
+      "scripts/release/adapters/conditional-json.mjs",
       "scripts/release/adapters/git.mjs",
       "scripts/release/adapters/github-write-transport.mjs",
       "scripts/release/adapters/github.mjs",
@@ -170,7 +171,7 @@
       "scripts/release/terminal-records.mjs",
       "scripts/release/topology.mjs"
     ],
-    "sha256": "a6c257331422b83a97bbe944b18fa5391dccf648d2818f7f7b5f500609ecaeca"
+    "sha256": "8c29751b7600f19bd24cadd8c99ef54a6613cddeba11feff48a01a9a54f4e195"
   },
   "workflows": [
     ".github/workflows/release-postpublication-audit.yml",
