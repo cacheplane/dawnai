@@ -592,6 +592,8 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
     this.#pendingPaths.add(reportPath)
     let canonicalPath: string | undefined
     let identity: string | undefined
+    let reservedCanonicalPath = false
+    let reservedIdentity = false
     let handle: Awaited<ReturnType<typeof open>> | undefined
     try {
       let initialStatus: Awaited<ReturnType<typeof lstat>>
@@ -611,6 +613,7 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
         throw new Error(`Vitest report canonical path is already reserved; reuse is forbidden`)
       }
       this.#pendingCanonicalPaths.add(canonicalPath)
+      reservedCanonicalPath = true
 
       handle = await open(reportPath, constants.O_RDONLY | constants.O_NOFOLLOW)
       const openedStatus = await handle.stat()
@@ -622,6 +625,7 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
         throw new Error("Vitest report identity is already reserved; reuse is forbidden")
       }
       this.#pendingIdentities.add(identity)
+      reservedIdentity = true
 
       const report = parseJson(await handle.readFile("utf8"), "Vitest output")
       const parsedReport = parseVitestProviderReport(report)
@@ -658,8 +662,10 @@ class DefaultVitestProviderAccountingSession implements VitestProviderAccounting
       await handle?.close().catch(() => undefined)
       this.#pendingPhases.delete(phase)
       this.#pendingPaths.delete(reportPath)
-      if (canonicalPath !== undefined) this.#pendingCanonicalPaths.delete(canonicalPath)
-      if (identity !== undefined) this.#pendingIdentities.delete(identity)
+      if (reservedCanonicalPath && canonicalPath !== undefined) {
+        this.#pendingCanonicalPaths.delete(canonicalPath)
+      }
+      if (reservedIdentity && identity !== undefined) this.#pendingIdentities.delete(identity)
     }
   }
 

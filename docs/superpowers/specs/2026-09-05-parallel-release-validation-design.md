@@ -40,3 +40,8 @@ records and closes retained descriptors. Harness cleanup runs it on success and
 failure, preserving both the original error and any disposal error. Finish remains
 the synchronous completeness check. Tests observe real descriptors through a test
 spy, avoiding a probabilistic inode-allocation test or a production filesystem seam.
+
+A rejected concurrent hard-link contender must release only reservations it acquired.
+The regression pauses the first report read, rejects an alias, then retries the alias
+before allowing the first read to finish. Both alias attempts must reject. Explicit
+ownership flags preserve the first operation's canonical-path and inode reservations.
