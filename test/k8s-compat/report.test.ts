@@ -798,6 +798,48 @@ describe("Vitest provider accounting session", () => {
     ).rejects.toThrow(/report identity.*already|reuse/i)
   })
 
+  test("a rejected hard-link collision cannot release another in-flight record's identity reservation", async () => {
+    const fixture = await writeAccountingFixture(vitestJsonReport())
+    const alias = resolve(fixture.reportPath, "../alias.json")
+    await link(fixture.reportPath, alias)
+    const session = await createVitestProviderAccountingSession({
+      manifestPath: fixture.manifestPath,
+    })
+    let enter = () => {}
+    let release = () => {}
+    const entered = new Promise<void>((resolvePromise) => {
+      enter = resolvePromise
+    })
+    const resume = new Promise<void>((resolvePromise) => {
+      release = resolvePromise
+    })
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const handle = await actual.open(...args)
+      vi.spyOn(handle, "readFile").mockImplementationOnce(async () => {
+        enter()
+        await resume
+        return JSON.stringify(vitestJsonReport())
+      })
+      return handle
+    })
+    const recording = session.record({
+      phase: "provider-before-upgrade",
+      reportPath: fixture.reportPath,
+    })
+    try {
+      await entered
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(
+          session.record({ phase: "provider-after-upgrade", reportPath: alias }),
+        ).rejects.toThrow(/identity.*reserved/i)
+      }
+    } finally {
+      release()
+      await recording
+    }
+  })
+
   test("releases phase and path reservations after failed validation so retry can pass", async () => {
     const fixture = await writeAccountingFixture({ ...vitestJsonReport(), success: false })
     const session = await createVitestProviderAccountingSession({
