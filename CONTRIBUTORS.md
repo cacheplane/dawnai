@@ -63,6 +63,7 @@ Use this path only when you intentionally want the generated app wired to the lo
 - `pnpm typecheck` runs the workspace type checks.
 - `pnpm test` runs the workspace test entrypoint.
 - `pnpm build` builds the workspace packages.
+- `pnpm test:release-integrity` runs content pins and recovery-policy checks after installation, without a build. CI and local validation run this preflight before expensive checks; the complete controller suite still runs later.
 - `pnpm ci:validate` runs the full repository validation sequence.
 - `pnpm verify:harness` runs the framework, runtime, and smoke harness reports together.
 - `node scripts/publish-smoke.mjs` runs the publish smoke check.

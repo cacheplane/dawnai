@@ -88,6 +88,14 @@
         "classification": "safe",
         "job": "validate",
         "stepIndex": 4,
+        "step": "Release Integrity Preflight",
+        "kind": "run",
+        "value": "pnpm test:release-integrity"
+      },
+      {
+        "classification": "safe",
+        "job": "validate",
+        "stepIndex": 5,
         "step": "Lint",
         "kind": "run",
         "value": "pnpm lint"
@@ -95,7 +103,7 @@
       {
         "classification": "safe",
         "job": "validate",
-        "stepIndex": 5,
+        "stepIndex": 6,
         "step": "Build Cache Config",
         "kind": "run",
         "value": "pnpm check:build-cache"
@@ -103,7 +111,7 @@
       {
         "classification": "safe",
         "job": "validate",
-        "stepIndex": 6,
+        "stepIndex": 7,
         "step": "Build",
         "kind": "run",
         "value": "pnpm build"
@@ -111,7 +119,7 @@
       {
         "classification": "safe",
         "job": "validate",
-        "stepIndex": 7,
+        "stepIndex": 8,
         "step": "Typecheck",
         "kind": "run",
         "value": "pnpm typecheck"
@@ -119,7 +127,7 @@
       {
         "classification": "safe",
         "job": "validate",
-        "stepIndex": 8,
+        "stepIndex": 9,
         "step": "Source Tests",
         "kind": "run",
         "value": "pnpm test"
@@ -127,7 +135,7 @@
       {
         "classification": "safe",
         "job": "validate",
-        "stepIndex": 9,
+        "stepIndex": 10,
         "step": "Release Inventory",
         "kind": "run",
         "value": "pnpm check:release-inventory"
@@ -135,7 +143,7 @@
       {
         "classification": "safe",
         "job": "validate",
-        "stepIndex": 10,
+        "stepIndex": 11,
         "step": "Release Controller Tests",
         "kind": "run",
         "value": "pnpm test:release-controller"
@@ -143,7 +151,7 @@
       {
         "classification": "safe",
         "job": "validate",
-        "stepIndex": 11,
+        "stepIndex": 12,
         "step": "Docs Check",
         "kind": "run",
         "value": "node scripts/check-docs.mjs"
