@@ -7,6 +7,17 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   pageExtensions: ["ts", "tsx", "md", "mdx"],
   typescript: { tsconfigPath: "./tsconfig.build.json" },
+  async redirects() {
+    // Next removes trailing slashes. An explicit file URL keeps the portable
+    // identity page's relative assets working on the site and in the ZIP.
+    return [
+      {
+        source: "/brand/identity",
+        destination: "/brand/identity/index.html",
+        permanent: true,
+      },
+    ]
+  },
 }
 
 const withMDX = createMDX({
